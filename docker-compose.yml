@@ -1,0 +1,100 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Development stack.
+#
+#   docker compose up -d db redis          # infra only (the normal dev flow:
+#                                          # web + mobile run on the host so
+#                                          # Metro can reach your phone)
+#   docker compose --profile full up -d --build   # everything containerised
+#
+# Ports are deliberately non-default so this stack can coexist with other
+# projects on the same machine (5442/6389/3200 instead of 5432/6379/3000).
+# ──────────────────────────────────────────────────────────────────────────
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: app-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app
+    ports:
+      # ⚠ LOOPBACK BINDING IS LOAD-BEARING. Published on 0.0.0.0 this port is
+      # reachable from every container on the default bridge via the host
+      # gateway — including any sandbox that runs untrusted code. With the
+      # default postgres:postgres credentials that is a full database
+      # compromise. Tunnel it (ssh -L / tailscale) instead of republishing.
+      - "127.0.0.1:5442:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d app"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: app-redis
+    restart: unless-stopped
+    ports:
+      # ⚠ Same threat as above, worse impact: this Redis has no auth and is
+      # the job broker. Anything that reaches it can enqueue work the worker
+      # will execute. Keep it on loopback.
+      - "127.0.0.1:6389:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  web:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: app-web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Inside the compose network the service names replace localhost.
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/app?schema=public
+      REDIS_URL: redis://redis:6379
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
+    ports:
+      - "3200:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - storage:/app/storage
+
+  worker:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    container_name: app-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/app?schema=public
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - storage:/app/storage
+
+volumes:
+  pgdata:
+  redisdata:
+  storage:

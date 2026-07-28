@@ -1,0 +1,223 @@
+// ─────────────────────────────────────────────────────────────────────────
+// Prisma schema.
+//
+// Two groups of models:
+//   1. AUTH — owned by better-auth. Do NOT hand-edit field names; they are
+//      part of better-auth's contract. Regenerate with `npm run auth:schema`
+//      after changing plugins in packages/auth, then `npm run db:migrate`.
+//   2. APP — yours. Every app model carries `orgId` and is queried through
+//      the org-scoped tRPC procedures (see packages/api/src/trpc.ts), so a
+//      tenant can never read another tenant's rows.
+// ─────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../generated"
+  importFileExtension = ""
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────── AUTH (better-auth) ──────────────────────────
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sessions    Session[]
+  accounts    Account[]
+  members     Member[]
+  invitations Invitation[]
+  items       Item[]
+  mediaAssets MediaAsset[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Written by the better-auth organization plugin: the tenant this session
+  // is currently acting in. Every org-scoped query keys off it.
+  activeOrganizationId String?
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ───────────────────── MULTI-TENANCY (organization plugin) ───────────────
+
+model Organization {
+  id   String @id @default(cuid())
+  name String
+  // Required + unique: better-auth's organization plugin treats the slug as the
+  // tenant's public handle and will not accept a null.
+  slug      String   @unique
+  logo      String?
+  metadata  String?
+  createdAt DateTime @default(now())
+
+  members     Member[]
+  invitations Invitation[]
+  items       Item[]
+  mediaAssets MediaAsset[]
+
+  @@map("organization")
+}
+
+model Member {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           String       @default("member")
+  createdAt      DateTime     @default(now())
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+  @@map("member")
+}
+
+model Invitation {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email          String
+  role           String?
+  status         String       @default("pending")
+  expiresAt      DateTime
+  createdAt      DateTime     @default(now())
+  inviterId      String
+  user           User         @relation(fields: [inviterId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([email])
+  @@map("invitation")
+}
+
+// ────────────────────────────── APP MODELS ───────────────────────────────
+
+/// The demo domain object. Replace with your own — but keep the `orgId`
+/// column and the `@@index([organizationId, createdAt])` shape.
+model Item {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  title          String
+  notes          String?
+  done           Boolean      @default(false)
+  createdById    String
+  createdBy      User         @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, createdAt])
+  @@map("item")
+}
+
+/// A blob in packages/storage. The row is the source of truth for metadata;
+/// `key` is the driver-agnostic object key.
+model MediaAsset {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  key            String       @unique
+  filename       String
+  contentType    String
+  sizeBytes      Int
+  uploadedById   String
+  uploadedBy     User         @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, createdAt])
+  @@map("media_asset")
+}
+
+/// Every LLM call, priced. This is the seam that makes spend auditable per
+/// org and per feature instead of a single opaque provider invoice.
+model LlmCall {
+  id             String   @id @default(cuid())
+  organizationId String?
+  userId         String?
+  purpose        String
+  model          String
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  costUsd        Float    @default(0)
+  latencyMs      Int      @default(0)
+  ok             Boolean  @default(true)
+  error          String?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([purpose, createdAt])
+  @@map("llm_call")
+}
+
+/// Background-job observability. The queue is Redis (ephemeral); this table
+/// is the durable record of what ran, so a job that vanishes is visible.
+model JobRun {
+  id         String    @id @default(cuid())
+  jobId      String
+  name       String
+  status     String    @default("queued")
+  attempts   Int       @default(0)
+  payload    String?
+  error      String?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([name, createdAt])
+  @@index([status])
+  @@map("job_run")
+}

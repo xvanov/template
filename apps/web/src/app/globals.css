@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+/* One small token set, honoured in light and dark. Change these values and the
+   whole app re-skins. */
+@theme {
+  --color-bg: oklch(99% 0.003 250);
+  --color-surface: oklch(100% 0 0);
+  --color-border: oklch(91% 0.006 250);
+  --color-fg: oklch(23% 0.02 265);
+  --color-muted: oklch(52% 0.02 265);
+  --color-accent: oklch(56% 0.16 265);
+  --color-accent-fg: oklch(99% 0.003 250);
+  --color-danger: oklch(58% 0.19 22);
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-bg: oklch(18% 0.015 265);
+    --color-surface: oklch(23% 0.018 265);
+    --color-border: oklch(32% 0.02 265);
+    --color-fg: oklch(96% 0.005 250);
+    --color-muted: oklch(70% 0.02 265);
+    --color-accent: oklch(72% 0.14 265);
+    --color-accent-fg: oklch(18% 0.015 265);
+    --color-danger: oklch(70% 0.17 22);
+  }
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Visible focus is an accessibility requirement, not a style preference. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}

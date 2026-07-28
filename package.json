@@ -1,0 +1,47 @@
+{
+  "name": "template",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Web + mobile app template: Next.js, Expo, tRPC, Prisma, better-auth, BullMQ.",
+  "packageManager": "npm@11.12.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "dev": "turbo run dev --filter=web --filter=worker",
+    "dev:web": "turbo run dev --filter=web",
+    "dev:mobile": "npm run start -w mobile",
+    "dev:worker": "turbo run dev --filter=worker",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "format": "prettier --write \"**/*.{ts,tsx,js,mjs,json,md,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,mjs,json,md,yml,yaml}\"",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:e2e": "npm run test:e2e -w web",
+    "smoke": "bash scripts/smoke.sh",
+    "infra:up": "docker compose up -d db redis",
+    "infra:down": "docker compose down",
+    "infra:reset": "docker compose down -v && docker compose up -d db redis",
+    "stack:up": "docker compose --profile full up -d --build",
+    "stack:down": "docker compose --profile full down",
+    "db:generate": "npm run generate -w @repo/db",
+    "db:migrate": "npm run migrate -w @repo/db",
+    "db:deploy": "npm run deploy -w @repo/db",
+    "db:seed": "npm run seed -w @repo/db",
+    "db:studio": "npm run studio -w @repo/db",
+    "db:reset": "npm run reset -w @repo/db",
+    "auth:schema": "npm run schema -w @repo/auth",
+    "postinstall": "npm run db:generate"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "turbo": "^2.10.7",
+    "typescript": "~6.0.3"
+  }
+}

@@ -1,0 +1,54 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Software-factory app config for an app built from this template.
+#
+# Copy to:  software-factory/apps/<app>/config.yaml
+# Then:     mkdir -p software-factory/apps/<app>/directions
+#           uv run factory pm-sync --app <app>
+#           uv run factory tick --app <app>
+#
+# The gate commands below are EXACTLY the ones a human runs (`make lint`,
+# `make typecheck`, `make test`, `make smoke`), so the factory's merge gates and
+# local development cannot drift apart. If you change one, change both.
+# ──────────────────────────────────────────────────────────────────────────
+
+name: CHANGEME # must match the directory name under apps/
+repo: CHANGEME/CHANGEME # GitHub owner/repo
+default_branch: main
+
+# Absolute path to the checkout the factory builds in.
+app_repo_path: /home/k/CHANGEME
+
+# Where the tech-writer persona keeps the generated context docs.
+context_dir: apps/CHANGEME/context
+
+gates:
+  lint_command: "npm run lint"
+  format_check_command: "npm run format:check"
+  type_check_command: "npm run typecheck"
+  test_command: "npm run test"
+  coverage_command: ""
+
+  # The end-to-end suite, against an already-running app.
+  e2e_command: "npm run test:e2e --workspace web"
+  e2e_harness_ready: true
+
+  # THE GATE THAT MATTERS. Boots a production build on an isolated port against
+  # real Postgres and Redis and drives the core user journey in a browser.
+  # Without this a green test suite can still ship an app that does not start.
+  smoke_command: "bash scripts/smoke.sh"
+  smoke_harness_ready: true
+
+  # On a red test gate, rerun failures in isolation; a test that fails-then-passes
+  # is quarantined as tech debt rather than blocking the merge. Consistent reds
+  # still block.
+  flake_quarantine: true
+  mutation_testing: false
+
+# Deploy is off until you have somewhere to deploy to. When you turn it on, point
+# it at a script that pulls, migrates and restarts — and make sure the migration
+# step runs BEFORE the new code serves traffic.
+deploy:
+  enabled: false
+
+# Empty = use the factory's default per-persona routing in factory/routes.yaml.
+models: {}
