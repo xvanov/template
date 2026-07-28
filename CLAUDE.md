@@ -88,6 +88,11 @@ reload → sign-out through Chromium. **Nothing is "done" until it is green.**
 - **`localhost` is unreachable from a phone.** The mobile app derives your LAN
   address from the Expo dev server; `EXPO_PUBLIC_API_URL` only overrides it when
   it is not a loopback address.
+- **Exposing it over Tailscale needs two steps, not one.** `tailscale serve` gives
+  you the URL; the origin must also go into `TRUSTED_ORIGINS`, and the containers
+  must be recreated (`env_file` is read at creation, not on restart). Check
+  `tailscale serve status` first — another project on the machine may already own
+  the port you were about to claim. See the README section for the exact commands.
 - **`STORAGE_LOCAL_DIR` is relative to each process's cwd**, which differs per
   entrypoint. The resolved root is logged at startup. Use an absolute path to pin it.
 - **tailwindcss v4 (web) and v3 (mobile, for NativeWind) coexist** deliberately.

@@ -56,6 +56,43 @@ make studio     # browse the database
 Ports are deliberately non-default so this coexists with your other projects:
 **web 3200 · postgres 5442 · redis 6389 · expo 8091**.
 
+## Reaching it from anywhere (Tailscale)
+
+Wifi works out of the box. To reach the app from off the LAN — and to get real
+HTTPS, which Google OAuth requires for any non-localhost redirect — put it behind
+Tailscale:
+
+```bash
+tailscale serve --bg --https=8443 http://127.0.0.1:3200
+tailscale serve status          # confirm you did not overwrite another mapping
+```
+
+That publishes `https://<machine>.<tailnet>.ts.net:8443`, tailnet-only, with a
+valid certificate.
+
+Two things must then be true:
+
+- **Pick a port nothing else is serving.** `--https=443` is the obvious choice
+  and also the one most likely already taken by another project on the same
+  machine; `tailscale serve status` before and after is the check.
+- **Add the origin to `TRUSTED_ORIGINS`** in `.env` (comma-separated), both the
+  HTTPS name and the raw `http://<tailscale-ip>:3200` the phone uses. Without it
+  every sign-in fails with "Invalid origin" — that check is a CSRF boundary, so
+  add the origin rather than relaxing it. Recreate the containers afterwards
+  (`docker compose --profile full up -d --force-recreate web worker`); `env_file`
+  is read at container creation.
+
+For the phone, start Expo advertising the Tailscale address and leave
+`EXPO_PUBLIC_API_URL` empty — the app derives its API origin from whichever host
+served the bundle, so the same build follows you between wifi and Tailscale:
+
+```bash
+REACT_NATIVE_PACKAGER_HOSTNAME=<tailscale-ip> npm run dev:mobile
+```
+
+`tailscale serve` is tailnet-only. `tailscale funnel` would expose it to the
+public internet — do not reach for that to test a phone.
+
 ## Google sign-in
 
 Optional — email/password works with no external setup. To enable it, create an
