@@ -62,19 +62,20 @@ bold "3/5  dependencies"
 npm install --no-audit --fund=false
 ok "installed"
 
-bold "4/5  postgres + redis"
-docker compose up -d db redis
+bold "4/5  postgres + redis + mail"
+docker compose up -d db redis mailpit
 printf '  waiting for health'
 for _ in $(seq 1 60); do
   DB_STATE="$(docker inspect -f '{{.State.Health.Status}}' app-db 2>/dev/null || echo starting)"
   REDIS_STATE="$(docker inspect -f '{{.State.Health.Status}}' app-redis 2>/dev/null || echo starting)"
-  if [ "$DB_STATE" = healthy ] && [ "$REDIS_STATE" = healthy ]; then break; fi
+  MAIL_STATE="$(docker inspect -f '{{.State.Health.Status}}' app-mailpit 2>/dev/null || echo starting)"
+  if [ "$DB_STATE" = healthy ] && [ "$REDIS_STATE" = healthy ] && [ "$MAIL_STATE" = healthy ]; then break; fi
   printf '.'; sleep 1
 done
 printf '\n'
 [ "${DB_STATE:-}" = healthy ] || die "postgres did not become healthy — check: docker compose logs db"
 [ "${REDIS_STATE:-}" = healthy ] || die "redis did not become healthy — check: docker compose logs redis"
-ok "postgres :5442 and redis :6389 healthy"
+ok "postgres :5442, redis :6389, mail inbox http://localhost:8035"
 
 bold "5/5  database schema"
 npm run db:deploy
@@ -85,11 +86,13 @@ cat <<'EOF'
   Ready. Next:
 
     make dev        web on http://localhost:3200 + the background worker
+    make inbox      the local mail inbox (sign-up confirmation links land here)
     make mobile     Expo dev server — scan the QR code with Expo Go
     make smoke      boot a production build and drive the real user journey
     make test       unit tests
 
-  Sign up with any email and an 8+ character password; Google sign-in appears
-  once you set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET in .env.
+  Sign up with any email and an 8+ character password, then open the
+  confirmation link from http://localhost:8035 — it signs you straight in.
+  Google sign-in appears once GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are set.
 
 EOF

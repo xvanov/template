@@ -19,6 +19,7 @@ packages/auth  better-auth: email+password, Google OAuth, organizations
 packages/ai    LLM calls against any OpenAI-compatible endpoint, priced per call
 packages/jobs  job registry + queue + schedules
 packages/storage  file storage: local disk or any S3-compatible bucket
+packages/email  outbound SMTP (nodemailer). Mailpit locally = real mail, no vendor
 packages/env   the validated environment — import `env()`, never `process.env`
 ```
 
@@ -88,6 +89,16 @@ reload → sign-out through Chromium. **Nothing is "done" until it is green.**
 - **`localhost` is unreachable from a phone.** The mobile app derives your LAN
   address from the Expo dev server; `EXPO_PUBLIC_API_URL` only overrides it when
   it is not a loopback address.
+- **Sign-up requires email confirmation** (`REQUIRE_EMAIL_VERIFICATION`, on by
+  default), so sign-up returns NO session. Code that assumes a session right
+  after `signUp.email` is wrong — check `result.data.token` and show the
+  "confirm your email" state. The e2e suite opens the real emailed link via
+  Mailpit's API; `docker compose up -d mailpit` must be running for it.
+- **Verification links are built from `APP_URL`.** A `localhost` value emails an
+  unclickable link to a phone. Set it to the origin users actually reach.
+- **Quote `.env` values containing `< > | &`.** `scripts/smoke.sh` sources the
+  file with `.`, and an unquoted `<` is a shell redirect — `SMTP_FROM` is the one
+  that bites. dotenv strips the quotes, so both readers are satisfied.
 - **Exposing it over Tailscale needs two steps, not one.** `tailscale serve` gives
   you the URL; the origin must also go into `TRUSTED_ORIGINS`, and the containers
   must be recreated (`env_file` is read at creation, not on restart). Check

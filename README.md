@@ -56,6 +56,32 @@ make studio     # browse the database
 Ports are deliberately non-default so this coexists with your other projects:
 **web 3200 · postgres 5442 · redis 6389 · expo 8091**.
 
+## Email confirmation
+
+Sign-up requires confirming the address, and it works with **no third-party
+account**: `docker compose up -d mailpit` runs a real SMTP server locally, and
+every message lands in its inbox at **http://localhost:8035**. Sign up, open the
+inbox, click the link — you are verified and signed in.
+
+`scripts/setup.sh` starts it, and the end-to-end suite reads the message out of
+Mailpit's API and opens the real link, so the confirmation flow is part of the
+merge gate rather than something you hope still works.
+
+Two honest limits:
+
+- **Mailpit shows mail; it never delivers it onward.** It is an inbox for you and
+  your tests, not for your users. To reach real inboxes, point `SMTP_*` at an
+  SMTP relay. (Self-hosting an MTA that strangers' servers accept is a
+  deliverability project — SPF, DKIM, DMARC, reputation — and outbound port 25 is
+  usually blocked anyway.)
+- **Verification links are built from `APP_URL`.** If that says `localhost` the
+  link is unclickable on a phone. Set it to the origin your users actually reach.
+
+With `SMTP_HOST` unset the message is printed to the server console instead, so a
+fresh clone still runs and you can copy the link out of the terminal. Set
+`REQUIRE_EMAIL_VERIFICATION=false` to let unconfirmed accounts sign in — but
+that means anyone can register an address they do not own.
+
 ## Reaching it from anywhere (Tailscale)
 
 Wifi works out of the box. To reach the app from off the LAN — and to get real

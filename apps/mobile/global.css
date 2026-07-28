@@ -1,3 +1,32 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* One token set, two values. `dark:root` is NativeWind's selector for the dark
+   scheme; with `darkMode: "class"` in tailwind.config.js it tracks the OS until
+   something explicitly overrides it.
+
+   These are the sRGB equivalents of the oklch tokens in
+   apps/web/src/app/globals.css. React Native has no oklch support, so the two
+   files carry the same colours in different notation — change both together. */
+:root {
+  --color-bg: #fbfbfd;
+  --color-surface: #ffffff;
+  --color-border: #e4e4ed;
+  --color-fg: #1b1d26;
+  --color-muted: #6b7280;
+  --color-accent: #4f46e5;
+  --color-accent-fg: #ffffff;
+  --color-danger: #dc2626;
+}
+
+.dark:root {
+  --color-bg: #16181d;
+  --color-surface: #21242c;
+  --color-border: #343842;
+  --color-fg: #f2f3f7;
+  --color-muted: #9ca3af;
+  --color-accent: #a5b4fc;
+  --color-accent-fg: #16181d;
+  --color-danger: #f87171;
+}

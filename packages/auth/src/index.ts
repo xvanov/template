@@ -21,6 +21,7 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { organization } from "better-auth/plugins";
 import { db } from "@repo/db";
+import { sendMail, verificationEmail } from "@repo/email";
 import { env, googleEnabled } from "@repo/env";
 
 /**
@@ -62,10 +63,31 @@ function build() {
 
     emailAndPassword: {
       enabled: true,
-      // Turn on once an email sender is wired (packages/jobs is a natural place
-      // to send from). Off keeps the template runnable with zero accounts.
-      requireEmailVerification: false,
+      // ON by default (REQUIRE_EMAIL_VERIFICATION): without it anyone can sign
+      // up as anyone else's address. The mail goes over local SMTP — see
+      // @repo/email — so this works with no third-party account.
+      requireEmailVerification: e.REQUIRE_EMAIL_VERIFICATION,
       minPasswordLength: 8,
+    },
+
+    emailVerification: {
+      sendOnSignUp: true,
+      // Clicking the link both verifies and signs you in, so the user lands in
+      // the app instead of on a form asking for the password they just chose.
+      autoSignInAfterVerification: true,
+      expiresIn: 60 * 60,
+      sendVerificationEmail: async ({ user, url }) => {
+        try {
+          await sendMail({ to: user.email, ...verificationEmail(url) });
+        } catch (err) {
+          // Never let a mail failure break sign-up: the account exists and the
+          // user can ask for another link. Log loudly so it is not invisible.
+          console.error(
+            `[auth] could not send verification email to ${user.email}:`,
+            err,
+          );
+        }
+      },
     },
 
     socialProviders: googleEnabled()

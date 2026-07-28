@@ -20,6 +20,8 @@ export function LoginForm({
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [resent, setResent] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
   // Test seam, and a real one: submitting depends on the React handler being
@@ -42,12 +44,24 @@ export function LoginForm({
               email,
               password,
               name: name || email,
+              // Where the confirmation link lands once the address is verified.
+              callbackURL: "/app",
             });
 
       if (result.error) {
         setError(result.error.message ?? "Could not sign in.");
         return;
       }
+
+      // With verification required, sign-up returns a user but NO session — the
+      // account is not usable yet. Navigating to /app would just bounce back
+      // here, so show the next step instead.
+      const token = (result.data as { token?: string | null } | null)?.token;
+      if (mode === "signup" && !token) {
+        setSentTo(email);
+        return;
+      }
+
       // A full navigation, not router.push: the session cookie has to be
       // attached to the next request for the server component to see it.
       window.location.assign("/app");
@@ -70,6 +84,53 @@ export function LoginForm({
       setError(err instanceof Error ? err.message : "Google sign-in failed.");
       setBusy(false);
     }
+  }
+
+  async function resend() {
+    if (!sentTo) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await authClient.sendVerificationEmail({
+        email: sentTo,
+        callbackURL: "/app",
+      });
+      setResent(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not resend.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Post-sign-up: the account exists but is not usable until the address is
+  // confirmed. Say exactly that, and give a way out of a lost email.
+  if (sentTo) {
+    return (
+      <Card>
+        <h1 className="text-xl font-semibold">Confirm your email</h1>
+        <Hint className="mt-2" data-testid="verify-sent">
+          We sent a confirmation link to <strong>{sentTo}</strong>. Open it to
+          finish setting up your account — you will be signed in automatically.
+        </Hint>
+        <ErrorText>{error}</ErrorText>
+        <div className="mt-5 flex items-center gap-3">
+          <Button
+            variant="secondary"
+            onClick={resend}
+            disabled={busy || resent}
+          >
+            {resent ? "Link sent" : busy ? "Sending…" : "Resend link"}
+          </Button>
+          <Link
+            href="/login"
+            className="text-sm text-[var(--color-accent)] underline-offset-4 hover:underline"
+          >
+            Back to sign in
+          </Link>
+        </div>
+      </Card>
+    );
   }
 
   return (

@@ -50,10 +50,13 @@ if (command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ":${PORT} ") ||
 fi
 
 echo "→ infrastructure"
-docker compose up -d db redis >/dev/null
+# Mailpit is not optional here: the journey confirms a real emailed link, so the
+# gate needs a real SMTP server. It is local — nothing leaves the machine.
+docker compose up -d db redis mailpit >/dev/null
 for _ in $(seq 1 60); do
   [ "$(docker inspect -f '{{.State.Health.Status}}' app-db 2>/dev/null || echo x)" = healthy ] &&
-    [ "$(docker inspect -f '{{.State.Health.Status}}' app-redis 2>/dev/null || echo x)" = healthy ] && break
+    [ "$(docker inspect -f '{{.State.Health.Status}}' app-redis 2>/dev/null || echo x)" = healthy ] &&
+    [ "$(docker inspect -f '{{.State.Health.Status}}' app-mailpit 2>/dev/null || echo x)" = healthy ] && break
   sleep 1
 done
 
@@ -88,6 +91,8 @@ echo "→ booting the built app on :${PORT}"
 PORT="$PORT" HOSTNAME=127.0.0.1 \
 APP_URL="$BASE_URL" BETTER_AUTH_URL="$BASE_URL" \
 AUTH_RATE_LIMIT_MAX="${AUTH_RATE_LIMIT_MAX:-5000}" \
+SMTP_HOST="${SMTP_HOST:-localhost}" SMTP_PORT="${SMTP_PORT:-1035}" \
+REQUIRE_EMAIL_VERIFICATION=true \
   node "${STANDALONE}/server.js" > /tmp/smoke-web.log 2>&1 &
 SERVER_PID=$!
 

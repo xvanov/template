@@ -25,9 +25,9 @@
     "test": "turbo run test",
     "test:e2e": "npm run test:e2e -w web",
     "smoke": "bash scripts/smoke.sh",
-    "infra:up": "docker compose up -d db redis",
+    "infra:up": "docker compose up -d db redis mailpit",
     "infra:down": "docker compose down",
-    "infra:reset": "docker compose down -v && docker compose up -d db redis",
+    "infra:reset": "docker compose down -v && docker compose up -d db redis mailpit",
     "stack:up": "docker compose --profile full up -d --build",
     "stack:down": "docker compose --profile full down",
     "db:generate": "npm run generate -w @repo/db",
@@ -37,7 +37,8 @@
     "db:studio": "npm run studio -w @repo/db",
     "db:reset": "npm run reset -w @repo/db",
     "auth:schema": "npm run schema -w @repo/auth",
-    "postinstall": "npm run db:generate"
+    "postinstall": "npm run db:generate",
+    "inbox": "echo 'Local mail inbox: http://localhost:8035'"
   },
   "devDependencies": {
     "prettier": "^3.6.2",

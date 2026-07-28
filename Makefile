@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-.PHONY: help setup dev web mobile worker stack down test typecheck lint smoke e2e db-migrate db-seed db-reset studio clean
+.PHONY: help setup dev web mobile worker up inbox stack down test typecheck lint smoke e2e db-migrate db-seed db-reset studio clean
 
 help: ## show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -23,8 +23,12 @@ mobile: ## run the Expo dev server (scan the QR with Expo Go)
 worker: ## run only the background worker
 	@npm run dev:worker
 
-up: ## start postgres + redis
+up: ## start postgres + redis + the local mail inbox
 	@npm run infra:up
+
+inbox: ## print the local mail inbox URL (confirmation links land here)
+	@echo "Local mail inbox: http://localhost:8035"
+	@command -v xdg-open >/dev/null && xdg-open http://localhost:8035 >/dev/null 2>&1 || true
 
 down: ## stop postgres + redis
 	@npm run infra:down

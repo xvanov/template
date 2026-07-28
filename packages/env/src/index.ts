@@ -36,6 +36,30 @@ const serverSchema = z.object({
    */
   TRUSTED_ORIGINS: z.string().optional(),
 
+  /**
+   * Require a confirmed email address before a password sign-in succeeds.
+   *
+   * ON by default: it is the only thing stopping someone from signing up as
+   * somebody else's address. Turn it off only for a throwaway environment.
+   */
+  REQUIRE_EMAIL_VERIFICATION: z
+    .union([z.boolean(), z.string()])
+    .default(true)
+    .transform((v) => v === true || v === "true" || v === "1"),
+
+  // SMTP. Unset SMTP_HOST = mail is logged to the console instead of sent, so a
+  // fresh clone runs with no mail infrastructure. `docker compose up -d mailpit`
+  // gives you a real local SMTP server and inbox.
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().positive().default(1035),
+  SMTP_SECURE: z
+    .union([z.boolean(), z.string()])
+    .default(false)
+    .transform((v) => v === true || v === "true" || v === "1"),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM: z.string().default("App Template <no-reply@localhost>"),
+
   // Auth rate limiting, per IP. Kept ON in every environment — brute-forcing a
   // password endpoint is the cheapest attack there is. The knobs exist because
   // the smoke gate is itself a single-IP load generator; raise them there, not

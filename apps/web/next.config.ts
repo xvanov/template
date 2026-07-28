@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
     "@repo/api",
     "@repo/auth",
     "@repo/db",
+    "@repo/email",
     "@repo/env",
     "@repo/jobs",
     "@repo/storage",

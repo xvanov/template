@@ -16,6 +16,11 @@ env:
   REDIS_URL: redis://localhost:6379
   BETTER_AUTH_SECRET: ci-secret-not-for-production-use-0000
   APP_URL: http://127.0.0.1:3210
+  # A real local SMTP server (the mailpit service below), so the sign-up
+  # confirmation link is genuinely sent and genuinely opened by the test.
+  SMTP_HOST: localhost
+  SMTP_PORT: "1025"
+  MAILPIT_URL: http://localhost:8025
 
 jobs:
   # ── static checks: fast, no services needed ───────────────────────────
@@ -55,6 +60,12 @@ jobs:
         ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+      mailpit:
+        image: axllent/mailpit:latest
+        ports: ["1025:1025", "8025:8025"]
+        options: >-
+          --health-cmd "/mailpit readyz"
           --health-interval 3s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4

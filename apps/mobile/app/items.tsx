@@ -12,10 +12,12 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { authClient, useSession } from "../lib/auth";
+import { useThemeColors } from "../lib/theme";
 import { trpc } from "../lib/trpc";
 
 /** The same data as the web dashboard, over the same typed API. */
 export default function Items() {
+  const colors = useThemeColors();
   const { data: session } = useSession();
   const org = trpc.org.current.useQuery();
   const items = trpc.items.list.useQuery({ includeDone: true, limit: 50 });
@@ -54,7 +56,7 @@ export default function Items() {
         <TextInput
           className="flex-1 rounded-xl border border-border bg-surface px-4 py-3 text-base text-fg"
           placeholder="Add an item…"
-          placeholderTextColor="#9ca3af"
+          placeholderTextColor={colors.muted}
           value={title}
           onChangeText={setTitle}
           onSubmitEditing={() => {
@@ -90,7 +92,11 @@ export default function Items() {
           keyExtractor={(item) => item.id}
           contentContainerClassName="px-5 pb-8"
           refreshControl={
-            <RefreshControl refreshing={items.isFetching} onRefresh={refetch} />
+            <RefreshControl
+              refreshing={items.isFetching}
+              onRefresh={refetch}
+              tintColor={colors.muted}
+            />
           }
           ListEmptyComponent={
             <Text className="py-8 text-center text-sm text-muted">
