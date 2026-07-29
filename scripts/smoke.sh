@@ -16,31 +16,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# ── isolation ──────────────────────────────────────────────────────────────
-# This script must be able to run ANYWHERE, including in a throwaway git
-# worktree created by CI or by the software factory, while the normal dev stack
-# is up. So it never shares anything with development:
-#
-#   * its own Compose project and its own DB/Redis/mail ports
-#   * its own web port
-#   * ports DERIVED FROM THIS DIRECTORY, so two worktrees checked out at once
-#     (the factory runs stories concurrently) do not collide either
-#
-# Override any of them with the SMOKE_* variables if you need to.
-dir_port() { # dir_port <base> <span> → a stable port for this directory
-  local base=$1 span=$2 h
-  h=$(printf '%s' "$ROOT" | cksum | cut -d' ' -f1)
-  echo $((base + h % span))
-}
-
-PORT="${SMOKE_PORT:-$(dir_port 3300 60)}"
-export COMPOSE_PROJECT_NAME="${SMOKE_PROJECT:-smoke-$(basename "$ROOT")}"
-export DB_PORT="${SMOKE_DB_PORT:-$(dir_port 5500 60)}"
-export REDIS_PORT="${SMOKE_REDIS_PORT:-$(dir_port 6500 60)}"
-export TEST_MAIL_SMTP_PORT="${SMOKE_MAIL_SMTP_PORT:-$(dir_port 1500 60)}"
-export TEST_MAIL_UI_PORT="${SMOKE_MAIL_UI_PORT:-$(dir_port 8500 60)}"
-
-BASE_URL="http://127.0.0.1:${PORT}"
 SERVER_PID=""
 
 cleanup() {
@@ -59,12 +34,45 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Load .env for the app's own settings (secret, feature flags), then override
-# every piece of infrastructure to point at this run's isolated stack.
+# Load .env FIRST, for the app's own settings (secret, feature flags) …
 if [ -f .env ]; then set -a; . ./.env; set +a; fi
+
+# ── isolation (MUST come after sourcing .env) ─────────────────────────────
+# ORDER IS LOAD-BEARING. A git worktree created by the factory contains the
+# app's .env, which sets DB_PORT/REDIS_PORT to the DEV stack's ports. Exporting
+# these before `. ./.env` lets the file clobber them, and the gate then tries to
+# bind ports the running dev stack already owns — "port is already allocated",
+# on every story. Overrides win only if they are applied last.
+#
+# This script must run ANYWHERE — a throwaway worktree, CI — while the dev stack
+# is up, so it shares nothing with development:
+#
+#   * its own Compose project, DB, Redis, mail and web ports
+#   * ports DERIVED FROM THIS DIRECTORY, so two worktrees checked out at once
+#     (the factory runs stories concurrently) do not collide either
+#
+# Override any of them with the SMOKE_* variables.
+dir_port() { # dir_port <base> <span> → a stable port for this directory
+  local base=$1 span=$2 h
+  h=$(printf '%s' "$ROOT" | cksum | cut -d' ' -f1)
+  echo $((base + h % span))
+}
+
+PORT="${SMOKE_PORT:-$(dir_port 3300 60)}"
+export COMPOSE_PROJECT_NAME="${SMOKE_PROJECT:-smoke-$(basename "$ROOT")}"
+export DB_PORT="${SMOKE_DB_PORT:-$(dir_port 5500 60)}"
+export REDIS_PORT="${SMOKE_REDIS_PORT:-$(dir_port 6500 60)}"
+export TEST_MAIL_SMTP_PORT="${SMOKE_MAIL_SMTP_PORT:-$(dir_port 1500 60)}"
+export TEST_MAIL_UI_PORT="${SMOKE_MAIL_UI_PORT:-$(dir_port 8500 60)}"
+
+BASE_URL="http://127.0.0.1:${PORT}"
+
+# … and point the app at THIS run's stack, not the dev one.
 export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:${DB_PORT}/app?schema=public"
 export REDIS_URL="redis://127.0.0.1:${REDIS_PORT}"
-# A worktree has no .env at all; without a secret better-auth refuses to boot.
+export SMTP_HOST=127.0.0.1
+export SMTP_PORT="${TEST_MAIL_SMTP_PORT}"
+# A bare worktree may have no .env; without a secret better-auth refuses to boot.
 export BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-smoke-gate-secret-not-for-production-32}"
 
 # Refuse to run against a server we did not start. Otherwise a stale process
@@ -124,7 +132,6 @@ echo "→ booting the built app on :${PORT}"
 PORT="$PORT" HOSTNAME=127.0.0.1 \
 APP_URL="$BASE_URL" BETTER_AUTH_URL="$BASE_URL" \
 AUTH_RATE_LIMIT_MAX="${AUTH_RATE_LIMIT_MAX:-5000}" \
-SMTP_HOST=127.0.0.1 SMTP_PORT="${TEST_MAIL_SMTP_PORT}" \
 REQUIRE_EMAIL_VERIFICATION=true \
 DEV_MAIL_INBOX_URL= \
   node "${STANDALONE}/server.js" > /tmp/smoke-web.log 2>&1 &
