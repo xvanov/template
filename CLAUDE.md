@@ -96,6 +96,14 @@ reload → sign-out through Chromium. **Nothing is "done" until it is green.**
   Mailpit's API; `docker compose up -d mailpit` must be running for it.
 - **Verification links are built from `APP_URL`.** A `localhost` value emails an
   unclickable link to a phone. Set it to the origin users actually reach.
+- **The gate has its OWN mail catcher** (`mailpit-test`, :1036/:8036) separate
+  from the dev inbox (:1035/:8035). Its links point at the gate's isolated port
+  and die with the run, so mixing them into your inbox makes real mail look
+  broken. Keep them apart.
+- **`.env` is sourced with `set -a` at the top of smoke.sh**, so every variable in
+  it is already exported by the time the server is launched. A
+  `${SOME_VAR:-fallback}` default therefore NEVER applies — that is why the gate's
+  overrides use distinct `SMOKE_*` names. Watch for this whenever you add one.
 - **Quote `.env` values containing `< > | &`.** `scripts/smoke.sh` sources the
   file with `.`, and an unquoted `<` is a shell redirect — `SMTP_FROM` is the one
   that bites. dotenv strips the quotes, so both readers are satisfied.

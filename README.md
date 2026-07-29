@@ -67,6 +67,15 @@ inbox, click the link — you are verified and signed in.
 Mailpit's API and opens the real link, so the confirmation flow is part of the
 merge gate rather than something you hope still works.
 
+The suite uses a **second, throwaway catcher** (`mailpit-test`, ports 1036/8036),
+never your dev inbox. Its links point at the gate's isolated port and stop working
+when the run ends, so letting them pile up in your inbox would make working mail
+look broken.
+
+Testing from a phone? `localhost:8035` is not reachable from another device — put
+the inbox behind a tunnel and point `DEV_MAIL_INBOX_URL` at it, so the "confirm
+your email" screen links somewhere you can actually open.
+
 Two honest limits:
 
 - **Mailpit shows mail; it never delivers it onward.** It is an inbox for you and

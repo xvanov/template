@@ -50,13 +50,16 @@ if (command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ":${PORT} ") ||
 fi
 
 echo "→ infrastructure"
-# Mailpit is not optional here: the journey confirms a real emailed link, so the
-# gate needs a real SMTP server. It is local — nothing leaves the machine.
-docker compose up -d db redis mailpit >/dev/null
+# A real SMTP server is not optional here: the journey confirms a real emailed
+# link. It is the DEDICATED test catcher (mailpit-test, :1036/:8036), never the
+# dev inbox — the suite's links point at this run's isolated port and go dead
+# when it ends, so mixing them into your own inbox turns real mail into noise.
+docker compose up -d db redis >/dev/null
+docker compose --profile test up -d mailpit-test >/dev/null
 for _ in $(seq 1 60); do
   [ "$(docker inspect -f '{{.State.Health.Status}}' app-db 2>/dev/null || echo x)" = healthy ] &&
     [ "$(docker inspect -f '{{.State.Health.Status}}' app-redis 2>/dev/null || echo x)" = healthy ] &&
-    [ "$(docker inspect -f '{{.State.Health.Status}}' app-mailpit 2>/dev/null || echo x)" = healthy ] && break
+    [ "$(docker inspect -f '{{.State.Health.Status}}' app-mailpit-test 2>/dev/null || echo x)" = healthy ] && break
   sleep 1
 done
 
@@ -88,11 +91,17 @@ echo "→ booting the built app on :${PORT}"
 # AUTH_RATE_LIMIT_MAX is raised because this suite signs up several accounts a
 # second from one IP — exactly the traffic the limiter exists to stop. The
 # limiter stays ENABLED; only its ceiling moves, and only for the gate.
+#
+# NOTE the override names: `.env` was sourced above with `set -a`, so SMTP_PORT
+# and MAILPIT_URL are ALREADY exported. A `${SMTP_PORT:-1036}` default would
+# therefore never apply, and the gate would quietly mail your dev inbox instead
+# of the throwaway one. Overrides get their own SMOKE_* names for that reason.
 PORT="$PORT" HOSTNAME=127.0.0.1 \
 APP_URL="$BASE_URL" BETTER_AUTH_URL="$BASE_URL" \
 AUTH_RATE_LIMIT_MAX="${AUTH_RATE_LIMIT_MAX:-5000}" \
-SMTP_HOST="${SMTP_HOST:-localhost}" SMTP_PORT="${SMTP_PORT:-1035}" \
+SMTP_HOST=localhost SMTP_PORT="${SMOKE_SMTP_PORT:-1036}" \
 REQUIRE_EMAIL_VERIFICATION=true \
+DEV_MAIL_INBOX_URL= \
   node "${STANDALONE}/server.js" > /tmp/smoke-web.log 2>&1 &
 SERVER_PID=$!
 
@@ -116,7 +125,9 @@ curl -fsS "${BASE_URL}/api/health"
 echo
 
 echo "→ driving the user journey"
-BASE_URL="$BASE_URL" npm run test:e2e:smoke --workspace web
+# MAILPIT_URL points the suite at the test catcher's API, matching SMTP_PORT above.
+BASE_URL="$BASE_URL" MAILPIT_URL="${SMOKE_MAILPIT_URL:-http://localhost:8036}" \
+  npm run test:e2e:smoke --workspace web
 
 echo
 echo "✓ smoke passed: the built app boots and the core journey works"

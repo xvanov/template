@@ -74,6 +74,30 @@ services:
       timeout: 3s
       retries: 20
 
+  # A SECOND, throwaway mail catcher, used only by scripts/smoke.sh.
+  #
+  # Why not reuse the one above: the suite sends a handful of messages per run,
+  # all newest-first in the inbox, and their links point at the gate's isolated
+  # port — which stops existing when the run ends. Sharing one inbox buries your
+  # real dev mail under machine noise whose links are already dead, and "the
+  # confirmation link is broken" is then indistinguishable from a real bug.
+  mailpit-test:
+    image: axllent/mailpit:latest
+    container_name: app-mailpit-test
+    profiles: ["test"]
+    environment:
+      MP_MAX_MESSAGES: 200
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      - "127.0.0.1:1036:1025" # SMTP
+      - "127.0.0.1:8036:8025" # REST API the e2e suite reads
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   web:
     profiles: ["full"]
     build:
