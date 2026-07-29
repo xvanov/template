@@ -20,7 +20,14 @@ packages/db/generated/
 !.env.example
 
 # local runtime state
-storage/
+#
+# LEADING SLASH IS LOAD-BEARING: a bare `storage/` matches a directory of that
+# name at ANY depth, which silently excluded `packages/storage` from the repo.
+# Everything still worked locally and in `docker build` (both read the working
+# directory, not git), so the breakage only appeared in a fresh clone. Anchor
+# ignore rules that could collide with a source path.
+/storage/
+/apps/*/storage/
 coverage/
 test-results/
 playwright-report/

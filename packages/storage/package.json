@@ -1,0 +1,26 @@
+{
+  "name": "@repo/storage",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@repo/env": "*",
+    "nanoid": "^5.1.6"
+  },
+  "optionalDependencies": {
+    "@aws-sdk/client-s3": "^3.930.0",
+    "@aws-sdk/s3-request-presigner": "^3.930.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.10"
+  }
+}
