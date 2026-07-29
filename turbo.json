@@ -17,6 +17,7 @@
     "SMTP_USER",
     "SMTP_PASS",
     "SMTP_FROM",
+    "DEV_MAIL_INBOX_URL",
     "GOOGLE_CLIENT_ID",
     "GOOGLE_CLIENT_SECRET",
     "LLM_BASE_URL",

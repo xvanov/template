@@ -11,9 +11,12 @@ type Mode = "signin" | "signup";
 export function LoginForm({
   googleEnabled,
   mode,
+  devInboxUrl,
 }: {
   googleEnabled: boolean;
   mode: Mode;
+  /** Local dev mail inbox, when one is configured. See DEV_MAIL_INBOX_URL. */
+  devInboxUrl?: string | null;
 }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -113,6 +116,26 @@ export function LoginForm({
           We sent a confirmation link to <strong>{sentTo}</strong>. Open it to
           finish setting up your account — you will be signed in automatically.
         </Hint>
+
+        {/* Development only. Without this, mail sent to a local catcher looks
+            exactly like mail that was never sent: you check your real inbox,
+            find nothing, and assume the feature is broken. */}
+        {devInboxUrl && (
+          <p className="mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3 text-sm">
+            <strong>Development:</strong> mail is delivered to a local inbox,
+            not to the real address.{" "}
+            <a
+              href={devInboxUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--color-accent)] underline underline-offset-4"
+            >
+              Open the local inbox
+            </a>{" "}
+            to find the link.
+          </p>
+        )}
+
         <ErrorText>{error}</ErrorText>
         <div className="mt-5 flex items-center gap-3">
           <Button

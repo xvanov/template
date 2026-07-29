@@ -89,6 +89,18 @@ export default function Login() {
           We sent a confirmation link to {sentTo}. Open it on this phone to
           finish setting up your account, then come back and sign in.
         </Text>
+        {/* Development only: mail goes to a local catcher, so checking the real
+            inbox finds nothing and looks exactly like a broken feature. */}
+        {process.env.EXPO_PUBLIC_DEV_MAIL_INBOX_URL ? (
+          <Text className="mt-4 text-sm text-muted">
+            Development: mail is delivered to a local inbox, not to the real
+            address. Open{" "}
+            <Text className="text-accent">
+              {process.env.EXPO_PUBLIC_DEV_MAIL_INBOX_URL}
+            </Text>{" "}
+            to find the link.
+          </Text>
+        ) : null}
         {error ? (
           <Text className="mt-3 text-sm text-danger">{error}</Text>
         ) : null}

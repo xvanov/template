@@ -60,6 +60,17 @@ const serverSchema = z.object({
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().default("App Template <no-reply@localhost>"),
 
+  /**
+   * URL of a local dev mail inbox (Mailpit). When set, the "confirm your email"
+   * screen links straight to it.
+   *
+   * This exists because the failure it prevents is guaranteed otherwise: mail
+   * goes to a local catcher that never delivers onward, so a user checks their
+   * real inbox, sees nothing, and concludes the feature is broken. Leave it
+   * unset in production — the link would be meaningless and the hint misleading.
+   */
+  DEV_MAIL_INBOX_URL: z.string().optional(),
+
   // Auth rate limiting, per IP. Kept ON in every environment — brute-forcing a
   // password endpoint is the cheapest attack there is. The knobs exist because
   // the smoke gate is itself a single-IP load generator; raise them there, not

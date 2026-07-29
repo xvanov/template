@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { sendMail, smtpConfigured, verificationEmail } from "./index";
 
-const LINK = "https://app.example.com/api/auth/verify-email?token=abc.def&callbackURL=%2Fapp";
+const LINK =
+  "https://app.example.com/api/auth/verify-email?token=abc.def&callbackURL=%2Fapp";
 
 beforeEach(async () => {
   delete process.env.SMTP_HOST;

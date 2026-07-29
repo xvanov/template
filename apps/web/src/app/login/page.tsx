@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { googleEnabled } from "@repo/env";
+import { env, googleEnabled } from "@repo/env";
 
 import { LoginForm } from "@/components/login-form";
 import { getServerSession } from "@/lib/session";
@@ -32,6 +32,7 @@ export default async function LoginPage({
       <LoginForm
         googleEnabled={googleEnabled()}
         mode={mode === "signup" ? "signup" : "signin"}
+        devInboxUrl={env().DEV_MAIL_INBOX_URL ?? null}
       />
     </main>
   );
