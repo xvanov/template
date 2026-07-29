@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ALLOWED_CONTENT_TYPES, MAX_UPLOAD_BYTES, assertUploadAllowed, buildKey } from "./index";
+import {
+  ALLOWED_CONTENT_TYPES,
+  MAX_UPLOAD_BYTES,
+  assertUploadAllowed,
+  buildKey,
+} from "./index";
 import { localDriver } from "./local";
 
 let dir: string;
@@ -47,12 +52,16 @@ describe("assertUploadAllowed", () => {
 
   it("rejects types that would be stored XSS if served from our origin", () => {
     expect(() => assertUploadAllowed("text/html", 10)).toThrow(/Unsupported/);
-    expect(() => assertUploadAllowed("image/svg+xml", 10)).toThrow(/Unsupported/);
+    expect(() => assertUploadAllowed("image/svg+xml", 10)).toThrow(
+      /Unsupported/,
+    );
   });
 
   it("rejects empty and oversized files", () => {
     expect(() => assertUploadAllowed("image/png", 0)).toThrow(/too large/i);
-    expect(() => assertUploadAllowed("image/png", MAX_UPLOAD_BYTES + 1)).toThrow(/too large/i);
+    expect(() =>
+      assertUploadAllowed("image/png", MAX_UPLOAD_BYTES + 1),
+    ).toThrow(/too large/i);
   });
 });
 
@@ -60,7 +69,11 @@ describe("localDriver", () => {
   it("round-trips bytes and reports existence", async () => {
     const driver = localDriver();
     const body = new TextEncoder().encode("hello");
-    const { key, sizeBytes } = await driver.put("org/o/2026-01/abc.txt", body, "text/plain");
+    const { key, sizeBytes } = await driver.put(
+      "org/o/2026-01/abc.txt",
+      body,
+      "text/plain",
+    );
 
     expect(sizeBytes).toBe(5);
     expect(await driver.exists(key)).toBe(true);
@@ -73,13 +86,17 @@ describe("localDriver", () => {
 
   it("refuses a key that escapes the storage root", async () => {
     const driver = localDriver();
-    await expect(driver.get("../../../etc/passwd")).rejects.toThrow(/outside storage root/);
+    await expect(driver.get("../../../etc/passwd")).rejects.toThrow(
+      /outside storage root/,
+    );
     await expect(
       driver.put("../escape.txt", new Uint8Array([1]), "text/plain"),
     ).rejects.toThrow(/outside storage root/);
   });
 
   it("deleting something absent is not an error (idempotent cleanup)", async () => {
-    await expect(localDriver().delete("org/o/nope.txt")).resolves.toBeUndefined();
+    await expect(
+      localDriver().delete("org/o/nope.txt"),
+    ).resolves.toBeUndefined();
   });
 });

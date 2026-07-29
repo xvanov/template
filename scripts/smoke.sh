@@ -78,13 +78,7 @@ if (command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ":${PORT} ") ||
 fi
 
 echo "→ dependencies"
-# A worktree (CI, or a factory story) starts with no node_modules and no
-# generated Prisma client. `npm ci` is a no-op-ish when they are already present
-# and correct, and it is what makes this script runnable from a bare checkout.
-if [ ! -d node_modules ] || [ ! -d packages/db/generated ]; then
-  npm ci --no-audit --fund=false
-  npm run db:generate
-fi
+bash scripts/ensure-deps.sh
 
 echo "→ infrastructure"
 # A real SMTP server is not optional here: the journey confirms a real emailed

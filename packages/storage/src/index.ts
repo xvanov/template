@@ -51,12 +51,17 @@ export const ALLOWED_CONTENT_TYPES = new Set([
 
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
-export function assertUploadAllowed(contentType: string, sizeBytes: number): void {
+export function assertUploadAllowed(
+  contentType: string,
+  sizeBytes: number,
+): void {
   if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
     throw new Error(`Unsupported content type: ${contentType}`);
   }
   if (sizeBytes <= 0 || sizeBytes > MAX_UPLOAD_BYTES) {
-    throw new Error(`File too large: ${sizeBytes} bytes (max ${MAX_UPLOAD_BYTES})`);
+    throw new Error(
+      `File too large: ${sizeBytes} bytes (max ${MAX_UPLOAD_BYTES})`,
+    );
   }
 }
 

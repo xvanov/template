@@ -29,7 +29,9 @@ export function s3Driver(): StorageDriver {
 
     async put(key, body, contentType): Promise<PutResult> {
       const { PutObjectCommand } = await load();
-      await (await client()).send(
+      await (
+        await client()
+      ).send(
         new PutObjectCommand({
           Bucket: bucket,
           Key: key,
@@ -42,9 +44,9 @@ export function s3Driver(): StorageDriver {
 
     async get(key) {
       const { GetObjectCommand } = await load();
-      const res = await (await client()).send(
-        new GetObjectCommand({ Bucket: bucket, Key: key }),
-      );
+      const res = await (
+        await client()
+      ).send(new GetObjectCommand({ Bucket: bucket, Key: key }));
       const bytes = await res.Body?.transformToByteArray();
       if (!bytes) throw new Error(`Empty object: ${key}`);
       return new Uint8Array(bytes);
@@ -52,17 +54,17 @@ export function s3Driver(): StorageDriver {
 
     async delete(key) {
       const { DeleteObjectCommand } = await load();
-      await (await client()).send(
-        new DeleteObjectCommand({ Bucket: bucket, Key: key }),
-      );
+      await (
+        await client()
+      ).send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
     },
 
     async exists(key) {
       const { HeadObjectCommand } = await load();
       try {
-        await (await client()).send(
-          new HeadObjectCommand({ Bucket: bucket, Key: key }),
-        );
+        await (
+          await client()
+        ).send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
         return true;
       } catch {
         return false;
