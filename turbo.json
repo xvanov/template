@@ -2,6 +2,8 @@
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": [
     "NODE_ENV",
+    "COMPOSE_PROJECT_NAME",
+    "WEB_PORT",
     "DATABASE_URL",
     "REDIS_URL",
     "APP_URL",

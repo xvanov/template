@@ -63,19 +63,11 @@ npm install --no-audit --fund=false
 ok "installed"
 
 bold "4/5  postgres + redis + mail"
-docker compose up -d db redis mailpit
-printf '  waiting for health'
-for _ in $(seq 1 60); do
-  DB_STATE="$(docker inspect -f '{{.State.Health.Status}}' app-db 2>/dev/null || echo starting)"
-  REDIS_STATE="$(docker inspect -f '{{.State.Health.Status}}' app-redis 2>/dev/null || echo starting)"
-  MAIL_STATE="$(docker inspect -f '{{.State.Health.Status}}' app-mailpit 2>/dev/null || echo starting)"
-  if [ "$DB_STATE" = healthy ] && [ "$REDIS_STATE" = healthy ] && [ "$MAIL_STATE" = healthy ]; then break; fi
-  printf '.'; sleep 1
-done
-printf '\n'
-[ "${DB_STATE:-}" = healthy ] || die "postgres did not become healthy — check: docker compose logs db"
-[ "${REDIS_STATE:-}" = healthy ] || die "redis did not become healthy — check: docker compose logs redis"
-ok "postgres :5442, redis :6389, mail inbox http://localhost:8035"
+# `--wait` blocks until every healthcheck passes and exits non-zero if one never
+# does, which replaces polling `docker inspect` by container name — names this
+# stack deliberately no longer hardcodes.
+docker compose up -d --wait db redis mailpit
+ok "postgres :${DB_PORT:-5442}, redis :${REDIS_PORT:-6389}, mail inbox http://localhost:${MAIL_UI_PORT:-8035}"
 
 bold "5/5  database schema"
 npm run db:deploy

@@ -7,13 +7,20 @@
 #   docker compose --profile full up -d --build   # everything containerised
 #
 # Ports are deliberately non-default so this stack can coexist with other
-# projects on the same machine (5442/6389/3200 instead of 5432/6379/3000).
+# projects on the same machine (5442/6389/3200 instead of 5432/6379/3000), and
+# every one of them is overridable from .env.
+#
+# NOTHING here is hardcoded to one app. No `container_name`, no fixed host port:
+# a template whose containers are called `app-db` can only ever run ONE app per
+# machine, and the second app you generate from it silently fights the first.
+# Compose names containers `<project>-<service>-1`, and the project defaults to
+# the directory name — so set COMPOSE_PROJECT_NAME plus the *_PORT vars in .env
+# and two apps from this template run side by side.
 # ──────────────────────────────────────────────────────────────────────────
 
 services:
   db:
     image: postgres:17-alpine
-    container_name: app-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
@@ -25,7 +32,7 @@ services:
       # gateway — including any sandbox that runs untrusted code. With the
       # default postgres:postgres credentials that is a full database
       # compromise. Tunnel it (ssh -L / tailscale) instead of republishing.
-      - "127.0.0.1:5442:5432"
+      - "127.0.0.1:${DB_PORT:-5442}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -36,13 +43,12 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: app-redis
     restart: unless-stopped
     ports:
       # ⚠ Same threat as above, worse impact: this Redis has no auth and is
       # the job broker. Anything that reaches it can enqueue work the worker
       # will execute. Keep it on loopback.
-      - "127.0.0.1:6389:6379"
+      - "127.0.0.1:${REDIS_PORT:-6389}:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -58,7 +64,6 @@ services:
   # SMTP_* at a relay.
   mailpit:
     image: axllent/mailpit:latest
-    container_name: app-mailpit
     restart: unless-stopped
     environment:
       MP_MAX_MESSAGES: 500
@@ -66,8 +71,8 @@ services:
       MP_SMTP_AUTH_ALLOW_INSECURE: 1
     ports:
       # Loopback only — an open relay on a shared network is not a dev convenience.
-      - "127.0.0.1:1035:1025" # SMTP
-      - "127.0.0.1:8035:8025" # web inbox + REST API
+      - "127.0.0.1:${MAIL_SMTP_PORT:-1035}:1025" # SMTP
+      - "127.0.0.1:${MAIL_UI_PORT:-8035}:8025" # web inbox + REST API
     healthcheck:
       test: ["CMD", "/mailpit", "readyz"]
       interval: 3s
@@ -83,15 +88,14 @@ services:
   # confirmation link is broken" is then indistinguishable from a real bug.
   mailpit-test:
     image: axllent/mailpit:latest
-    container_name: app-mailpit-test
     profiles: ["test"]
     environment:
       MP_MAX_MESSAGES: 200
       MP_SMTP_AUTH_ACCEPT_ANY: 1
       MP_SMTP_AUTH_ALLOW_INSECURE: 1
     ports:
-      - "127.0.0.1:1036:1025" # SMTP
-      - "127.0.0.1:8036:8025" # REST API the e2e suite reads
+      - "127.0.0.1:${TEST_MAIL_SMTP_PORT:-1036}:1025" # SMTP
+      - "127.0.0.1:${TEST_MAIL_UI_PORT:-8036}:8025" # REST API the e2e suite reads
     healthcheck:
       test: ["CMD", "/mailpit", "readyz"]
       interval: 3s
@@ -103,7 +107,6 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-    container_name: app-web
     restart: unless-stopped
     env_file: .env
     environment:
@@ -115,7 +118,7 @@ services:
       HOSTNAME: "0.0.0.0"
       PORT: "3000"
     ports:
-      - "3200:3000"
+      - "${WEB_PORT:-3200}:3000"
     depends_on:
       db:
         condition: service_healthy
@@ -129,7 +132,6 @@ services:
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
-    container_name: app-worker
     restart: unless-stopped
     env_file: .env
     environment:

@@ -54,14 +54,8 @@ echo "→ infrastructure"
 # link. It is the DEDICATED test catcher (mailpit-test, :1036/:8036), never the
 # dev inbox — the suite's links point at this run's isolated port and go dead
 # when it ends, so mixing them into your own inbox turns real mail into noise.
-docker compose up -d db redis >/dev/null
-docker compose --profile test up -d mailpit-test >/dev/null
-for _ in $(seq 1 60); do
-  [ "$(docker inspect -f '{{.State.Health.Status}}' app-db 2>/dev/null || echo x)" = healthy ] &&
-    [ "$(docker inspect -f '{{.State.Health.Status}}' app-redis 2>/dev/null || echo x)" = healthy ] &&
-    [ "$(docker inspect -f '{{.State.Health.Status}}' app-mailpit-test 2>/dev/null || echo x)" = healthy ] && break
-  sleep 1
-done
+docker compose up -d --wait db redis >/dev/null
+docker compose --profile test up -d --wait mailpit-test >/dev/null
 
 echo "→ migrations"
 npm run db:deploy >/dev/null
