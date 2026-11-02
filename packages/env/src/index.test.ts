@@ -13,7 +13,7 @@ function setBaseline() {
 beforeEach(() => {
   for (const key of Object.keys(process.env)) {
     if (
-      /^(DATABASE_URL|REDIS_URL|BETTER_AUTH_|GOOGLE_|LLM_|S3_|STORAGE_)/.test(
+      /^(APP_URL$|DATABASE_URL|REDIS_URL|BETTER_AUTH_|GOOGLE_|LLM_|S3_|STORAGE_)/.test(
         key,
       )
     ) {
