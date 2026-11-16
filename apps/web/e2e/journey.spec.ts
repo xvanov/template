@@ -89,6 +89,20 @@ test("@smoke sign up, create an item, and see it persist across a reload", async
   await page.reload();
   await expect(page.getByText(title)).toBeVisible();
 
+  // The worker round trip: web enqueues on Redis, the SEPARATE worker process
+  // picks it up and records the outcome in job_run, and the API reads it back.
+  // Only "✓" counts — "✗" means the worker ran the job and it failed, "…" that
+  // it never finished. (The gate runs with the LLM off, so this is fast and free.)
+  await page
+    .getByRole("button", { name: /summarise items in the worker/i })
+    .click();
+  await expect(async () => {
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(page.getByText("✓ items.summarize")).toBeVisible({
+      timeout: 1_000,
+    });
+  }).toPass({ timeout: 20_000 });
+
   // Toggle done, then delete. `click` + an explicit `toBeChecked` rather than
   // `check()`: the list refetches after the mutation, so the control briefly
   // re-renders and check()'s own immediate state assertion races that.
@@ -114,7 +128,7 @@ test("@smoke signing out revokes access to the app", async ({
   await expect(page).toHaveURL(/\/login$/);
 });
 
-test("an anonymous visitor cannot reach the app", async ({ page }) => {
+test("@smoke an anonymous visitor cannot reach the app", async ({ page }) => {
   await page.goto("/app");
   await expect(page).toHaveURL(/\/login$/);
 });
@@ -143,7 +157,7 @@ test("@smoke an unconfirmed account cannot sign in", async ({ page }) => {
   await expect(page).toHaveURL(/\/login/);
 });
 
-test("one tenant's items are invisible to another", async ({
+test("@smoke one tenant's items are invisible to another", async ({
   browser,
   baseURL,
 }) => {

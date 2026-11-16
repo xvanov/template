@@ -3,9 +3,10 @@
 # THE MERGE GATE.
 #
 # Unit tests pass on an application that does not boot. This script builds the
-# app for production, boots it on an isolated port with a real Postgres and a
-# real Redis, waits for its health endpoint to report every dependency
-# reachable, then drives the actual user journey through a browser.
+# app for production, boots it AND the background worker on an isolated port
+# with a real Postgres, Redis and mail catcher, waits for both to report ready,
+# then drives the actual user journey through a browser — including a job that
+# the worker must pick up and finish.
 #
 #   ./scripts/smoke.sh
 #
@@ -17,18 +18,44 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 SERVER_PID=""
+WORKER_PID=""
+SMOKE_TMP=""
+
+# Last lines of both process logs. Called on ANY failure, so whichever step
+# broke, the reason is on screen instead of in a file nobody opens.
+dump_logs() {
+  local f
+  for f in "${WEB_LOG:-}" "${WORKER_LOG:-}"; do
+    [ -n "$f" ] && [ -s "$f" ] || continue
+    echo "── last 60 lines of $(basename "$f") ──" >&2
+    tail -60 "$f" >&2
+  done
+}
 
 cleanup() {
   local code=$?
-  if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
-    echo "→ stopping server (pid $SERVER_PID)"
-    kill "$SERVER_PID" 2>/dev/null || true
-    wait "$SERVER_PID" 2>/dev/null || true
-  fi
+  trap - EXIT INT TERM
+  [ "$code" -ne 0 ] && dump_logs
+  local pid
+  for pid in "$SERVER_PID" "$WORKER_PID"; do
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      echo "→ stopping pid $pid"
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
   # Tear down this run's own stack (volumes included — it is throwaway state).
   # Without this, every CI run and every factory story leaks a Postgres.
   if [ "${SMOKE_KEEP_STACK:-0}" != "1" ]; then
     docker compose --profile test down -v --remove-orphans >/dev/null 2>&1 || true
+  fi
+  # Logs + throwaway storage. Kept on failure so they can be read in full.
+  if [ -n "$SMOKE_TMP" ]; then
+    if [ "$code" -ne 0 ] && [ -s "${WEB_LOG:-}" ]; then
+      echo "  full logs kept in $SMOKE_TMP" >&2
+    else
+      rm -rf "$SMOKE_TMP"
+    fi
   fi
   exit $code
 }
@@ -74,6 +101,17 @@ export SMTP_HOST=127.0.0.1
 export SMTP_PORT="${TEST_MAIL_SMTP_PORT}"
 # A bare worktree may have no .env; without a secret better-auth refuses to boot.
 export BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-smoke-gate-secret-not-for-production-32}"
+
+# Nothing the gate writes may outlive it or land in the dev tree: logs and
+# uploaded files go to a fresh temp dir (absolute, so every process agrees on
+# it — see STORAGE_LOCAL_DIR in CLAUDE.md). The LLM is forced OFF whatever the
+# dev .env says: the gate must not spend money or depend on a third party, and
+# the worker's summary job has a deterministic no-LLM path.
+SMOKE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/smoke-$(basename "$ROOT").XXXXXX")"
+WEB_LOG="${SMOKE_TMP}/web.log"
+WORKER_LOG="${SMOKE_TMP}/worker.log"
+export STORAGE_DRIVER=local STORAGE_LOCAL_DIR="${SMOKE_TMP}/storage"
+export LLM_API_KEY=""
 
 # Refuse to run against a server we did not start. Otherwise a stale process
 # left on this port answers the health check and the gate reports on the wrong
@@ -134,32 +172,51 @@ APP_URL="$BASE_URL" BETTER_AUTH_URL="$BASE_URL" \
 AUTH_RATE_LIMIT_MAX="${AUTH_RATE_LIMIT_MAX:-5000}" \
 REQUIRE_EMAIL_VERIFICATION=true \
 DEV_MAIL_INBOX_URL= \
-  node "${STANDALONE}/server.js" > /tmp/smoke-web.log 2>&1 &
+  node "${STANDALONE}/server.js" > "$WEB_LOG" 2>&1 &
 SERVER_PID=$!
 
-echo "→ waiting for health"
-READY=0
-for _ in $(seq 1 60); do
-  if curl -fsS "${BASE_URL}/api/health" >/dev/null 2>&1; then READY=1; break; fi
-  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-    echo "✗ the server exited during boot:" >&2
-    tail -40 /tmp/smoke-web.log >&2
+echo "→ booting the worker"
+# The worker is part of the product: jobs and schedules run there, and a web app
+# whose worker crashes on boot is a broken deploy. Same command the worker image
+# runs (tsx, no bundle), same isolated environment as the server. Started
+# directly with node — not via `npm run` — so the pid we kill is the worker
+# itself and nothing is left orphaned.
+APP_URL="$BASE_URL" node --import tsx apps/worker/src/index.ts > "$WORKER_LOG" 2>&1 &
+WORKER_PID=$!
+
+# A process that has exited is reported by name, with its log (via cleanup).
+alive_or_die() { # alive_or_die <pid> <what>
+  if ! kill -0 "$1" 2>/dev/null; then
+    echo "✗ the $2 exited${3:+ $3}." >&2
     exit 1
   fi
+}
+
+echo "→ waiting for health and the worker"
+WEB_READY=0 WORKER_READY=0
+for _ in $(seq 1 60); do
+  [ "$WEB_READY" -eq 1 ] || { curl -fsS "${BASE_URL}/api/health" >/dev/null 2>&1 && WEB_READY=1; }
+  [ "$WORKER_READY" -eq 1 ] || { grep -q "\[worker\] up" "$WORKER_LOG" 2>/dev/null && WORKER_READY=1; }
+  alive_or_die "$SERVER_PID" server "during boot"
+  alive_or_die "$WORKER_PID" worker "during boot"
+  [ "$WEB_READY" -eq 1 ] && [ "$WORKER_READY" -eq 1 ] && break
   sleep 1
 done
-if [ "$READY" -ne 1 ]; then
-  echo "✗ /api/health never became reachable:" >&2
-  tail -40 /tmp/smoke-web.log >&2
-  exit 1
-fi
+[ "$WEB_READY" -eq 1 ] || { echo "✗ /api/health never became reachable." >&2; exit 1; }
+[ "$WORKER_READY" -eq 1 ] || { echo "✗ the worker never printed its '[worker] up' line." >&2; exit 1; }
 curl -fsS "${BASE_URL}/api/health"
 echo
+echo "  worker up (pid $WORKER_PID)"
 
 echo "→ driving the user journey"
 # MAILPIT_URL points the suite at the test catcher's API, matching SMTP_PORT above.
 BASE_URL="$BASE_URL" MAILPIT_URL="http://127.0.0.1:${TEST_MAIL_UI_PORT}" \
   npm run test:e2e:smoke --workspace web
 
+# A worker that died mid-run may still have let the journey pass (e.g. it
+# finished the one job and then crashed). That is a failure too.
+alive_or_die "$SERVER_PID" server "during the journey"
+alive_or_die "$WORKER_PID" worker "during the journey"
+
 echo
-echo "✓ smoke passed: the built app boots and the core journey works"
+echo "✓ smoke passed: the built app and worker boot, and the core journey works"

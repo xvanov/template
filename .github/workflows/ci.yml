@@ -10,18 +10,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  # Real services, not mocks — see the `services:` blocks below.
-  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app?schema=public
-  REDIS_URL: redis://localhost:6379
-  BETTER_AUTH_SECRET: ci-secret-not-for-production-use-0000
-  APP_URL: http://127.0.0.1:3210
-  # A real local SMTP server (the mailpit service below), so the sign-up
-  # confirmation link is genuinely sent and genuinely opened by the test.
-  SMTP_HOST: localhost
-  SMTP_PORT: "1025"
-  MAILPIT_URL: http://localhost:8025
-
 jobs:
   # ── static checks + unit/integration tests ────────────────────────────
   # Postgres only: *.int.test.ts prove tenant isolation against real SQL, in a
@@ -42,86 +30,38 @@ jobs:
           --health-cmd "pg_isready -U postgres -d app"
           --health-interval 2s --health-timeout 3s --health-retries 30
     env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app?schema=public
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app
+      REDIS_URL: redis://localhost:6379
+      BETTER_AUTH_SECRET: ci-secret-not-for-production-use-0000
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --no-audit --fund=false
-      - run: npm run db:generate
+      - uses: ./.github/actions/setup
       - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test
 
   # ── the gate that matters: does the built app actually run? ───────────
+  # This job runs scripts/smoke.sh — the SAME script as `make smoke` and the
+  # software factory — so CI and the local gate cannot drift. The script brings
+  # up its own isolated Postgres, Redis and mail catcher with docker compose,
+  # builds, boots the web server AND the worker, and drives the browser journey.
+  # Do not re-inline its steps here; change the script.
   smoke:
     name: smoke (real build, real browser)
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: app
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U postgres -d app"
-          --health-interval 3s --health-timeout 3s --health-retries 20
-      redis:
-        image: redis:7-alpine
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 3s --health-timeout 3s --health-retries 20
-      mailpit:
-        image: axllent/mailpit:latest
-        ports: ["1025:1025", "8025:8025"]
-        options: >-
-          --health-cmd "/mailpit readyz"
-          --health-interval 3s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --no-audit --fund=false
-      - run: npm run db:generate
-      - run: npm run db:deploy
-      - run: npx playwright install chromium --with-deps
+      - uses: ./.github/actions/setup
 
-      - name: build
-        run: npm run build --workspace web
+      # Headless runs use Chromium's headless shell, not the full browser:
+      # `--only-shell` downloads ~270MB instead of ~650MB (measured 4s vs 23s).
+      # Not cached on purpose — restoring a cache of that size costs about what
+      # the download does (Playwright's own CI guidance says the same).
+      - run: npx playwright install chromium --only-shell --with-deps
 
-      # Mirrors scripts/smoke.sh, minus the docker-compose step (CI provides the
-      # services above). `output: standalone` does not copy static assets, so
-      # they are copied here or nothing hydrates.
-      - name: boot the built app
-        run: |
-          STANDALONE=apps/web/.next/standalone/apps/web
-          cp -r apps/web/.next/static "$STANDALONE/.next/static"
-          [ -d apps/web/public ] && cp -r apps/web/public "$STANDALONE/public" || true
-          PORT=3210 HOSTNAME=127.0.0.1 \
-          BETTER_AUTH_URL=$APP_URL \
-          AUTH_RATE_LIMIT_MAX=5000 \
-            node "$STANDALONE/server.js" > /tmp/web.log 2>&1 &
-          for _ in $(seq 1 60); do
-            curl -fsS http://127.0.0.1:3210/api/health && break || sleep 1
-          done
-
-      - name: end-to-end
-        run: npm run test:e2e --workspace web
-        env:
-          BASE_URL: http://127.0.0.1:3210
-          CI: "true"
-
-      - name: server log on failure
-        if: failure()
-        run: tail -100 /tmp/web.log
+      - run: bash scripts/smoke.sh
 
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -133,10 +73,16 @@ jobs:
           retention-days: 7
 
   # ── the images that actually get deployed ─────────────────────────────
+  # Built with buildx from the compose file's own build definitions (bake reads
+  # docker-compose.yml, so the targets cannot drift from `make stack`). No
+  # --load: the job proves the images BUILD; exporting them into the runner's
+  # image store, only to throw them away, was ~45s of a ~115s job (the worker
+  # image alone took 42s to export). Measured locally: 70s → 35s.
   docker:
     name: docker build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: cp .env.example .env
-      - run: docker compose --profile full build
+      - uses: docker/setup-buildx-action@v3
+      - run: docker buildx bake -f docker-compose.yml web worker
