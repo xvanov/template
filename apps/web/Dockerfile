@@ -32,7 +32,7 @@ RUN npm ci --no-audit --fund=false
 # Root files prune does not carry: the shared tsconfig every package extends.
 COPY tsconfig.base.json ./
 COPY --from=prune /app/out/full/ ./
-RUN npm run build --workspace web
+RUN npm run build --workspace web && mkdir -p apps/web/public
 
 # ── run ──────────────────────────────────────────────────────────────────
 FROM node:22-alpine AS runner
@@ -47,6 +47,8 @@ ENV HOSTNAME=0.0.0.0
 # Next's `standalone` output already contains only the traced dependencies.
 COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
+# Same as scripts/smoke.sh: public/ is not traced either (created empty if absent).
+COPY --from=builder /app/apps/web/public ./apps/web/public
 
 # Local-driver uploads land here; mount a volume so they survive a redeploy.
 RUN mkdir -p /app/storage && chown -R node:node /app/storage

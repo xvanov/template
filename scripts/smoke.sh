@@ -35,6 +35,7 @@ dump_logs() {
 cleanup() {
   local code=$?
   trap - EXIT
+  trap '' INT TERM # a second Ctrl-C must not skip the teardown below
   [ "$code" -ne 0 ] && dump_logs
   local pid
   for pid in "$SERVER_PID" "$WORKER_PID"; do
