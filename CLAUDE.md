@@ -42,9 +42,34 @@ Ports are non-default so this coexists with other projects:
 ```bash
 make typecheck    # tsc --noEmit across every workspace
 make lint
-make test         # unit tests (vitest)
+make test         # unit + integration tests (vitest). Needs Postgres: `make up`
 make smoke        # THE GATE: production build, booted, driven in a real browser
 ```
+
+`make test` runs two kinds of test. `*.test.ts` are unit tests: no database,
+run anywhere. `*.int.test.ts` hit real Postgres: once per run,
+`packages/db/testing/global-setup.ts` creates a throwaway schema `vt_<ts>_<hex>`
+in the dev database, applies the migration SQL into it (~40 ms), and drops it
+afterwards; `public` is never touched. If Postgres is down the run FAILS with
+"start it with `make up`" (it never skips: a skipped isolation test looks like
+a passing one). `TEST_DATABASE_URL` points it at another database (CI does).
+`npm run test:unit -w @repo/api` runs only the DB-free tests.
+
+**Writing an org-isolation test** (do this for every new org-scoped model), in
+`packages/api/test/<thing>.int.test.ts`; `tenant-isolation.int.test.ts` is the
+reference:
+
+```ts
+const a = await createTenant("a"); // from @repo/db/testing: user+org+session
+const b = await createTenant("b");
+const row = await callerFor(a).things.create({ ... }); // ./caller: real router
+expect(await callerFor(b).things.list()).toEqual([]);  // B sees nothing of A's
+await expect(callerFor(b).things.remove({ id: row.id }))
+  .rejects.toMatchObject({ code: "NOT_FOUND" });       // nor can B change it
+```
+
+Each `createTenant` is unique, so test files share the schema and still run in
+parallel. Assert only on what a tenant can see; never on global row counts.
 
 `make smoke` is the one that counts. Unit tests pass on an app that does not
 boot; the smoke gate builds for production, boots the standalone server on an
@@ -65,7 +90,10 @@ reload → sign-out through Chromium. **Nothing is "done" until it is green.**
 4. **The model is config.** Any OpenAI-compatible endpoint works via
    `LLM_BASE_URL`/`LLM_MODEL`. Every call is priced into the `llm_call` table.
 5. **Slow or failable work goes to `packages/jobs`**, not into a request. Every
-   run is recorded in `job_run` — Redis is ephemeral, that table is not.
+   run is recorded in `job_run` — Redis is ephemeral, that table is not. A run
+   is owned by the `organizationId` in its payload (`tenantOf()`); no
+   `organizationId` = a system job, never shown to any tenant. So a tenant's job
+   MUST carry `organizationId` in its payload, or its owner cannot see it.
 6. **Auth schema belongs to better-auth.** After changing plugins in
    `packages/auth`, run `npm run auth:schema` and diff before migrating.
 7. **Shared packages export TypeScript source**, no build step. Next transpiles

@@ -62,6 +62,7 @@ async function startRun(job: Job): Promise<string | null> {
   try {
     const row = await db.jobRun.create({
       data: {
+        organizationId: tenantOf(job.data),
         jobId: job.id ?? "",
         name: job.name,
         status: "running",
@@ -102,6 +103,18 @@ async function finishRun(
   } catch (updateErr) {
     console.error("[worker] could not record job finish:", updateErr);
   }
+}
+
+/**
+ * The tenant a job runs for, read from its payload. Jobs that carry no
+ * `organizationId` are system jobs and stay unowned (and invisible to tenants).
+ */
+export function tenantOf(data: unknown): string | null {
+  if (data && typeof data === "object" && "organizationId" in data) {
+    const value = (data as { organizationId?: unknown }).organizationId;
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return null;
 }
 
 function safeJson(value: unknown): string | null {
