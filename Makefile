@@ -36,7 +36,7 @@ down: ## stop postgres + redis
 stack: ## build and run EVERYTHING in docker (web, worker, db, redis)
 	@npm run stack:up
 
-test: ## unit tests (all workspaces)
+test: ## unit + integration tests (integration needs postgres: make up)
 	@npm run test
 
 typecheck: ## tsc --noEmit across all workspaces

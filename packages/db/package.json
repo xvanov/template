@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./client": "./generated/client.ts"
+    "./client": "./generated/client.ts",
+    "./testing": "./testing/index.ts"
   },
   "scripts": {
     "generate": "prisma generate",
@@ -23,9 +24,12 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.20.0",
     "dotenv": "^17.2.4",
+    "pg": "^8.22.0",
     "prisma": "^7.9.1",
     "tsx": "^4.20.0",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.10"
   }
 }

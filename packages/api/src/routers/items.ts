@@ -97,9 +97,14 @@ export const itemsRouter = createTRPCRouter({
     return { jobId };
   }),
 
-  /** Latest background-job outcomes, so the UI can show that work happened. */
+  /**
+   * Latest background-job outcomes, so the UI can show that work happened.
+   * Scoped to this tenant: system jobs (null owner) and other tenants' jobs are
+   * never returned.
+   */
   recentJobs: orgProcedure.query(({ ctx }) =>
     ctx.db.jobRun.findMany({
+      where: { organizationId: ctx.organizationId },
       orderBy: { createdAt: "desc" },
       take: 10,
       select: {

@@ -95,8 +95,8 @@ model Verification {
 // ───────────────────── MULTI-TENANCY (organization plugin) ───────────────
 
 model Organization {
-  id   String @id @default(cuid())
-  name String
+  id        String   @id @default(cuid())
+  name      String
   // Required + unique: better-auth's organization plugin treats the slug as the
   // tenant's public handle and will not accept a null.
   slug      String   @unique
@@ -108,6 +108,7 @@ model Organization {
   invitations Invitation[]
   items       Item[]
   mediaAssets MediaAsset[]
+  jobRuns     JobRun[]
 
   @@map("organization")
 }
@@ -205,18 +206,25 @@ model LlmCall {
 
 /// Background-job observability. The queue is Redis (ephemeral); this table
 /// is the durable record of what ran, so a job that vanishes is visible.
+///
+/// `organizationId` is the tenant the job ran FOR, taken from the payload's
+/// `organizationId`. Null means a system job (maintenance, fan-out schedules)
+/// that belongs to no tenant; those are never shown to a tenant.
 model JobRun {
-  id         String    @id @default(cuid())
-  jobId      String
-  name       String
-  status     String    @default("queued")
-  attempts   Int       @default(0)
-  payload    String?
-  error      String?
-  startedAt  DateTime?
-  finishedAt DateTime?
-  createdAt  DateTime  @default(now())
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  jobId          String
+  name           String
+  status         String        @default("queued")
+  attempts       Int           @default(0)
+  payload        String?
+  error          String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime      @default(now())
 
+  @@index([organizationId, createdAt])
   @@index([name, createdAt])
   @@index([status])
   @@map("job_run")

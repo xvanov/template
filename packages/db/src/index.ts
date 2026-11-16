@@ -18,7 +18,14 @@ import { PrismaClient } from "../generated/client";
 const globalForDb = globalThis as unknown as { __db?: PrismaClient };
 
 function createClient(): PrismaClient {
-  const adapter = new PrismaPg({ connectionString: env().DATABASE_URL });
+  // The driver adapter ignores `?schema=` in the URL, so pass it explicitly.
+  // Without this, tests aimed at a throwaway schema would hit `public`.
+  const url = env().DATABASE_URL;
+  const schema = schemaOf(url);
+  const adapter = new PrismaPg(
+    { connectionString: url },
+    schema ? { schema } : undefined,
+  );
   const client = new PrismaClient({
     adapter,
     log: env().NODE_ENV === "development" ? ["warn", "error"] : ["error"],
@@ -40,6 +47,14 @@ export const db: PrismaClient = new Proxy({} as PrismaClient, {
     return prop in instance();
   },
 });
+
+function schemaOf(url: string): string | undefined {
+  try {
+    return new URL(url).searchParams.get("schema") ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export * from "../generated/client";
 export type { PrismaClient };
