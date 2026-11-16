@@ -5,8 +5,10 @@
 #
 # Why a separate file and not a profile in docker-compose.yml: almost nothing
 # is shared. Production has no mailpit, publishes NO database or Redis port,
-# runs prebuilt images by tag (that is what makes rollback possible), takes its
-# secrets from .env.production, and runs under its own Compose project
+# runs prebuilt images by tag (that is what makes rollback possible), takes the
+# app's settings from .env.production and ops settings (interpolated below:
+# POSTGRES_PASSWORD, PROD_WEB_PORT, CLOUDFLARE_TUNNEL_TOKEN…) from .env.deploy,
+# so app containers never see ops secrets — and runs under its own Compose project
 # (`<dir>-prod`) so its volumes can never be confused with the dev stack's on
 # the same machine. A profile would mix all of that into the file every
 # developer reads daily, and one stray `--profile` flag would point dev
@@ -50,13 +52,16 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production (openssl rand -hex 24)}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.deploy (openssl rand -hex 24)}
       POSTGRES_DB: app
     # No `ports:` — nothing outside this compose network needs the database.
     # Backups use `docker compose exec db pg_dump`; for a psql shell use
     # `docker compose ... exec db psql -U postgres app`.
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # `start_interval` (fast polling while starting) REQUIRES `start_period`.
+    # `docker compose config` does not catch a missing one — only `up` fails —
+    # so validate a healthcheck change by actually starting the stack.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d app"]
       interval: 10s
@@ -138,11 +143,15 @@ services:
 
   # Optional public door: a Cloudflare Tunnel (outbound-only, no open port, TLS
   # at Cloudflare). Enabled by COMPOSE_PROFILES=tunnel + CLOUDFLARE_TUNNEL_TOKEN
-  # in .env.production. In the Cloudflare dashboard point the tunnel's public
+  # in .env.deploy. In the Cloudflare dashboard point the tunnel's public
   # hostname at http://web:3000. See docs/deploy.md → "Public exposure".
+  # The token comes from .env.deploy by interpolation, not from an env_file.
   cloudflared:
     profiles: ["tunnel"]
-    image: cloudflare/cloudflared:2025.11.1
+    # Pinned (not :latest) so a deploy never changes the tunnel by surprise.
+    # Bump every few months: Cloudflare stops supporting versions older than
+    # about a year. github.com/cloudflare/cloudflared/releases
+    image: cloudflare/cloudflared:2026.11.0
     restart: unless-stopped
     command: ["tunnel", "--no-autoupdate", "run"]
     environment:

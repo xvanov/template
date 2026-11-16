@@ -18,6 +18,7 @@ packages/db/generated/
 .env
 .env.*
 !.env.example
+!.env.deploy.example
 
 # local runtime state
 #

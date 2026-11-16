@@ -51,7 +51,7 @@ jobs:
       - run: npm run test
 
   # ── production ops scripts ────────────────────────────────────────────
-  # shellcheck + a real backup → restore round trip (scripts/backup.sh and
+  # shellcheck + the migration guard's unit test + a real backup → restore round trip (scripts/backup.sh and
   # restore.sh against a throwaway Postgres from docker-compose.prod.yml). No
   # Node install; runs in parallel with the other jobs, so it adds nothing to
   # the wall-clock time of a PR. The deploy/rollback path is NOT run here: it
@@ -61,8 +61,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make lint-sh
-      - run: bash scripts/test-backup-restore.sh
+      - run: make lint-sh SHELLCHECK_DOCKER=1 # same pinned version as local
+      - run: make test-ops
 
   # ── the gate that matters: does the built app actually run? ───────────
   # This job runs scripts/smoke.sh — the SAME script as `make smoke` and the

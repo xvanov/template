@@ -91,8 +91,8 @@ re-inline its steps in the workflow.
 One Docker host, documented in `docs/deploy.md`: `docker-compose.prod.yml`
 plus `scripts/deploy.sh` (`deploy`/`rollback`/`status`), `scripts/backup.sh`,
 `scripts/restore.sh`, and the systemd templates in `ops/systemd/`.
-`make test-ops` round-trips a backup in about 10s. `make lint` shellchecks
-every script.
+`make test-ops` runs the migration-guard unit test and a backup/restore round
+trip (about 20s). `make lint` shellchecks every script.
 
 ## Architecture rules (a reviewer should reject violations)
 
@@ -275,25 +275,25 @@ to `strict` with an empty allowlist, so the gate proves sign-up still works.
 - **Rollback swaps code, not schema.** `deploy.sh` migrates forward before
   the swap, so a rolled-back image runs on the NEW schema. Migrations must
   keep the previous code working: add a column, backfill it, and drop the old
-  one in a later deploy. Every deploy takes a `pre-deploy` dump right before
-  migrating, for when that rule was broken.
-- **Prod reads `PROD_WEB_PORT`, not `WEB_PORT`.** `.env.production` starts as a
-  copy of `.env.example`, whose `WEB_PORT` is the dev server's port. The prod
-  compose project is `DEPLOY_PROJECT` (default `<dir>-prod`); pin it in
-  `.env.production`, or renaming the directory points at new, empty volumes.
+  one in a later deploy. `deploy.sh` refuses new migrations that drop, rename,
+  retype or add NOT NULL unless `--allow-destructive`
+  (`scripts/lib/migration-guard.sh`). Every deploy also takes a `pre-deploy`
+  dump right before migrating.
+- **Prod has two env files.** `.env.production` holds the app's settings and
+  goes to the containers through `env_file` only; the scripts never source it.
+  `.env.deploy` holds ops settings: `POSTGRES_PASSWORD`, `PROD_WEB_PORT` (not
+  the dev `WEB_PORT`), `DEPLOY_*`, `BACKUP_*` and the tunnel token. It is
+  sourced by the scripts and used for compose interpolation, and is never
+  handed to the app. Pin `DEPLOY_PROJECT` there: the default `<dir>-prod`
+  means renaming the directory points at new, empty volumes. Because
+  `.env.deploy` is sourced with `set -a`, a value it sets beats an inline
+  `VAR=x scripts/...` override.
 - **`backups/` and `.deploy/` must stay in `.dockerignore`.** Without that,
   every image build ships the database dumps into the build context.
 - **A deploy started from inside a systemd service must run in its own unit**
   (`scripts/deploy.sh --detach`, or `systemctl --user start <app>-deploy`).
   `setsid nohup` leaves it in the caller's cgroup; stopping the caller kills
   the deploy halfway.
-- **Compose `healthcheck.start_interval` requires `start_period`**, and
-  `docker compose config` does NOT catch it; only `up` fails. Validate a
-  compose change by starting it.
-- **`cmd | grep -q` under `set -o pipefail` can fail after a match.** grep
-  exits at the first hit, the writer dies of SIGPIPE, and the pipeline reports
-  failure. Use `grep -q pat <<<"$(cmd)"`; `deploy.sh` does this for the
-  worker's `[worker] up` line.
 - Mobile has one `@ts-expect-error` on the better-auth Expo plugin: an upstream
   generic-variance gap in 1.6.25. Suppressed rather than cast so session types
   still infer. Remove it when upstream types line up.

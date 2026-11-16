@@ -1,10 +1,10 @@
 # Runs scripts/deploy.sh in a unit of its own. Anything that triggers deploys
-# (a webhook listener, an agent, the optional timer below) should do
+# (a webhook listener, an agent, the optional timer) should do
 # `systemctl --user start @APP_NAME@-deploy` rather than run the script itself:
 # then stopping or restarting the caller cannot kill a deploy halfway.
 [Unit]
 Description=@APP_NAME@ deploy (scripts/deploy.sh)
-After=docker.service
+OnFailure=@APP_NAME@-failure@%n.service
 
 [Service]
 Type=oneshot

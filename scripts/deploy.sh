@@ -2,7 +2,7 @@
 # ──────────────────────────────────────────────────────────────────────────
 # Production deploy for one Docker host. Runbook: docs/deploy.md.
 #
-#   scripts/deploy.sh [deploy] [--force] [--no-pull] [--detach]
+#   scripts/deploy.sh [deploy] [--force] [--no-pull] [--detach] [--allow-destructive]
 #   scripts/deploy.sh rollback      back to the previous image tags
 #   scripts/deploy.sh status        tags, containers, health
 #
@@ -21,7 +21,9 @@
 #
 # Migrations run FORWARD only. A rollback swaps code, not schema, so the old
 # code must run on the new schema — write additive migrations (add, backfill,
-# drop in a LATER deploy). The pre-deploy dump is there for when that fails.
+# drop in a LATER deploy). New migrations that drop/rename/retype/add NOT NULL
+# are refused unless --allow-destructive (scripts/lib/migration-guard.sh). The
+# pre-deploy dump is there for when that still goes wrong.
 #
 # Triggered from a systemd service (a webhook listener, an agent, a timer)?
 # Use --detach: it re-runs this script in its own transient unit, so the deploy
@@ -32,10 +34,13 @@
 set -euo pipefail
 # shellcheck source=scripts/lib/prod.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/prod.sh"
+# shellcheck source=scripts/lib/migration-guard.sh
+. "$ROOT/scripts/lib/migration-guard.sh"
 
 BRANCH="${DEPLOY_BRANCH:-main}"
 HEALTH_TIMEOUT="${DEPLOY_HEALTH_TIMEOUT:-120}" # seconds for web to report healthy
 KEEP_IMAGES="${DEPLOY_KEEP_IMAGES:-3}"         # tags kept per image, beyond current+previous
+BUILD_CACHE_MAX="${DEPLOY_BUILD_CACHE_MAX:-30GB}" # BuildKit cache trimmed to this after a deploy
 APP_SERVICES=(web worker)
 
 usage() { sed -n '3,8p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -141,9 +146,20 @@ prune_images() {
 }
 
 # ── git: fast-forward only ───────────────────────────────────────────────
+# The image is built from the working directory, so anything there that git
+# does not track (and .dockerignore does not exclude) would ship in the build
+# context without being in the commit the tag names. Refuse rather than build
+# something nobody can reproduce from git. Ignored files (.env.*, backups/,
+# .deploy/) are fine: git status does not list them.
+require_clean() {
+  local dirty
+  dirty="$(git status --porcelain)"
+  [ -z "$dirty" ] || die "the checkout is not clean — deploys build exactly what is committed:
+$dirty"
+}
+
 update_checkout() {
-  [ -z "$(git status --porcelain --untracked-files=no)" ] ||
-    die "the checkout has uncommitted changes — deploys build what is committed"
+  require_clean
   local on
   on="$(git rev-parse --abbrev-ref HEAD)"
   [ "$on" = "$BRANCH" ] || die "checkout is on '$on', not '$BRANCH' (set DEPLOY_BRANCH to change)"
@@ -155,18 +171,18 @@ update_checkout() {
 
 # ── commands ─────────────────────────────────────────────────────────────
 cmd_deploy() {
-  local force=0 pull=1 arg
+  local force=0 pull=1 allow_destructive=0 arg
   for arg in "$@"; do
     case "$arg" in
       --force) force=1 ;;
       --no-pull) pull=0 ;;
+      --allow-destructive) allow_destructive=1 ;;
       *) die "unknown option $arg" ;;
     esac
   done
 
   [ "$pull" = 1 ] && update_checkout
-  [ -z "$(git status --porcelain --untracked-files=no)" ] ||
-    die "the checkout has uncommitted changes — deploys build what is committed"
+  require_clean
   local tag cur
   tag="$(git rev-parse --short=12 HEAD)"
   cur="$(state_get CURRENT)"
@@ -180,6 +196,16 @@ cmd_deploy() {
   fi
 
   log "deploying $tag ($(git log -1 --format=%s)) — live: ${cur:-nothing}"
+  if [ -n "$cur" ] && [ "$allow_destructive" = 0 ]; then
+    git cat-file -e "$cur^{commit}" 2>/dev/null ||
+      die "live tag $cur is not a commit in this checkout, so its migrations cannot be compared — --allow-destructive to deploy anyway"
+    local destructive
+    if ! destructive="$(destructive_migrations "$cur" "$tag")"; then
+      die "new migrations would break rollback to $cur:
+$destructive
+Split it (expand/contract, docs/deploy.md), or --allow-destructive if you accept that a rollback past this deploy needs a restore."
+    fi
+  fi
   log "building images (the live version keeps serving)"
   APP_TAG="$tag" compose build web worker migrate
 
@@ -211,6 +237,7 @@ cmd_deploy() {
     state_set FAILED ""
     start_extras
     prune_images
+    docker builder prune -f --max-used-space "$BUILD_CACHE_MAX" >/dev/null 2>&1 || true
     log "✓ deployed $tag — healthy"
     return 0
   fi
@@ -279,7 +306,8 @@ if [ "$cmd" = deploy ] && [[ " $* " == *" --detach "* ]]; then
   systemd-run "${mode[@]}" --unit="$unit" --collect --same-dir \
     --property=StandardOutput="append:$STATE_DIR/deploy.log" \
     --property=StandardError="append:$STATE_DIR/deploy.log" \
-    --setenv=ENV_FILE="$ENV_FILE" --setenv=DEPLOY_PROJECT="$DEPLOY_PROJECT" \
+    --setenv=ENV_FILE="$ENV_FILE" --setenv=DEPLOY_ENV_FILE="$DEPLOY_ENV_FILE" \
+    --setenv=DEPLOY_PROJECT="$DEPLOY_PROJECT" \
     --setenv=DEPLOY_STATE="$STATE_DIR" --setenv=PATH="$PATH" \
     "$ROOT/scripts/deploy.sh" deploy "${args[@]}"
   echo "started unit $unit — follow with: tail -f $STATE_DIR/deploy.log"

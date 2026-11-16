@@ -17,8 +17,14 @@
 # Off-host copy (optional): BACKUP_RSYNC_TARGET=user@host:/path pushes the new
 # files there over ssh (key auth; BatchMode, so it never hangs on a prompt).
 # A failed push fails the run, so the timer shows it, but the local copy stays.
+#
+# BACKUP_PROTECT=<file> (set by restore.sh): never prune that dump or its
+# uploads tarball. Without it, a restore from the OLDEST pre-restore dump had
+# its own safety backup prune the very file it was about to restore.
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
+# Dumps hold password hashes, sessions and sealed secrets: owner-only files.
+umask 077
 # shellcheck source=scripts/lib/prod.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/prod.sh"
 
@@ -44,6 +50,10 @@ case "$kind" in
   pre-deploy | pre-restore) keep="${BACKUP_KEEP_PRE:-5}" ;;
   *) die "unknown --kind $kind" ;;
 esac
+# keep=1 would prune the only previous copy before the new one is proven good.
+if ! [[ "$keep" =~ ^[0-9]+$ ]] || [ "$keep" -lt 2 ]; then
+  die "keep count for $kind must be >= 2 (got '$keep')"
+fi
 
 db_running || die "the database container is not running (project $DEPLOY_PROJECT)"
 
@@ -59,20 +69,38 @@ trap 'rm -f "$dump.partial" "$tarball.partial"' EXIT
 
 # 1. prune first, so the space they held is available to this run.
 # Keep keep-1 old ones: with the one about to be written that makes `keep`.
+protect=""
+if [ -n "${BACKUP_PROTECT:-}" ]; then
+  protect="$(realpath -m "$BACKUP_PROTECT")"
+  protect_tar="$(dirname "$protect")/storage-$(basename "$protect" .dump | sed 's/^db-//').tar.gz"
+fi
 prune() { # prune <glob>
+  local f
   # $1 is a glob on purpose; the names are ours (no spaces or newlines).
   # shellcheck disable=SC2012,SC2086
-  ls -1t "$dest"/$1 2>/dev/null | tail -n +"$keep" | xargs -r rm -f -- || true
+  ls -1t "$dest"/$1 2>/dev/null | tail -n +"$keep" | while read -r f; do
+    f="$(realpath -m "$f")"
+    if [ -n "$protect" ] && { [ "$f" = "$protect" ] || [ "$f" = "$protect_tar" ]; }; then
+      continue
+    fi
+    rm -f -- "$f"
+  done || true
 }
 prune 'db-*.dump'
 prune 'storage-*.tar.gz'
 
-# 2. room check: the newest existing dump (+25%) as the estimate, plus a floor.
+# 2. room check: the newest existing dump (+25%) plus the uploads volume's
+# size (an upper bound for its tarball), plus a floor.
 # shellcheck disable=SC2012
 last="$(ls -1t "$BACKUP_DIR"/*/db-*.dump 2>/dev/null | head -1 || true)"
 last_kb=0
 [ -z "$last" ] || last_kb="$(du -k "$last" | cut -f1)"
-need_kb=$((last_kb * 5 / 4 + MIN_FREE_MB * 1024))
+vol="${DEPLOY_PROJECT}_storage"
+uploads_kb=0
+if docker volume inspect "$vol" >/dev/null 2>&1; then
+  uploads_kb="$(docker run --rm -v "$vol:/s:ro" "$ALPINE_IMAGE" du -sk /s | cut -f1)"
+fi
+need_kb=$(((last_kb * 5 / 4) + uploads_kb + MIN_FREE_MB * 1024))
 avail_kb="$(df -Pk "$dest" | awk 'NR==2 {print $4}')"
 [ "$avail_kb" -ge "$need_kb" ] ||
   die "only $((avail_kb / 1024))MB free in $dest, need $((need_kb / 1024))MB — not backing up"
@@ -87,11 +115,11 @@ files=("$dump")
 
 # 4. uploads, when STORAGE_DRIVER=local put any in the volume (S3 is its own
 # backup story). Read-only mount from a throwaway container.
-vol="${DEPLOY_PROJECT}_storage"
 if docker volume inspect "$vol" >/dev/null 2>&1 &&
-  [ -n "$(docker run --rm -v "$vol:/s:ro" alpine:3 ls -A /s)" ]; then
+  [ -n "$(docker run --rm -v "$vol:/s:ro" "$ALPINE_IMAGE" ls -A /s)" ]; then
   log "archiving uploads → $tarball"
-  docker run --rm -v "$vol:/s:ro" alpine:3 tar -czf - -C /s . >"$tarball.partial"
+  docker run --rm -v "$vol:/s:ro" "$ALPINE_IMAGE" tar -czf - -C /s . >"$tarball.partial"
+  gzip -t "$tarball.partial" || die "the uploads archive is corrupt — discarded"
   mv "$tarball.partial" "$tarball"
   files+=("$tarball")
 fi
