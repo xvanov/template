@@ -112,6 +112,15 @@ reload → sign-out through Chromium. **Nothing is "done" until it is green.**
   must be recreated (`env_file` is read at creation, not on restart). Check
   `tailscale serve status` first — another project on the machine may already own
   the port you were about to claim. See the README section for the exact commands.
+- **`next dev` only reads `.env` from `apps/web/`**, but the one `.env` lives at
+  the root — so a bare `next dev` fails every render with "Invalid environment".
+  `apps/web/scripts/with-root-env.mjs` loads the root file first (set variables
+  win); the `dev`/`start` scripts go through it. The smoke gate never sees this
+  because it exports everything itself. Do not "fix" it with a symlink.
+- **The dev server blocks its own scripts on unknown hosts**, so a page opened
+  over Tailscale or a LAN IP renders but never hydrates (forms submit as GET).
+  `allowedDevOrigins` in `next.config.ts` is derived from the hostnames in
+  `APP_URL` + `TRUSTED_ORIGINS` — add the origin there and restart `make dev`.
 - **`STORAGE_LOCAL_DIR` is relative to each process's cwd**, which differs per
   entrypoint. The resolved root is logged at startup. Use an absolute path to pin it.
 - **tailwindcss v4 (web) and v3 (mobile, for NativeWind) coexist** deliberately.

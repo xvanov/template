@@ -1,6 +1,15 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { env, googleEnabled, llmEnabled, resetEnvCache } from "./index";
+import {
+  env,
+  googleEnabled,
+  llmEnabled,
+  resetEnvCache,
+  serverEnvKeys,
+} from "./index";
 
 const snapshot = { ...process.env };
 
@@ -11,15 +20,10 @@ function setBaseline() {
 }
 
 beforeEach(() => {
-  for (const key of Object.keys(process.env)) {
-    if (
-      /^(APP_URL$|DATABASE_URL|REDIS_URL|BETTER_AUTH_|GOOGLE_|LLM_|S3_|STORAGE_)/.test(
-        key,
-      )
-    ) {
-      delete process.env[key];
-    }
-  }
+  // Derived from the schema, so a variable the runner happens to set (CI's
+  // APP_URL, a stray AUTH_RATE_LIMIT_MAX) can never leak into an assertion.
+  for (const key of serverEnvKeys) delete process.env[key];
+  process.env.NODE_ENV = "test";
   resetEnvCache();
 });
 
@@ -47,6 +51,19 @@ describe("env", () => {
     expect(e.APP_URL).toBe("http://localhost:3200");
     expect(e.STORAGE_DRIVER).toBe("local");
     expect(e.NODE_ENV).toBe("test");
+    expect(e.WORKER_CONCURRENCY).toBe(5);
+    expect(e.TRUSTED_ORIGINS).toBeUndefined();
+  });
+
+  it("parses WORKER_CONCURRENCY as an int and bounds it to 1–50", () => {
+    setBaseline();
+    process.env.WORKER_CONCURRENCY = "12";
+    expect(env().WORKER_CONCURRENCY).toBe(12);
+    for (const bad of ["0", "51", "2.5", "lots"]) {
+      resetEnvCache();
+      process.env.WORKER_CONCURRENCY = bad;
+      expect(() => env(), bad).toThrow(/WORKER_CONCURRENCY/);
+    }
   });
 
   it("fails fast when the s3 driver is selected without credentials", () => {
@@ -67,5 +84,13 @@ describe("env", () => {
     setBaseline();
     expect(llmEnabled()).toBe(false);
     expect(() => env()).not.toThrow();
+  });
+
+  it("every schema variable is passed through turbo's strict env mode", () => {
+    const turbo = JSON.parse(
+      readFileSync(resolve(import.meta.dirname, "../../../turbo.json"), "utf8"),
+    ) as { globalEnv: string[] };
+    const missing = serverEnvKeys.filter((k) => !turbo.globalEnv.includes(k));
+    expect(missing).toEqual([]);
   });
 });

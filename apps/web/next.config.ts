@@ -2,6 +2,8 @@ import path from "node:path";
 
 import type { NextConfig } from "next";
 
+import { devOriginHosts } from "./src/lib/dev-origins";
+
 const nextConfig: NextConfig = {
   // Workspace packages ship TypeScript source, not build output — one less
   // build step, and edits are picked up instantly by the dev server.
@@ -23,6 +25,12 @@ const nextConfig: NextConfig = {
 
   // Native / server-only packages must not be bundled.
   serverExternalPackages: ["@prisma/adapter-pg", "pg", "bullmq", "ioredis"],
+
+  // Dev-only: let Tailscale/LAN hosts load the dev server's scripts, or pages
+  // opened there never hydrate. Read from process.env (not env()) because the
+  // config is evaluated before anything validates; the root .env is already
+  // loaded by scripts/with-root-env.mjs. Production ignores this setting.
+  allowedDevOrigins: devOriginHosts(process.env),
 };
 
 export default nextConfig;
