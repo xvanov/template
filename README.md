@@ -165,8 +165,9 @@ there is nothing extra to configure for the phone.
   authenticated download. Local disk by default; S3/R2/MinIO by changing one
   variable.
 - **A real gate.** `make smoke` builds for production, boots the standalone
-  server against real Postgres and Redis, and drives the actual user journey
-  through Chromium. CI runs the same thing plus the Docker builds.
+  server and the worker against real Postgres and Redis, and drives the actual
+  user journey (including a worker job) through Chromium. CI runs the same
+  script plus the Docker builds.
 
 ## Making it yours
 

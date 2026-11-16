@@ -56,7 +56,7 @@ async function signUp(
   await expect(page).toHaveURL(/\/app$/, { timeout: 20_000 });
 }
 
-test("@smoke health endpoint reports every dependency reachable", async ({
+test("health endpoint reports every dependency reachable", async ({
   request,
 }) => {
   const res = await request.get("/api/health");
@@ -70,7 +70,7 @@ test("@smoke health endpoint reports every dependency reachable", async ({
   expect(body.checks.redis?.ok).toBe(true);
 });
 
-test("@smoke sign up, create an item, and see it persist across a reload", async ({
+test("sign up, create an item, and see it persist across a reload", async ({
   page,
   baseURL,
 }) => {
@@ -89,6 +89,20 @@ test("@smoke sign up, create an item, and see it persist across a reload", async
   await page.reload();
   await expect(page.getByText(title)).toBeVisible();
 
+  // The worker round trip: web enqueues on Redis, the SEPARATE worker process
+  // picks it up and records the outcome in job_run, and the API reads it back.
+  // Only "✓" counts — "✗" means the worker ran the job and it failed, "…" that
+  // it never finished. (The gate runs with the LLM off, so this is fast and free.)
+  await page
+    .getByRole("button", { name: /summarise items in the worker/i })
+    .click();
+  await expect(async () => {
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(page.getByText("✓ items.summarize")).toBeVisible({
+      timeout: 1_000,
+    });
+  }).toPass({ timeout: 20_000 });
+
   // Toggle done, then delete. `click` + an explicit `toBeChecked` rather than
   // `check()`: the list refetches after the mutation, so the control briefly
   // re-renders and check()'s own immediate state assertion races that.
@@ -100,10 +114,7 @@ test("@smoke sign up, create an item, and see it persist across a reload", async
   await expect(page.getByText(title)).toHaveCount(0);
 });
 
-test("@smoke signing out revokes access to the app", async ({
-  page,
-  baseURL,
-}) => {
+test("signing out revokes access to the app", async ({ page, baseURL }) => {
   await signUp(page, uniqueEmail("signout"), baseURL!);
 
   await page.getByRole("button", { name: /sign out/i }).click();
@@ -119,7 +130,7 @@ test("an anonymous visitor cannot reach the app", async ({ page }) => {
   await expect(page).toHaveURL(/\/login$/);
 });
 
-test("@smoke an unconfirmed account cannot sign in", async ({ page }) => {
+test("an unconfirmed account cannot sign in", async ({ page }) => {
   const email = uniqueEmail("unconfirmed");
 
   // Sign up, but deliberately never open the emailed link.
