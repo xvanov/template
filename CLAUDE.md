@@ -140,14 +140,16 @@ Exists because a production app emailed the wrong thing to 8 real customers.
 3. **safe mode**, resolved once per process and printed loudly at boot:
    - `strict`: only `OUTBOUND_SAFE_RECIPIENTS` (addresses, `@domain`) get mail;
      everything else is blocked and logged.
-   - `local-catcher`: everyone is allowed, because mail cannot leave the machine.
-   - `off`: real mail to real people.
+   - `local-catcher`: everyone is allowed. Only via an explicit
+     `OUTBOUND_SAFE_MODE=local`, which asserts SMTP is a catcher (Mailpit) that
+     delivers nowhere. `.env.example` sets it, so `make dev` just works. It is
+     never inferred from a loopback `SMTP_HOST` (a local postfix relays to the
+     internet), and production refuses it and runs strict.
+   - `off`: real mail to real people (`OUTBOUND_SAFE_MODE=false`, or unset in
+     production).
 
-   `OUTBOUND_SAFE_MODE=true|false` always wins. Unset: `off` in production;
-   otherwise `local-catcher` when `SMTP_HOST` is loopback (Mailpit) or unset
-   (console), and `strict` whenever SMTP points ANYWHERE else, so a staging box
-   loaded with production data cannot mail a customer. Note the full Docker
-   stack's `SMTP_HOST=mailpit` is not loopback, so it is strict.
+   Unset outside production = `strict`, so a staging box loaded with
+   production data cannot mail a customer.
 
 4. suppression list (`outbound_suppression`: global for bounces/complaints,
    fed by `/api/webhooks/email-events`; per-org for unsubscribes)
@@ -250,7 +252,9 @@ to `strict` with an empty allowlist, so the gate proves sign-up still works.
   store is in-memory only under `NODE_ENV=test`.
 - **better-auth's rate limiter counts in Redis** (`customStorage` in
   packages/auth), shared by every web replica; `AUTH_RATE_LIMIT_*` still set
-  the limits. Like the outbound caps it fails closed if Redis is down.
+  the limits. better-auth consults it on EVERY `/api/auth/*` request (session
+  checks included), so if Redis is down it falls back to a per-process memory
+  limiter with a warning, rather than taking the whole app down.
 - **OAuth tokens are encrypted at rest** (`account.encryptOAuthTokens`), keyed
   by `BETTER_AUTH_SECRET`: rotating that secret makes stored tokens unreadable
   and users must re-link Google.

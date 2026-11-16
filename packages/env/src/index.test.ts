@@ -94,6 +94,12 @@ describe("env", () => {
     expect(env().SECRETS_ENCRYPTION_KEY).toBeUndefined();
   });
 
+  it("reads OUTBOUND_SAFE_MODE=local as the literal, not as false", () => {
+    setBaseline();
+    process.env.OUTBOUND_SAFE_MODE = "local";
+    expect(env().OUTBOUND_SAFE_MODE).toBe("local");
+  });
+
   it("rejects an encryption key that is not 32 bytes", () => {
     setBaseline();
     process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(16).toString("base64");

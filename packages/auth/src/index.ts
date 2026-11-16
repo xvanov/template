@@ -128,7 +128,9 @@ function build() {
       window: e.AUTH_RATE_LIMIT_WINDOW_SECONDS,
       max: e.AUTH_RATE_LIMIT_MAX,
       // Shared across every process via Redis, not per-process memory.
-      customStorage: redisRateLimitStorage(e.AUTH_RATE_LIMIT_WINDOW_SECONDS),
+      customStorage: redisRateLimitStorage({
+        fallbackWindowSeconds: e.AUTH_RATE_LIMIT_WINDOW_SECONDS,
+      }),
       // better-auth applies its own STRICTER defaults to the credential paths,
       // so the global `max` above does not govern them. State them explicitly,
       // or tuning the ceiling silently has no effect where it matters.

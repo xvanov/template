@@ -69,6 +69,11 @@ let announced = false;
 
 export function configFromEnv(): GuardConfig {
   const e = env();
+  if (e.OUTBOUND_SAFE_MODE === "local" && e.NODE_ENV === "production") {
+    console.error(
+      "[outbound] OUTBOUND_SAFE_MODE=local is refused in production; using STRICT.",
+    );
+  }
   const config: GuardConfig = {
     safeMode: resolveSafeMode(e),
     safeRecipients: parseSafeList(e.OUTBOUND_SAFE_RECIPIENTS),
@@ -97,9 +102,9 @@ export function describeSafeMode(
     case "local-catcher":
       return [
         "",
-        "[outbound] SAFE MODE: LOCAL CATCHER — every recipient allowed, because mail",
-        `[outbound]   goes to ${smtpHost ? `loopback SMTP (${smtpHost})` : "the console (SMTP_HOST unset)"} and cannot reach a real inbox.`,
-        "[outbound]   Point SMTP_HOST anywhere else and safe mode becomes STRICT.",
+        "[outbound] SAFE MODE: LOCAL CATCHER (OUTBOUND_SAFE_MODE=local) — EVERY recipient allowed.",
+        `[outbound]   This trusts that SMTP (${smtpHost ?? "unset: console"}) is a catcher like Mailpit that`,
+        "[outbound]   delivers nowhere. If it can relay to the internet, real people get this mail.",
         "",
       ].join("\n");
     case "strict":

@@ -120,12 +120,15 @@ const serverSchema = z.object({
 
   /**
    * Safe mode: only allowlisted recipients get real messages; everyone else is
-   * logged as blocked. true = strict, false = off. Unset = off in production;
-   * outside it, strict unless SMTP is a loopback catcher (Mailpit) or unset,
-   * which allows everyone because nothing can leave the machine. Resolved by
-   * `resolveSafeMode` in packages/outbound.
+   * logged as blocked. true = strict, false = off, local = allow everyone
+   * because SMTP is a local catcher (Mailpit; refused in production). Unset =
+   * off in production, strict everywhere else. Resolved by `resolveSafeMode`
+   * in packages/outbound.
    */
-  OUTBOUND_SAFE_MODE: z.preprocess(blankIsUnset, boolish.optional()),
+  OUTBOUND_SAFE_MODE: z.preprocess(
+    blankIsUnset,
+    z.union([z.literal("local"), boolish]).optional(),
+  ),
   /** Comma-separated: exact addresses/numbers, or `@domain` for a whole domain. */
   OUTBOUND_SAFE_RECIPIENTS: z.string().optional(),
   /** Channel switch. On by default: sign-up needs it. */

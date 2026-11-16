@@ -44,6 +44,8 @@ const BYPASS_FORMS = [
   "me@example.com\nBcc: victim@gmail.com",
   "victim@gmail.com me@example.com",
   "undisclosed:victim@gmail.com;",
+  "victim%gmail.com@example.com",
+  "gmail.com!victim@example.com",
 ];
 
 describe("parseRecipient", () => {
@@ -90,38 +92,27 @@ describe("safe list", () => {
 });
 
 describe("resolveSafeMode", () => {
-  it("an explicit setting always wins", () => {
+  it("true is strict and false is off, anywhere", () => {
     expect(
       resolveSafeMode({ OUTBOUND_SAFE_MODE: true, NODE_ENV: "production" }),
     ).toBe("strict");
     expect(
-      resolveSafeMode({
-        OUTBOUND_SAFE_MODE: false,
-        NODE_ENV: "development",
-        SMTP_HOST: "smtp.x",
-      }),
+      resolveSafeMode({ OUTBOUND_SAFE_MODE: false, NODE_ENV: "development" }),
     ).toBe("off");
   });
 
-  it("unset: off in production; allow-all for a local catcher; strict for any other SMTP host", () => {
+  it("unset: off in production, STRICT everywhere else — loopback SMTP is never trusted", () => {
+    expect(resolveSafeMode({ NODE_ENV: "production" })).toBe("off");
+    expect(resolveSafeMode({ NODE_ENV: "development" })).toBe("strict");
+    expect(resolveSafeMode({ NODE_ENV: "test" })).toBe("strict");
+  });
+
+  it("allow-all only when explicitly asked for, and never in production", () => {
     expect(
-      resolveSafeMode({ NODE_ENV: "production", SMTP_HOST: "smtp.x" }),
-    ).toBe("off");
-    expect(
-      resolveSafeMode({ NODE_ENV: "development", SMTP_HOST: "localhost" }),
+      resolveSafeMode({ OUTBOUND_SAFE_MODE: "local", NODE_ENV: "development" }),
     ).toBe("local-catcher");
     expect(
-      resolveSafeMode({ NODE_ENV: "development", SMTP_HOST: "127.0.0.1" }),
-    ).toBe("local-catcher");
-    expect(resolveSafeMode({ NODE_ENV: "development" })).toBe("local-catcher");
-    expect(
-      resolveSafeMode({
-        NODE_ENV: "development",
-        SMTP_HOST: "smtp.relay.example",
-      }),
-    ).toBe("strict");
-    expect(
-      resolveSafeMode({ NODE_ENV: "development", SMTP_HOST: "mailpit" }),
+      resolveSafeMode({ OUTBOUND_SAFE_MODE: "local", NODE_ENV: "production" }),
     ).toBe("strict");
   });
 });

@@ -23,10 +23,11 @@ export type BlockReason =
 
 /**
  * - `strict`: only allowlisted recipients (auth mail excepted).
- * - `local-catcher`: outside production, with mail going to a catcher on this
- *   machine (loopback SMTP, e.g. Mailpit) or to the console: nothing can reach
- *   a real inbox, so every recipient is allowed. Logged loudly.
- * - `off`: production, or OUTBOUND_SAFE_MODE=false.
+ * - `local-catcher`: every recipient allowed. ONLY when explicitly requested
+ *   (OUTBOUND_SAFE_MODE=local) outside production: the operator is asserting
+ *   SMTP is a catcher like Mailpit. Loopback SMTP alone proves nothing (a local
+ *   postfix relays to the internet), so it is never inferred. Logged loudly.
+ * - `off`: real mail to real people.
  */
 export type SafeMode = "strict" | "local-catcher" | "off";
 
@@ -80,10 +81,12 @@ export interface Block {
  * of those would let `stranger@gmail.com, dev@allowed.test` pass an allowlist
  * check on the raw string and then mail the stranger. Rejecting everything
  * but a plain address means the string the guard checked, capped and logged is
- * the string the transport sends to.
+ * the string the transport sends to. `%` and `!` are refused in the local part
+ * too: old relay routing (`victim%gmail.com@allowed.test`) can forward mail
+ * from an allowlisted domain's server to somewhere else entirely.
  */
 const PLAIN_EMAIL =
-  /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/;
+  /^[a-z0-9.#$&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/;
 
 export function parseRecipient(_channel: Channel, raw: string): string | null {
   const r = raw.trim().toLowerCase();
@@ -120,20 +123,22 @@ export function isLoopbackHost(host: string | undefined): boolean {
 }
 
 /**
- * Safe mode from the environment. An explicit OUTBOUND_SAFE_MODE always wins;
- * unset, it is off in production, `local-catcher` when SMTP is loopback or
- * unset (console), and `strict` whenever SMTP points anywhere else.
+ * Safe mode from the environment:
+ *   OUTBOUND_SAFE_MODE=false → off; true → strict;
+ *   local → local-catcher, except in production, where it is refused and
+ *           treated as strict (a copied dev .env must not open the gates);
+ *   unset → off in production, strict everywhere else.
  */
 export function resolveSafeMode(e: {
-  OUTBOUND_SAFE_MODE?: boolean;
+  OUTBOUND_SAFE_MODE?: boolean | "local";
   NODE_ENV: string;
-  SMTP_HOST?: string;
 }): SafeMode {
   if (e.OUTBOUND_SAFE_MODE === false) return "off";
   if (e.OUTBOUND_SAFE_MODE === true) return "strict";
-  if (e.NODE_ENV === "production") return "off";
-  if (!e.SMTP_HOST || isLoopbackHost(e.SMTP_HOST)) return "local-catcher";
-  return "strict";
+  if (e.OUTBOUND_SAFE_MODE === "local") {
+    return e.NODE_ENV === "production" ? "strict" : "local-catcher";
+  }
+  return e.NODE_ENV === "production" ? "off" : "strict";
 }
 
 /**
