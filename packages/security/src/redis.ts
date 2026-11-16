@@ -22,3 +22,10 @@ export function requestRedis(): IORedis {
     maxRetriesPerRequest: 1,
   }));
 }
+
+/** Close the connection (tests, graceful shutdown). */
+export async function closeRequestRedis(): Promise<void> {
+  const c = client;
+  client = undefined;
+  await c?.quit();
+}

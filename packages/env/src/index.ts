@@ -120,16 +120,16 @@ const serverSchema = z.object({
 
   /**
    * Safe mode: only allowlisted recipients get real messages; everyone else is
-   * logged as blocked. Unset = ON everywhere except NODE_ENV=production, so a
-   * dev box or staging copy of production data cannot mail real people.
+   * logged as blocked. true = strict, false = off. Unset = off in production;
+   * outside it, strict unless SMTP is a loopback catcher (Mailpit) or unset,
+   * which allows everyone because nothing can leave the machine. Resolved by
+   * `resolveSafeMode` in packages/outbound.
    */
   OUTBOUND_SAFE_MODE: z.preprocess(blankIsUnset, boolish.optional()),
   /** Comma-separated: exact addresses/numbers, or `@domain` for a whole domain. */
   OUTBOUND_SAFE_RECIPIENTS: z.string().optional(),
-  /** Per-channel switches. Email is on (sign-up needs it); the rest opt in. */
+  /** Channel switch. On by default: sign-up needs it. */
   OUTBOUND_EMAIL_ENABLED: boolish.default(true),
-  OUTBOUND_SMS_ENABLED: boolish.default(false),
-  OUTBOUND_PUSH_ENABLED: boolish.default(false),
   /** Global kill switch. A runtime switch also exists (`npm run outbound:freeze`). */
   OUTBOUND_FROZEN: boolish.default(false),
   /** Volume caps (fixed windows in Redis). Over the cap = blocked, not queued. */
@@ -149,6 +149,8 @@ const serverSchema = z.object({
   // ── Security helpers (packages/security) ───────────────────────────────
   /** Bearer secret for HTTP cron endpoints. Unset in production = every call refused. */
   CRON_SECRET: z.string().optional(),
+  /** HMAC secret for the email-provider events webhook (bounces, complaints). */
+  EMAIL_WEBHOOK_SECRET: z.string().optional(),
   /**
    * AES-256-GCM key for sealing third-party tokens at rest: base64 of 32 bytes
    * (`openssl rand -base64 32`). Rotate by moving the old key into
@@ -167,11 +169,7 @@ const serverSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().optional(),
 });
 
-type ParsedEnv = z.infer<typeof serverSchema>;
-/** As parsed, except that safe mode is always resolved to a boolean. */
-export type ServerEnv = Omit<ParsedEnv, "OUTBOUND_SAFE_MODE"> & {
-  OUTBOUND_SAFE_MODE: boolean;
-};
+export type ServerEnv = z.infer<typeof serverSchema>;
 
 /**
  * Every variable the schema reads. Tests clear exactly these, and a test checks
@@ -209,12 +207,7 @@ export function env(): ServerEnv {
     }
   }
 
-  // Safe mode's default depends on NODE_ENV, so it is resolved after parsing.
-  cached = {
-    ...parsed.data,
-    OUTBOUND_SAFE_MODE:
-      parsed.data.OUTBOUND_SAFE_MODE ?? parsed.data.NODE_ENV !== "production",
-  };
+  cached = parsed.data;
   return cached;
 }
 

@@ -42,8 +42,10 @@
     "inbox": "echo 'Local mail inbox: http://localhost:8035'"
   },
   "devDependencies": {
+    "eslint": "^9.39.5",
     "prettier": "^3.6.2",
     "turbo": "^2.10.7",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.65.0"
   }
 }

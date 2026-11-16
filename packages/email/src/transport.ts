@@ -6,7 +6,7 @@
  */
 import { createTransport, type Transporter } from "nodemailer";
 import { env } from "@repo/env";
-import type { ProviderReceipt } from "@repo/outbound";
+import { isLoopbackHost, type ProviderReceipt } from "@repo/outbound";
 
 export interface RawMail {
   to: string;
@@ -21,14 +21,12 @@ export function smtpConfigured(): boolean {
   return Boolean(env().SMTP_HOST);
 }
 
-const LOOPBACK = /^(localhost|127\.\d+\.\d+\.\d+|::1|\[::1\])$/i;
-
 function transport(): Transporter {
   const e = env();
   // Under a test runner, mail may only go to a catcher on this machine. Ported
   // from the production apps' "no real providers under test" guard: a unit
   // test that reaches a real relay mails a real person.
-  if (e.NODE_ENV === "test" && !LOOPBACK.test(e.SMTP_HOST ?? "")) {
+  if (e.NODE_ENV === "test" && !isLoopbackHost(e.SMTP_HOST)) {
     throw new Error(
       `Refusing to send mail to SMTP host "${e.SMTP_HOST}" under NODE_ENV=test: only a loopback mail catcher is allowed.`,
     );

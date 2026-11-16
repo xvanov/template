@@ -16,7 +16,9 @@ const adminProcedure = orgProcedure.use(async ({ ctx, next }) => {
     where: { organizationId: ctx.organizationId, userId: ctx.user.id },
     select: { role: true },
   });
-  if (me?.role !== "owner" && me?.role !== "admin") {
+  // better-auth stores multiple roles comma-separated ("owner,admin").
+  const roles = (me?.role ?? "").split(",").map((r) => r.trim());
+  if (!roles.includes("owner") && !roles.includes("admin")) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Only an owner or admin can view activity.",

@@ -22,6 +22,7 @@ import { env } from "@repo/env";
 const VERSION = "v1";
 const ALGO = "aes-256-gcm";
 const IV_BYTES = 12;
+const TAG_BYTES = 16;
 const KEY_BYTES = 32;
 
 export interface SealingKeys {
@@ -94,11 +95,21 @@ export function openSecretDetailed(
     Buffer,
     Buffer,
   ];
+  // Exact lengths, and the tag length pinned on the decipher: without it Node
+  // accepts a TRUNCATED tag (down to 4 bytes), which makes forging a
+  // ciphertext a matter of ~2^32 guesses instead of 2^128.
+  if (iv.length !== IV_BYTES || tag.length !== TAG_BYTES) {
+    throw new Error(
+      "openSecret: malformed sealed value (bad iv or tag length)",
+    );
+  }
   const keys = opts.keys ?? keysFromEnv();
   const candidates = [keys.current, ...keys.old];
   for (const [i, key] of candidates.entries()) {
     try {
-      const decipher = createDecipheriv(ALGO, key, iv);
+      const decipher = createDecipheriv(ALGO, key, iv, {
+        authTagLength: TAG_BYTES,
+      });
       if (opts.aad) decipher.setAAD(Buffer.from(opts.aad, "utf8"));
       decipher.setAuthTag(tag);
       const plaintext = Buffer.concat([

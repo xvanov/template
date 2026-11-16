@@ -18,6 +18,8 @@
     "@repo/db": "*",
     "@repo/env": "*",
     "@repo/jobs": "*",
+    "@repo/outbound": "*",
+    "@repo/security": "*",
     "@repo/storage": "*",
     "@tanstack/react-query": "^5.101.4",
     "@trpc/client": "^11.18.0",

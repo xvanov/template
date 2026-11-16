@@ -6,7 +6,7 @@
  */
 import { db, type PrismaClient } from "@repo/db";
 
-import { normalizeRecipient, type Channel } from "./policy";
+import { parseRecipient, type Channel } from "./policy";
 
 const FREEZE_KEY = "outbound.freeze";
 
@@ -29,7 +29,7 @@ export async function isFrozen(
 
 /**
  * Flip the runtime kill switch. Takes effect on the very next send, in every
- * process. For operators: `npm run outbound:freeze -- on [email|sms|push]`.
+ * process. For operators: `npm run outbound:freeze -- on [email]`.
  */
 export async function setFrozen(
   scope: FreezeScope,
@@ -65,7 +65,9 @@ export async function suppress(
   },
   client: Db = db,
 ): Promise<void> {
-  const recipient = normalizeRecipient(input.channel, input.recipient);
+  const recipient = parseRecipient(input.channel, input.recipient);
+  if (!recipient)
+    throw new Error(`suppress: not a plain address: ${input.recipient}`);
   const organizationId = input.organizationId ?? null;
   // findFirst + create, not upsert: Postgres treats NULLs as distinct in the
   // unique index, so an upsert on a null org could not find its own row.
@@ -94,7 +96,7 @@ export async function findSuppression(
   return client.outboundSuppression.findFirst({
     where: {
       channel,
-      recipient: normalizeRecipient(channel, recipient),
+      recipient: parseRecipient(channel, recipient) ?? recipient,
       OR: [
         { organizationId: null },
         ...(organizationId ? [{ organizationId }] : []),

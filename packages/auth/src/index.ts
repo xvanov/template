@@ -20,9 +20,11 @@ import { expo } from "@better-auth/expo";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { organization } from "better-auth/plugins";
-import { db } from "@repo/db";
+import { db, recordAudit } from "@repo/db";
 import { sendAuthMail, verificationEmail } from "@repo/email";
 import { env, googleEnabled } from "@repo/env";
+
+import { redisRateLimitStorage } from "./rate-limit-storage";
 
 /**
  * Inferred from `build`, not annotated as `ReturnType<typeof betterAuth>`:
@@ -98,6 +100,11 @@ function build() {
       },
     },
 
+    // OAuth access/refresh/id tokens are encrypted at rest (AES-256-GCM, keyed
+    // by BETTER_AUTH_SECRET). Existing plaintext tokens still read. Note: rotating
+    // BETTER_AUTH_SECRET makes stored tokens unreadable; users re-link.
+    account: { encryptOAuthTokens: true },
+
     socialProviders: googleEnabled()
       ? {
           google: {
@@ -120,6 +127,8 @@ function build() {
       enabled: true,
       window: e.AUTH_RATE_LIMIT_WINDOW_SECONDS,
       max: e.AUTH_RATE_LIMIT_MAX,
+      // Shared across every process via Redis, not per-process memory.
+      customStorage: redisRateLimitStorage(e.AUTH_RATE_LIMIT_WINDOW_SECONDS),
       // better-auth applies its own STRICTER defaults to the credential paths,
       // so the global `max` above does not govern them. State them explicitly,
       // or tuning the ceiling silently has no effect where it matters.
@@ -182,6 +191,22 @@ function build() {
       organization({
         allowUserToCreateOrganization: true,
         organizationLimit: 10,
+        organizationHooks: {
+          // The org's own audit rows go with it (cascade), so the deletion is
+          // recorded as a GLOBAL event (organizationId null): never shown to a
+          // tenant, but the trail of who deleted what survives.
+          afterDeleteOrganization: async ({ organization, user }) => {
+            await recordAudit(db, {
+              organizationId: null,
+              actorType: "user",
+              actorId: user.id,
+              action: "org.delete",
+              targetType: "organization",
+              targetId: organization.id,
+              metadata: { name: organization.name, slug: organization.slug },
+            });
+          },
+        },
       }),
       // MUST stay last: the Expo plugin wraps responses so the native client can
       // pull the session cookie out of the deep-link callback.

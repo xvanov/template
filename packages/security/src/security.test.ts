@@ -159,6 +159,15 @@ describe("sealSecret / openSecret", () => {
     ).toThrow(/no configured key/);
   });
 
+  it("refuses a truncated auth tag (Node would otherwise accept 4 bytes)", () => {
+    const sealed = sealSecret("token", { keys });
+    const [v, iv, tag, data] = sealed.split(":");
+    const short = Buffer.from(tag!, "base64").subarray(0, 4).toString("base64");
+    expect(() => openSecret([v, iv, short, data].join(":"), { keys })).toThrow(
+      /bad iv or tag length/,
+    );
+  });
+
   it("opens values sealed under a retired key, and says they need resealing", () => {
     const oldKey = key();
     const sealed = sealSecret("token", { keys: { current: oldKey, old: [] } });

@@ -11,6 +11,7 @@
  */
 export { clientIp } from "./client-ip";
 export { constantTimeEqual } from "./compare";
+export { closeRequestRedis, requestRedis } from "./redis";
 export {
   memoryStore,
   rateLimit,

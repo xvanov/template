@@ -15,12 +15,13 @@ import {
   setFrozen,
   suppress,
   type GuardConfig,
+  type GuardDeps,
 } from "./index";
 
 const config = (over: Partial<GuardConfig> = {}): GuardConfig => ({
-  safeMode: false,
+  safeMode: "off",
   safeRecipients: parseSafeList("@safe.test"),
-  enabled: { email: true, sms: false, push: false },
+  enabled: { email: true },
   frozen: false,
   caps: {
     recipientPerHour: 3,
@@ -73,7 +74,7 @@ describe("deliver", () => {
     const result = await deliver(
       { channel: "email", recipient: addr(), purpose: "test.safe" },
       send,
-      { config: config({ safeMode: true }), store: memoryStore() },
+      { config: config({ safeMode: "strict" }), store: memoryStore() },
     );
     expect(send).not.toHaveBeenCalled();
     expect(result).toMatchObject({ status: "blocked", reason: "SAFE_MODE" });
@@ -85,7 +86,7 @@ describe("deliver", () => {
     const allowed = await deliver(
       { channel: "email", recipient: addr("safe.test"), purpose: "test.safe" },
       ok,
-      { config: config({ safeMode: true }), store: memoryStore() },
+      { config: config({ safeMode: "strict" }), store: memoryStore() },
     );
     expect(allowed.status).toBe("sent");
   });
@@ -101,7 +102,7 @@ describe("deliver", () => {
     await setFrozen("email", true, "test");
     try {
       const r = await deliver(attempt, send, {
-        config: config({ safeMode: true }),
+        config: config({ safeMode: "strict" }),
         store: memoryStore(),
       });
       expect(r).toMatchObject({ status: "blocked", reason: "FROZEN" });
@@ -110,7 +111,7 @@ describe("deliver", () => {
       await setFrozen("email", false, "test");
     }
     const r = await deliver(attempt, send, {
-      config: config({ safeMode: true }),
+      config: config({ safeMode: "strict" }),
       store: memoryStore(),
     });
     expect(r.status).toBe("sent");
@@ -204,5 +205,69 @@ describe("deliver", () => {
       status: "failed",
       detail: "550 mailbox unavailable",
     });
+  });
+
+  it("a recipient LIST is blocked as INVALID_RECIPIENT, even when part of it is allowlisted", async () => {
+    const send = spy();
+    const raw = `${addr("gmail.test")}, me@safe.test`;
+    const r = await deliver(
+      { channel: "email", recipient: raw, purpose: "test.list" },
+      send,
+      {
+        config: config({ safeMode: "strict" }),
+        store: memoryStore(),
+      },
+    );
+    expect(r).toMatchObject({ status: "blocked", reason: "INVALID_RECIPIENT" });
+    expect(send).not.toHaveBeenCalled();
+    expect(await rowOf(r.id)).toMatchObject({
+      recipient: raw,
+      blockReason: "INVALID_RECIPIENT",
+    });
+  });
+
+  it("hands the transport the PARSED address, and caps/logs that one", async () => {
+    const send = spy();
+    const r = await deliver(
+      {
+        channel: "email",
+        recipient: "  Mixed.Case@Safe.TEST ",
+        purpose: "test.parse",
+      },
+      send,
+      { config: config({ safeMode: "strict" }), store: memoryStore() },
+    );
+    expect(send).toHaveBeenCalledWith("mixed.case@safe.test");
+    expect(await rowOf(r.id)).toMatchObject({
+      recipient: "mixed.case@safe.test",
+    });
+  });
+
+  it("once the provider accepted it, a failure to RECORD 'sent' still returns sent (no retry, no duplicate)", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const flaky = {
+      appSetting: db.appSetting,
+      outboundSuppression: db.outboundSuppression,
+      outboundMessage: {
+        create: db.outboundMessage.create.bind(db.outboundMessage),
+        updateMany: async () => {
+          throw new Error("db went away");
+        },
+      },
+    } as unknown as GuardDeps["db"];
+    const send = spy();
+    const r = await deliver(
+      { channel: "email", recipient: addr(), purpose: "test.flaky" },
+      send,
+      {
+        db: flaky,
+        config: config(),
+        store: memoryStore(),
+      },
+    );
+    expect(r.status).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(await rowOf(r.id)).toMatchObject({ status: "pending" });
+    error.mockRestore();
   });
 });

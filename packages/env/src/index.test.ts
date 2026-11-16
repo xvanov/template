@@ -86,22 +86,11 @@ describe("env", () => {
     expect(() => env()).not.toThrow();
   });
 
-  it("turns outbound safe mode ON by default, except in production", () => {
-    setBaseline();
-    expect(env().OUTBOUND_SAFE_MODE).toBe(true);
-    resetEnvCache();
-    process.env.NODE_ENV = "production";
-    expect(env().OUTBOUND_SAFE_MODE).toBe(false);
-    resetEnvCache();
-    process.env.OUTBOUND_SAFE_MODE = "true";
-    expect(env().OUTBOUND_SAFE_MODE).toBe(true);
-  });
-
-  it("reads a blank OUTBOUND_SAFE_MODE= as unset (ON), never as false", () => {
+  it("reads a blank OUTBOUND_SAFE_MODE= as unset (the default), never as false", () => {
     setBaseline();
     process.env.OUTBOUND_SAFE_MODE = "";
     process.env.SECRETS_ENCRYPTION_KEY = "";
-    expect(env().OUTBOUND_SAFE_MODE).toBe(true);
+    expect(env().OUTBOUND_SAFE_MODE).toBeUndefined();
     expect(env().SECRETS_ENCRYPTION_KEY).toBeUndefined();
   });
 

@@ -34,6 +34,20 @@ const files = ["apps", "packages"].flatMap((d) =>
 );
 
 describe("no way around the outbound guard", () => {
+  it("the ESLint boundary rule is wired into the root and web configs", () => {
+    // The rule itself lives in eslint.boundaries.mjs and fails `make lint`;
+    // this only stops someone quietly unhooking it.
+    const root = readFileSync(resolve(ROOT, "eslint.config.mjs"), "utf8");
+    const web = readFileSync(
+      resolve(ROOT, "apps/web/eslint.config.mjs"),
+      "utf8",
+    );
+    expect(root).toContain(
+      '...mailBoundary("packages/email/src/transport.ts")',
+    );
+    expect(web).toContain("...mailBoundary(");
+  });
+
   it("only the email transport imports a mail library", () => {
     const offenders = files
       .filter((f) =>

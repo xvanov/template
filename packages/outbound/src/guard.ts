@@ -10,8 +10,10 @@
  *
  *   1. channel enabled       OUTBOUND_<CHANNEL>_ENABLED
  *   2. kill switch           OUTBOUND_FROZEN, or the runtime switch in app_setting
+ *   0. recipient             exactly one plain address, or INVALID_RECIPIENT
  *   3. safe mode             outside production, only OUTBOUND_SAFE_RECIPIENTS
- *                            receive anything (auth mail excepted, see policy.ts)
+ *                            receive anything (auth mail excepted; a local mail
+ *                            catcher allows all; see resolveSafeMode)
  *   4. suppression list      bounces, complaints, unsubscribes
  *   5. volume caps           per recipient, per org, global; Redis. Fails CLOSED:
  *                            if the counters cannot be read, nothing is sent.
@@ -22,7 +24,8 @@
  * be written, the provider is never called.
  *
  * Channel packages (packages/email today) call `deliver` with their raw
- * transport as the callback and DO NOT export that transport. See the
+ * transport as the callback and DO NOT export that transport. The callback
+ * receives the PARSED recipient and must send to exactly that. See the
  * "Outbound messages" section of CLAUDE.md.
  */
 import { db as defaultDb, type PrismaClient } from "@repo/db";
@@ -31,8 +34,9 @@ import { rateLimit, type CounterStore } from "@repo/security";
 
 import { findSuppression, isFrozen } from "./controls";
 import {
-  normalizeRecipient,
+  parseRecipient,
   parseSafeList,
+  resolveSafeMode,
   staticBlock,
   volumeBuckets,
   type Block,
@@ -61,16 +65,14 @@ export interface GuardDeps {
   config: GuardConfig;
 }
 
+let announced = false;
+
 export function configFromEnv(): GuardConfig {
   const e = env();
-  return {
-    safeMode: e.OUTBOUND_SAFE_MODE,
+  const config: GuardConfig = {
+    safeMode: resolveSafeMode(e),
     safeRecipients: parseSafeList(e.OUTBOUND_SAFE_RECIPIENTS),
-    enabled: {
-      email: e.OUTBOUND_EMAIL_ENABLED,
-      sms: e.OUTBOUND_SMS_ENABLED,
-      push: e.OUTBOUND_PUSH_ENABLED,
-    },
+    enabled: { email: e.OUTBOUND_EMAIL_ENABLED },
     frozen: e.OUTBOUND_FROZEN,
     caps: {
       recipientPerHour: e.OUTBOUND_CAP_RECIPIENT_PER_HOUR,
@@ -79,29 +81,60 @@ export function configFromEnv(): GuardConfig {
       globalPerHour: e.OUTBOUND_CAP_GLOBAL_PER_HOUR,
     },
   };
+  if (!announced) {
+    announced = true;
+    console.warn(describeSafeMode(config, e.SMTP_HOST));
+  }
+  return config;
+}
+
+/** One loud line saying what safe mode will do. Printed once per process. */
+export function describeSafeMode(
+  config: GuardConfig,
+  smtpHost?: string,
+): string {
+  switch (config.safeMode) {
+    case "local-catcher":
+      return [
+        "",
+        "[outbound] SAFE MODE: LOCAL CATCHER — every recipient allowed, because mail",
+        `[outbound]   goes to ${smtpHost ? `loopback SMTP (${smtpHost})` : "the console (SMTP_HOST unset)"} and cannot reach a real inbox.`,
+        "[outbound]   Point SMTP_HOST anywhere else and safe mode becomes STRICT.",
+        "",
+      ].join("\n");
+    case "strict":
+      return `[outbound] SAFE MODE: STRICT — only OUTBOUND_SAFE_RECIPIENTS (${config.safeRecipients.length} entries) and auth mail are sent.`;
+    case "off":
+      return "[outbound] safe mode off — messages go to real recipients.";
+  }
 }
 
 /**
- * Run every gate; if all pass, call `send` (the raw provider call) and record
- * the outcome. Blocked messages RESOLVE with status "blocked" (a block is a
- * decision, not an error). A provider failure is recorded as "failed" and
- * then rethrown, so jobs retry it.
+ * Run every gate; if all pass, call `send` (the raw provider call) with the
+ * parsed recipient and record the outcome. Blocked messages RESOLVE with
+ * status "blocked" (a block is a decision, not an error). A provider failure
+ * is recorded as "failed" and then rethrown, so jobs retry it.
  */
 export async function deliver(
   attempt: OutboundAttempt,
-  send: () => Promise<ProviderReceipt>,
+  send: (recipient: string) => Promise<ProviderReceipt>,
   deps: Partial<GuardDeps> = {},
 ): Promise<DeliveryResult> {
   const db = deps.db ?? defaultDb;
   const config = deps.config ?? configFromEnv();
+  const recipient = parseRecipient(attempt.channel, attempt.recipient);
 
-  const block = await firstBlock(attempt, config, db, deps.store);
+  const block = recipient
+    ? await firstBlock({ ...attempt, recipient }, config, db, deps.store)
+    : staticBlock(attempt, config, false);
   const row = (status: string, extra: Record<string, unknown> = {}) =>
     db.outboundMessage.create({
       data: {
         organizationId: attempt.organizationId ?? null,
         channel: attempt.channel,
-        recipient: normalizeRecipient(attempt.channel, attempt.recipient),
+        // The parsed address; an unparseable one is kept raw (truncated) so the
+        // log shows what was attempted.
+        recipient: recipient ?? attempt.recipient.slice(0, 320),
         subject: attempt.subject?.slice(0, 300),
         purpose: attempt.purpose,
         actorUserId: attempt.actorUserId ?? null,
@@ -111,32 +144,28 @@ export async function deliver(
       select: { id: true },
     });
 
-  if (block) {
+  if (block || !recipient) {
+    const b = block ?? {
+      reason: "INVALID_RECIPIENT" as const,
+      detail: "Invalid recipient.",
+    };
     const { id } = await row("blocked", {
-      blockReason: block.reason,
-      detail: block.detail,
+      blockReason: b.reason,
+      detail: b.detail,
       finishedAt: new Date(),
     });
     console.warn(
-      `[outbound] BLOCKED ${attempt.channel} to ${attempt.recipient} (${attempt.purpose}): ${block.reason} — ${block.detail}`,
+      `[outbound] BLOCKED ${attempt.channel} to ${JSON.stringify(attempt.recipient)} (${attempt.purpose}): ${b.reason} — ${b.detail}`,
     );
-    return { status: "blocked", id, ...block };
+    return { status: "blocked", id, ...b };
   }
 
   // No row, no send: if this insert throws, the provider is never called.
   const { id } = await row("pending");
+
+  let receipt: ProviderReceipt;
   try {
-    const receipt = await send();
-    await db.outboundMessage.updateMany({
-      where: { id },
-      data: {
-        status: "sent",
-        providerMessageId: receipt.providerMessageId,
-        detail: receipt.detail,
-        finishedAt: new Date(),
-      },
-    });
-    return { status: "sent", id, ...receipt };
+    receipt = await send(recipient);
   } catch (err) {
     await db.outboundMessage
       .updateMany({
@@ -155,8 +184,30 @@ export async function deliver(
       );
     throw err;
   }
+
+  // The provider HAS accepted the message. Failing to record that must not
+  // turn into an error: a caller (a job) would retry and send it twice. The
+  // row stays "pending", which is the honest state of what we know.
+  try {
+    await db.outboundMessage.updateMany({
+      where: { id },
+      data: {
+        status: "sent",
+        providerMessageId: receipt.providerMessageId,
+        detail: receipt.detail,
+        finishedAt: new Date(),
+      },
+    });
+  } catch (logErr) {
+    console.error(
+      `[outbound] sent message ${id}, but could not mark it sent:`,
+      logErr,
+    );
+  }
+  return { status: "sent", id, ...receipt };
 }
 
+/** `attempt.recipient` is already parsed. */
 async function firstBlock(
   attempt: OutboundAttempt,
   config: GuardConfig,
@@ -183,7 +234,10 @@ async function firstBlock(
     };
   }
 
-  // Last, so a message blocked above does not use up anyone's quota.
+  // Last, so a message blocked above does not use up anyone's quota. Within
+  // this loop, though, the buckets BEFORE the one that blocks have already
+  // been incremented: a message stopped by the org cap still counts against
+  // the recipient's. Accepted: it only ever errs towards sending less.
   for (const bucket of volumeBuckets(attempt, config)) {
     try {
       const r = await rateLimit({ ...bucket, store });

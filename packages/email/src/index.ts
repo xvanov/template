@@ -62,7 +62,8 @@ export function sendMail(mail: Mail, ctx: MailContext): Promise<SendResult> {
       organizationId: ctx.organizationId,
       actorUserId: ctx.actorUserId,
     },
-    () => transmit(mail),
+    // The guard passes the address it checked; send to that, never mail.to.
+    (to) => transmit({ ...mail, to }),
   );
 }
 
@@ -83,7 +84,8 @@ export function sendAuthMail(
       purpose,
       authMail: true,
     },
-    () => transmit(mail),
+    // The guard passes the address it checked; send to that, never mail.to.
+    (to) => transmit({ ...mail, to }),
   );
 }
 

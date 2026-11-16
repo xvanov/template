@@ -164,4 +164,13 @@ describe("tenant isolation", () => {
       code: "FORBIDDEN",
     });
   });
+
+  it("activity accepts a comma-separated role list that includes admin", async () => {
+    const a = await createTenant("act-multi");
+    await db.member.updateMany({
+      where: { organizationId: a.organizationId, userId: a.userId },
+      data: { role: "member, admin" },
+    });
+    await expect(callerFor(a).activity.audit()).resolves.toEqual([]);
+  });
 });

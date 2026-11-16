@@ -8,7 +8,8 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@repo/env": "*",
@@ -16,6 +17,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "dotenv": "^17.2.4",
+    "eslint": "^9.39.5",
     "typescript": "~6.0.3",
     "vitest": "^4.1.10"
   }
