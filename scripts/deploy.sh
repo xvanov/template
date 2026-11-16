@@ -191,16 +191,23 @@ cmd_deploy() {
     log "already running $tag — nothing to do (--force to redeploy)"
     return 0
   fi
-  if [ "$force" = 0 ] && [ "$tag" = "$(state_get FAILED)" ]; then
-    die "$tag failed its last deploy and was rolled back; push a fix, or --force to retry"
+  # --allow-destructive also counts as "retry": it is the operator's answer to a
+  # guard refusal, which marks the commit FAILED like any other failure.
+  if [ "$force" = 0 ] && [ "$allow_destructive" = 0 ] && [ "$tag" = "$(state_get FAILED)" ]; then
+    die "$tag failed its last deploy (see the log above it); push a fix, or retry with --force (--allow-destructive if the migration guard refused it)"
   fi
 
   log "deploying $tag ($(git log -1 --format=%s)) — live: ${cur:-nothing}"
   if [ -n "$cur" ] && [ "$allow_destructive" = 0 ]; then
-    git cat-file -e "$cur^{commit}" 2>/dev/null ||
+    if ! git cat-file -e "$cur^{commit}" 2>/dev/null; then
+      state_set FAILED "$tag"
       die "live tag $cur is not a commit in this checkout, so its migrations cannot be compared — --allow-destructive to deploy anyway"
+    fi
     local destructive
     if ! destructive="$(destructive_migrations "$cur" "$tag")"; then
+      # Marked FAILED so the auto-deploy timer stops retrying (and alerting)
+      # every 5 minutes; a new commit or --allow-destructive clears it.
+      state_set FAILED "$tag"
       die "new migrations would break rollback to $cur:
 $destructive
 Split it (expand/contract, docs/deploy.md), or --allow-destructive if you accept that a rollback past this deploy needs a restore."
@@ -277,7 +284,7 @@ cmd_status() {
   echo "previous: $(state_get PREVIOUS)"
   local failed
   failed="$(state_get FAILED)"
-  [ -z "$failed" ] || echo "failed:   $failed (not live; skipped until a new commit or --force)"
+  [ -z "$failed" ] || echo "failed:   $failed (not live; skipped until a new commit, --force or --allow-destructive)"
   echo
   compose ps --format 'table {{.Service}}\t{{.Image}}\t{{.Status}}'
   echo

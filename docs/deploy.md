@@ -163,12 +163,25 @@ health check. So every schema change is split across two deploys:
 2. **Contract**, in a _later_ deploy, once you will not roll back past step 1.
    Drop the old column, add NOT NULL, rename.
 
-`deploy.sh` enforces this. Before building, it compares the migrations added
-between the live commit and the new one. It refuses on `DROP COLUMN`,
-`DROP TABLE`, `RENAME`, `ALTER COLUMN … TYPE` or `SET NOT NULL` (comments
-are ignored). The contract step is the deploy you run with
-`--allow-destructive`, knowing that rolling back past it needs a restore.
-`DROP INDEX` and additive changes pass.
+`deploy.sh` enforces this. Before building, it checks the migrations added
+between the live commit and the new one, **deny by default**. It refuses:
+
+- every `DROP`, except `DROP INDEX`, `DROP DEFAULT`, `DROP NOT NULL` and
+  `DROP CONSTRAINT`;
+- every `RENAME`, except `ALTER INDEX … RENAME`;
+- any type change in `ALTER TABLE`;
+- `SET NOT NULL`;
+- `ADD COLUMN … NOT NULL` without a `DEFAULT`. That is what Prisma writes for
+  a new required field, and the old code's inserts would fail.
+- `TRUNCATE`.
+
+Comments are ignored. One blind spot: `--` inside a string literal hides the
+rest of that line. The refused commit is marked FAILED, so the auto-deploy
+timer stops retrying it.
+
+The contract step is the deploy you run with `--allow-destructive`, knowing
+that rolling back past it needs a restore. For a new required field, expand
+means adding it with a `DEFAULT` (or nullable) first.
 
 **When a migration fails,** nothing is replaced and the live version keeps
 serving. Each migration runs in a transaction, so the database is unchanged.
