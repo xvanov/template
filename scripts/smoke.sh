@@ -26,7 +26,7 @@ SMOKE_TMP=""
 dump_logs() {
   local f
   for f in "${WEB_LOG:-}" "${WORKER_LOG:-}"; do
-    [ -n "$f" ] && [ -s "$f" ] || continue
+    { [ -n "$f" ] && [ -s "$f" ]; } || continue
     echo "── last 60 lines of $(basename "$f") ──" >&2
     tail -60 "$f" >&2
   done
@@ -189,8 +189,8 @@ PORT="$PORT" HOSTNAME=127.0.0.1 \
 APP_URL="$BASE_URL" BETTER_AUTH_URL="$BASE_URL" \
 AUTH_RATE_LIMIT_MAX="${AUTH_RATE_LIMIT_MAX:-5000}" \
 REQUIRE_EMAIL_VERIFICATION=true \
-DEV_MAIL_INBOX_URL= \
-OUTBOUND_SAFE_MODE=true OUTBOUND_SAFE_RECIPIENTS= OUTBOUND_FROZEN=false \
+DEV_MAIL_INBOX_URL="" \
+OUTBOUND_SAFE_MODE=true OUTBOUND_SAFE_RECIPIENTS="" OUTBOUND_FROZEN=false \
 CRON_SECRET="$SMOKE_CRON_SECRET" EMAIL_WEBHOOK_SECRET="$SMOKE_WEBHOOK_SECRET" \
   node "${STANDALONE}/server.js" > "$WEB_LOG" 2>&1 &
 SERVER_PID=$!

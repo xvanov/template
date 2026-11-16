@@ -133,6 +133,14 @@ REACT_NATIVE_PACKAGER_HOSTNAME=<tailscale-ip> npm run dev:mobile
 `tailscale serve` is tailnet-only. `tailscale funnel` would expose it to the
 public internet — do not reach for that to test a phone.
 
+## Production
+
+`docs/deploy.md` is the runbook for one Linux host running Docker. It covers:
+
+- `scripts/deploy.sh`: health-gated deploys with automatic rollback
+- nightly backups, and a `restore.sh` that has been tested
+- a Cloudflare Tunnel or Tailscale in front, with no inbound ports
+
 ## Google sign-in
 
 Optional — email/password works with no external setup. To enable it, create an

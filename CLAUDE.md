@@ -86,6 +86,14 @@ test in `apps/web/e2e` is in the gate automatically. **Nothing is "done" until i
 this same script (`.github/workflows/ci.yml`) — change the script, never
 re-inline its steps in the workflow.
 
+## Production
+
+One Docker host, documented in `docs/deploy.md`: `docker-compose.prod.yml`
+plus `scripts/deploy.sh` (`deploy`/`rollback`/`status`), `scripts/backup.sh`,
+`scripts/restore.sh`, and the systemd templates in `ops/systemd/`.
+`make test-ops` round-trips a backup in about 10s. `make lint` shellchecks
+every script.
+
 ## Architecture rules (a reviewer should reject violations)
 
 1. **The API is tRPC in `packages/api`.** Add a procedure there, not a Next route
@@ -264,6 +272,28 @@ to `strict` with an empty allowlist, so the gate proves sign-up still works.
   `verifyHmac` from `@repo/security` refuse every request in production when
   their secret is unset (outside production an unset secret is allowed).
   Third-party tokens at rest go through `sealSecret`/`openSecret`.
+- **Rollback swaps code, not schema.** `deploy.sh` migrates forward before
+  the swap, so a rolled-back image runs on the NEW schema. Migrations must
+  keep the previous code working: add a column, backfill it, and drop the old
+  one in a later deploy. Every deploy takes a `pre-deploy` dump right before
+  migrating, for when that rule was broken.
+- **Prod reads `PROD_WEB_PORT`, not `WEB_PORT`.** `.env.production` starts as a
+  copy of `.env.example`, whose `WEB_PORT` is the dev server's port. The prod
+  compose project is `DEPLOY_PROJECT` (default `<dir>-prod`); pin it in
+  `.env.production`, or renaming the directory points at new, empty volumes.
+- **`backups/` and `.deploy/` must stay in `.dockerignore`.** Without that,
+  every image build ships the database dumps into the build context.
+- **A deploy started from inside a systemd service must run in its own unit**
+  (`scripts/deploy.sh --detach`, or `systemctl --user start <app>-deploy`).
+  `setsid nohup` leaves it in the caller's cgroup; stopping the caller kills
+  the deploy halfway.
+- **Compose `healthcheck.start_interval` requires `start_period`**, and
+  `docker compose config` does NOT catch it; only `up` fails. Validate a
+  compose change by starting it.
+- **`cmd | grep -q` under `set -o pipefail` can fail after a match.** grep
+  exits at the first hit, the writer dies of SIGPIPE, and the pipeline reports
+  failure. Use `grep -q pat <<<"$(cmd)"`; `deploy.sh` does this for the
+  worker's `[worker] up` line.
 - Mobile has one `@ts-expect-error` on the better-auth Expo plugin: an upstream
   generic-variance gap in 1.6.25. Suppressed rather than cast so session types
   still infer. Remove it when upstream types line up.

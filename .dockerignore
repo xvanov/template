@@ -11,6 +11,9 @@ packages/db/generated
 apps/mobile/android
 apps/mobile/ios
 storage
+# deploy state + database dumps: never in a build context (or an image)
+.deploy
+backups
 .git
 .env
 .env.*

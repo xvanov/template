@@ -1,0 +1,14 @@
+# Nightly database (+ uploads) backup. A systemd --user unit; install with the
+# one-liner in docs/deploy.md, which replaces @APP_DIR@ and renames the files
+# to <app>-backup.* so several apps can share a host.
+[Unit]
+Description=@APP_NAME@ backup (scripts/backup.sh)
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@APP_DIR@
+ExecStart=@APP_DIR@/scripts/backup.sh
+# Low priority: a dump must not starve the app it is backing up.
+Nice=10
+IOSchedulingClass=idle

@@ -1,0 +1,13 @@
+# OPTIONAL: deploy whatever lands on origin/main, checked every 5 minutes.
+# deploy.sh is a no-op when nothing changed, and refuses to retry a commit that
+# already failed, so this does not rebuild in a loop. Enable only if every
+# merge to main is meant to go live.
+[Unit]
+Description=@APP_NAME@ auto-deploy from origin/main
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+
+[Install]
+WantedBy=timers.target

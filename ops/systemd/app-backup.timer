@@ -1,0 +1,11 @@
+[Unit]
+Description=@APP_NAME@ nightly backup
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+# Run on the next boot if the machine was off at 03:17.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
