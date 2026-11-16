@@ -37,12 +37,15 @@
     "db:studio": "npm run studio -w @repo/db",
     "db:reset": "npm run reset -w @repo/db",
     "auth:schema": "npm run schema -w @repo/auth",
+    "outbound:freeze": "npm run freeze -w @repo/outbound --",
     "postinstall": "npm run db:generate",
     "inbox": "echo 'Local mail inbox: http://localhost:8035'"
   },
   "devDependencies": {
+    "eslint": "^9.39.5",
     "prettier": "^3.6.2",
     "turbo": "^2.10.7",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.65.0"
   }
 }

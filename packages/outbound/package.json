@@ -1,0 +1,27 @@
+{
+  "name": "@repo/outbound",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "freeze": "tsx scripts/freeze.ts",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@repo/db": "*",
+    "@repo/env": "*",
+    "@repo/security": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "eslint": "^9.39.5",
+    "tsx": "^4.20.0",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.10"
+  }
+}

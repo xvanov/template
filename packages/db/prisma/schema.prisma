@@ -109,6 +109,9 @@ model Organization {
   items       Item[]
   mediaAssets MediaAsset[]
   jobRuns     JobRun[]
+  auditEvents AuditEvent[]
+  outbound    OutboundMessage[]
+  suppressed  OutboundSuppression[]
 
   @@map("organization")
 }
@@ -228,4 +231,96 @@ model JobRun {
   @@index([name, createdAt])
   @@index([status])
   @@map("job_run")
+}
+
+/// Who did what to which thing, in which tenant. Append-only: nothing in the
+/// app updates or deletes a row (an org's rows go when the org does).
+///
+/// Write through `ctx.audit(...)` in packages/api (it fills actor, org, ip and
+/// user agent), or `recordAudit` from @repo/db outside a request.
+model AuditEvent {
+  id             String        @id @default(cuid())
+  /// Null only for genuinely global actions; those are never shown to a tenant.
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// "user" | "system" | "job"
+  actorType      String        @default("user")
+  /// User id, job name, ... depending on actorType.
+  actorId        String?
+  /// Dotted verb: `item.create`, `item.delete`, `member.invite`.
+  action         String
+  targetType     String
+  targetId       String?
+  /// Anything worth keeping: the changed fields, the before/after, the reason.
+  metadata       Json?
+  ip             String?
+  userAgent      String?
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([targetType, targetId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_event")
+}
+
+/// Every outbound message ATTEMPT (email today; SMS/push later), sent or not.
+/// Written by packages/outbound before the provider is called, so a message
+/// cannot leave without a row; blocked attempts carry the gate that stopped them.
+///
+/// Null organizationId = system mail (sign-up verification, which happens
+/// before the account has an org); never shown to a tenant.
+model OutboundMessage {
+  id                String        @id @default(cuid())
+  organizationId    String?
+  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// "email" | "sms" | "push"
+  channel           String
+  recipient         String
+  subject           String?
+  /// What sent it: `auth.verify-email`, `items.digest`. Grep-able.
+  purpose           String
+  /// "pending" (provider being called) | "sent" | "failed" | "blocked"
+  status            String
+  /// Which gate stopped it (SAFE_MODE, FROZEN, VOLUME, ...) when blocked.
+  blockReason       String?
+  /// Human-readable why, or the provider error when failed.
+  detail            String?
+  providerMessageId String?
+  actorUserId       String?
+  createdAt         DateTime      @default(now())
+  finishedAt        DateTime?
+
+  @@index([organizationId, createdAt])
+  @@index([recipient, createdAt])
+  @@index([status, createdAt])
+  @@map("outbound_message")
+}
+
+/// Recipients who must not be messaged: bounces, complaints, unsubscribes.
+/// Null organizationId = suppressed everywhere (a hard bounce); otherwise only
+/// for that tenant's messages (an unsubscribe from one workspace).
+model OutboundSuppression {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel        String
+  /// Normalised the same way the guard normalises (lowercased email, E.164).
+  recipient      String
+  reason         String
+  createdAt      DateTime      @default(now())
+
+  @@unique([channel, recipient, organizationId])
+  @@index([channel, recipient])
+  @@map("outbound_suppression")
+}
+
+/// Small runtime switches that must survive a Redis restart and be shared by
+/// every process: the outbound kill switch (`outbound.freeze`) lives here.
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+
+  @@map("app_setting")
 }

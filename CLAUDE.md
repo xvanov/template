@@ -19,7 +19,9 @@ packages/auth  better-auth: email+password, Google OAuth, organizations
 packages/ai    LLM calls against any OpenAI-compatible endpoint, priced per call
 packages/jobs  job registry + queue + schedules
 packages/storage  file storage: local disk or any S3-compatible bucket
-packages/email  outbound SMTP (nodemailer). Mailpit locally = real mail, no vendor
+packages/email  outbound SMTP (nodemailer), ONLY via the outbound guard. Mailpit locally
+packages/outbound  the outbound guard: every outbound message passes it and is logged
+packages/security  rate limiting, cron/webhook auth, AES-GCM sealing of stored secrets
 packages/env   the validated environment — import `env()`, never `process.env`
 ```
 
@@ -88,7 +90,10 @@ re-inline its steps in the workflow.
 
 1. **The API is tRPC in `packages/api`.** Add a procedure there, not a Next route
    handler. Route handlers exist only for things tRPC cannot carry: auth
-   (`/api/auth/[...all]`), file bytes (`/api/media/*`), health (`/api/health`).
+   (`/api/auth/[...all]`), file bytes (`/api/media/*`), health (`/api/health`),
+   and machine callers authenticated by a secret instead of a session: cron
+   triggers (`/api/cron/[schedule]`, `requireCronAuth`) and inbound webhooks
+   (`/api/webhooks/*`, `verifyHmac` over the raw body). Copy those two.
 2. **Tenant isolation lives in `orgProcedure`, not in resolvers.** Any query on
    an org-scoped table goes through `orgProcedure` and filters on
    `ctx.organizationId`. Mutations use `updateMany`/`deleteMany` with the org in
@@ -109,6 +114,64 @@ re-inline its steps in the workflow.
    `packages/auth`, run `npm run auth:schema` and diff before migrating.
 7. **Shared packages export TypeScript source**, no build step. Next transpiles
    them (`transpilePackages`); Metro sees them via `watchFolders`.
+8. **Every outbound message goes through the guard** (`deliver` in
+   `packages/outbound`). Send email with `sendMail` from `@repo/email`; never
+   import nodemailer or a provider SDK anywhere else (an ESLint rule in
+   `eslint.boundaries.mjs` fails `make lint`; a test backs it up). A new
+   channel (SMS, push) gets its own package that calls `deliver` and does not
+   export its raw transport, plus a `Channel` value and enable flag added in
+   the same change (not before).
+9. **Mutations write an audit event in the same transaction**:
+   `ctx.db.$transaction(async (tx) => { ...; await ctx.audit("item.delete", { targetId }, tx) })`.
+   `packages/api/src/routers/items.ts` is the reference.
+
+## Outbound messages and safe mode
+
+Exists because a production app emailed the wrong thing to 8 real customers.
+`deliver()` runs these gates in order; the first that fails blocks the message:
+
+0. recipient: exactly ONE plain address. Lists (`a@x, b@y`), display names
+   (`Name <a@x>`) and anything else a mail library would expand are blocked as
+   `INVALID_RECIPIENT`; the parsed address is what gets checked, capped,
+   logged, and handed to the transport.
+1. channel switch `OUTBOUND_EMAIL_ENABLED` (on)
+2. kill switch: `OUTBOUND_FROZEN=true`, or at runtime with no restart:
+   `npm run outbound:freeze -- on` / `off` / `status` (stored in `app_setting`)
+3. **safe mode**, resolved once per process and printed loudly at boot:
+   - `strict`: only `OUTBOUND_SAFE_RECIPIENTS` (addresses, `@domain`) get mail;
+     everything else is blocked and logged.
+   - `local-catcher`: everyone is allowed. Only via an explicit
+     `OUTBOUND_SAFE_MODE=local`, which asserts SMTP is a catcher (Mailpit) that
+     delivers nowhere. `.env.example` sets it, so `make dev` just works. It is
+     never inferred from a loopback `SMTP_HOST` (a local postfix relays to the
+     internet), and production refuses it and runs strict.
+   - `off`: real mail to real people (`OUTBOUND_SAFE_MODE=false`, or unset in
+     production).
+
+   Unset outside production = `strict`, so a staging box loaded with
+   production data cannot mail a customer.
+
+4. suppression list (`outbound_suppression`: global for bounces/complaints,
+   fed by `/api/webhooks/email-events`; per-org for unsubscribes)
+5. volume caps in Redis: per recipient/hour, per org/hour and /day, and a
+   global/hour, with SEPARATE global pools for auth mail and app mail so a
+   flood of anonymous sign-ups cannot starve tenants' mail. Redis unreachable =
+   **blocked** (fails closed).
+
+Every attempt writes one `outbound_message` row, BEFORE the provider is
+called, so nothing leaves without a record. Blocked sends resolve with
+`status: "blocked"` (they do not throw); provider errors throw after being
+recorded as `failed`. If the provider accepted a message but recording "sent"
+fails, it still returns sent (the row stays `pending`) so a retry cannot send
+it twice. Tenants read their own rows via `activity.outbound`.
+
+**Auth mail vs safe mode.** better-auth's verification mail is sent with
+`sendAuthMail`, which is exempt from the strict allowlist and nothing else.
+The recipient just typed that address into the sign-up form, so it cannot be
+"the wrong person", and without the exemption nobody could sign up on a
+strict box. The kill switch, suppression and caps still apply. Use
+`sendAuthMail` for better-auth callbacks only. `make smoke` forces safe mode
+to `strict` with an empty allowlist, so the gate proves sign-up still works.
 
 ## Things that will bite you (all learned here, the hard way)
 
@@ -177,6 +240,30 @@ re-inline its steps in the workflow.
 - **tailwindcss v4 (web) and v3 (mobile, for NativeWind) coexist** deliberately.
   If PostCSS throws `Cannot read properties of undefined (reading 'All')`, the
   wrong major got hoisted — run a full `npm install`.
+- **"I sent an email and nothing arrived"**: look in `outbound_message` first.
+  The row says whether it was sent, or which gate blocked it and why. The guard
+  also prints `[outbound] BLOCKED ...` to the log.
+- **Two Redis connections on purpose.** BullMQ's (packages/jobs) has no command
+  timeout because workers block; the request-path one (packages/security) has a
+  2s timeout so rate limits and caps fail fast. Do not merge them.
+- **Rate limits fail open, outbound caps fail closed.** A limit that protects
+  our capacity (`rateLimited` tRPC middleware) lets traffic through when Redis
+  is down; one that protects other people (outbound caps) blocks. The counter
+  store is in-memory only under `NODE_ENV=test`.
+- **better-auth's rate limiter counts in Redis** (`customStorage` in
+  packages/auth), shared by every web replica; `AUTH_RATE_LIMIT_*` still set
+  the limits. better-auth consults it on EVERY `/api/auth/*` request (session
+  checks included), so if Redis is down it falls back to a per-process memory
+  limiter with a warning, rather than taking the whole app down.
+- **OAuth tokens are encrypted at rest** (`account.encryptOAuthTokens`), keyed
+  by `BETTER_AUTH_SECRET`: rotating that secret makes stored tokens unreadable
+  and users must re-link Google.
+- **Deleting an organization deletes its audit rows** (cascade). The deletion
+  itself is recorded as a global `org.delete` audit event (organizationId null).
+- **Machine-to-machine endpoints fail closed.** `requireCronAuth` /
+  `verifyHmac` from `@repo/security` refuse every request in production when
+  their secret is unset (outside production an unset secret is allowed).
+  Third-party tokens at rest go through `sealSecret`/`openSecret`.
 - Mobile has one `@ts-expect-error` on the better-auth Expo plugin: an upstream
   generic-variance gap in 1.6.25. Suppressed rather than cast so session types
   still infer. Remove it when upstream types line up.

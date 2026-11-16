@@ -92,4 +92,85 @@ describe("tenant isolation", () => {
     });
     expect(run).toMatchObject({ status: "skipped", organizationId: null });
   });
+
+  it("audit events: written by mutations, readable only by their own tenant", async () => {
+    const a = await createTenant("audit-a");
+    const b = await createTenant("audit-b");
+
+    const item = await callerFor(a).items.create({ title: "audited" });
+    await callerFor(a).items.setDone({ id: item.id, done: true });
+    await callerFor(a).items.remove({ id: item.id });
+
+    const trail = await callerFor(a).activity.audit();
+    expect(
+      trail.map((e) => [e.action, e.targetType, e.targetId, e.actorId]),
+    ).toEqual([
+      ["item.delete", "item", item.id, a.userId],
+      ["item.update", "item", item.id, a.userId],
+      ["item.create", "item", item.id, a.userId],
+    ]);
+    expect(await callerFor(b).activity.audit()).toEqual([]);
+    expect(
+      await callerFor(b).activity.audit({ limit: 50, targetId: item.id }),
+    ).toEqual([]);
+  });
+
+  it("audit events: a mutation that fails writes no audit row (same transaction)", async () => {
+    const a = await createTenant("audit-tx-a");
+    const b = await createTenant("audit-tx-b");
+    const item = await callerFor(a).items.create({ title: "A's" });
+
+    await expect(
+      callerFor(b).items.remove({ id: item.id }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(
+      await db.auditEvent.count({
+        where: { organizationId: b.organizationId },
+      }),
+    ).toBe(0);
+  });
+
+  it("outbound log: a tenant sees its own messages, never another's or system mail", async () => {
+    const a = await createTenant("ob-a");
+    const b = await createTenant("ob-b");
+    const base = { channel: "email", purpose: "test", status: "sent" };
+    await db.outboundMessage.createMany({
+      data: [
+        { ...base, organizationId: a.organizationId, recipient: "x@a.test" },
+        {
+          ...base,
+          organizationId: null,
+          recipient: "signup@a.test",
+          purpose: "auth.verify-email",
+        },
+      ],
+    });
+
+    expect(
+      (await callerFor(a).activity.outbound()).map((m) => m.recipient),
+    ).toEqual(["x@a.test"]);
+    expect(await callerFor(b).activity.outbound()).toEqual([]);
+  });
+
+  it("activity is for owners and admins only", async () => {
+    const a = await createTenant("act-role");
+    await db.member.updateMany({
+      where: { organizationId: a.organizationId, userId: a.userId },
+      data: { role: "member" },
+    });
+    await expect(callerFor(a).activity.audit()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+
+  it("activity accepts a comma-separated role list that includes admin", async () => {
+    const a = await createTenant("act-multi");
+    await db.member.updateMany({
+      where: { organizationId: a.organizationId, userId: a.userId },
+      data: { role: "member, admin" },
+    });
+    await expect(callerFor(a).activity.audit()).resolves.toEqual([]);
+  });
 });

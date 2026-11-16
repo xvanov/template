@@ -9,17 +9,22 @@
   },
   "scripts": {
     "schema": "npx @better-auth/cli@latest generate --config src/index.ts --y",
-    "typecheck": "tsc --noEmit"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@better-auth/expo": "^1.6.25",
     "@repo/db": "*",
     "@repo/email": "*",
     "@repo/env": "*",
+    "@repo/security": "*",
     "better-auth": "^1.6.25"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "typescript": "~6.0.3"
+    "eslint": "^9.39.5",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.10"
   }
 }

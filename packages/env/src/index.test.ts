@@ -86,6 +86,26 @@ describe("env", () => {
     expect(() => env()).not.toThrow();
   });
 
+  it("reads a blank OUTBOUND_SAFE_MODE= as unset (the default), never as false", () => {
+    setBaseline();
+    process.env.OUTBOUND_SAFE_MODE = "";
+    process.env.SECRETS_ENCRYPTION_KEY = "";
+    expect(env().OUTBOUND_SAFE_MODE).toBeUndefined();
+    expect(env().SECRETS_ENCRYPTION_KEY).toBeUndefined();
+  });
+
+  it("reads OUTBOUND_SAFE_MODE=local as the literal, not as false", () => {
+    setBaseline();
+    process.env.OUTBOUND_SAFE_MODE = "local";
+    expect(env().OUTBOUND_SAFE_MODE).toBe("local");
+  });
+
+  it("rejects an encryption key that is not 32 bytes", () => {
+    setBaseline();
+    process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(16).toString("base64");
+    expect(() => env()).toThrow(/SECRETS_ENCRYPTION_KEY/);
+  });
+
   it("every schema variable is passed through turbo's strict env mode", () => {
     const turbo = JSON.parse(
       readFileSync(resolve(import.meta.dirname, "../../../turbo.json"), "utf8"),

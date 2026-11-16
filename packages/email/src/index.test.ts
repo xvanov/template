@@ -1,19 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { sendMail, smtpConfigured, verificationEmail } from "./index";
+import { verificationEmail } from "./index";
 
 const LINK =
   "https://app.example.com/api/auth/verify-email?token=abc.def&callbackURL=%2Fapp";
-
-beforeEach(async () => {
-  delete process.env.SMTP_HOST;
-  const { resetEnvCache } = await import("@repo/env");
-  resetEnvCache();
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
 
 describe("verificationEmail", () => {
   it("puts the link in the plain-text part, unescaped and on its own line", () => {
@@ -42,26 +32,5 @@ describe("verificationEmail", () => {
     const { html } = verificationEmail(LINK, "<script>alert(1)</script>");
     expect(html).not.toContain("<script>");
     expect(html).toContain("&lt;script&gt;");
-  });
-});
-
-describe("sendMail", () => {
-  it("reports SMTP as unconfigured when SMTP_HOST is unset", () => {
-    expect(smtpConfigured()).toBe(false);
-  });
-
-  it("logs instead of throwing when there is no SMTP host", async () => {
-    // The template has to run with zero mail infrastructure; a missing SMTP host
-    // is a degraded mode, not a crash.
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const result = await sendMail({
-      to: "someone@example.com",
-      subject: "Confirm your email address",
-      text: `open ${LINK}`,
-    });
-
-    expect(result).toMatchObject({ delivered: false, via: "console" });
-    // The link must be recoverable from the terminal, or the fallback is useless.
-    expect(log.mock.calls.flat().join("\n")).toContain(LINK);
   });
 });

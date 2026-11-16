@@ -8,15 +8,19 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@repo/env": "*",
+    "@repo/outbound": "*",
     "nodemailer": "^9.0.3"
   },
   "devDependencies": {
+    "@repo/db": "*",
     "@types/node": "^22.10.0",
     "@types/nodemailer": "^8.0.1",
+    "eslint": "^9.39.5",
     "typescript": "~6.0.3",
     "vitest": "^4.1.10"
   }

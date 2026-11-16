@@ -16,9 +16,15 @@
  * With SMTP_HOST unset, messages are logged to the console instead of sent, so
  * a fresh clone still runs and you can copy the verification link out of the
  * terminal.
+ *
+ * Every message goes through @repo/outbound's guard. The raw transport lives in
+ * ./transport.ts and is not exported; do not add another way to reach SMTP.
  */
-import { createTransport, type Transporter } from "nodemailer";
-import { env } from "@repo/env";
+import { deliver, type DeliveryResult } from "@repo/outbound";
+
+import { smtpConfigured, transmit } from "./transport";
+
+export { smtpConfigured };
 
 export interface Mail {
   to: string;
@@ -27,61 +33,60 @@ export interface Mail {
   html?: string;
 }
 
-export interface SendResult {
-  delivered: boolean;
-  /** "smtp" when handed to a server, "console" when only logged. */
-  via: "smtp" | "console";
-  messageId?: string;
+export interface MailContext {
+  /** What is sending it, dotted: `items.digest`. Recorded on every attempt. */
+  purpose: string;
+  /** The tenant it is sent for. Required in practice for app mail: it drives
+   *  the per-org volume caps, suppressions and who can read the log row. */
+  organizationId?: string | null;
+  actorUserId?: string | null;
 }
 
-let transporter: Transporter | undefined;
+export type SendResult = DeliveryResult;
 
-export function smtpConfigured(): boolean {
-  return Boolean(env().SMTP_HOST);
+/**
+ * Send an email. The ONLY way to: it passes the outbound guard (safe mode,
+ * kill switch, suppression, volume caps) and is logged to outbound_message
+ * whether it is sent or blocked.
+ *
+ * A BLOCKED message resolves with `status: "blocked"`; it does not throw.
+ * Check the status where it matters. An SMTP failure throws.
+ */
+export function sendMail(mail: Mail, ctx: MailContext): Promise<SendResult> {
+  return deliver(
+    {
+      channel: "email",
+      recipient: mail.to,
+      subject: mail.subject,
+      purpose: ctx.purpose,
+      organizationId: ctx.organizationId,
+      actorUserId: ctx.actorUserId,
+    },
+    // The guard passes the address it checked; send to that, never mail.to.
+    (to) => transmit({ ...mail, to }),
+  );
 }
 
-function transport(): Transporter {
-  const e = env();
-  transporter ??= createTransport({
-    host: e.SMTP_HOST,
-    port: e.SMTP_PORT,
-    // Mailpit and most local relays speak plaintext on a high port; a real relay
-    // on 465 needs `secure`. STARTTLS on 587 is negotiated automatically.
-    secure: e.SMTP_SECURE,
-    auth: e.SMTP_USER ? { user: e.SMTP_USER, pass: e.SMTP_PASS } : undefined,
-  });
-  return transporter;
-}
-
-export async function sendMail(mail: Mail): Promise<SendResult> {
-  const e = env();
-
-  if (!smtpConfigured()) {
-    // Not an error: the template must run with no mail infrastructure at all.
-    console.log(
-      [
-        "",
-        "─".repeat(72),
-        "  EMAIL NOT SENT — SMTP_HOST is unset, so here is the message.",
-        `  to:      ${mail.to}`,
-        `  subject: ${mail.subject}`,
-        "",
-        mail.text,
-        "─".repeat(72),
-        "",
-      ].join("\n"),
-    );
-    return { delivered: false, via: "console" };
-  }
-
-  const info = await transport().sendMail({
-    from: e.SMTP_FROM,
-    to: mail.to,
-    subject: mail.subject,
-    text: mail.text,
-    html: mail.html,
-  });
-  return { delivered: true, via: "smtp", messageId: info.messageId };
+/**
+ * For better-auth's callbacks ONLY: mail the recipient just requested by
+ * submitting this address (verification, password reset). Exempt from the
+ * safe-mode allowlist, nothing else; see `authMail` in @repo/outbound.
+ */
+export function sendAuthMail(
+  mail: Mail,
+  purpose: `auth.${string}`,
+): Promise<SendResult> {
+  return deliver(
+    {
+      channel: "email",
+      recipient: mail.to,
+      subject: mail.subject,
+      purpose,
+      authMail: true,
+    },
+    // The guard passes the address it checked; send to that, never mail.to.
+    (to) => transmit({ ...mail, to }),
+  );
 }
 
 /**

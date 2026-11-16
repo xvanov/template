@@ -20,9 +20,11 @@ import { expo } from "@better-auth/expo";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { organization } from "better-auth/plugins";
-import { db } from "@repo/db";
-import { sendMail, verificationEmail } from "@repo/email";
+import { db, recordAudit } from "@repo/db";
+import { sendAuthMail, verificationEmail } from "@repo/email";
 import { env, googleEnabled } from "@repo/env";
+
+import { redisRateLimitStorage } from "./rate-limit-storage";
 
 /**
  * Inferred from `build`, not annotated as `ReturnType<typeof betterAuth>`:
@@ -78,7 +80,15 @@ function build() {
       expiresIn: 60 * 60,
       sendVerificationEmail: async ({ user, url }) => {
         try {
-          await sendMail({ to: user.email, ...verificationEmail(url) });
+          // Through the outbound guard like every message, as AUTH mail: the
+          // address was just typed in by whoever is signing up, so it is exempt
+          // from safe mode's allowlist (otherwise no one could sign up on a
+          // dev/staging box). Kill switch, suppression and caps still apply; a
+          // block is logged in outbound_message and by the guard.
+          await sendAuthMail(
+            { to: user.email, ...verificationEmail(url) },
+            "auth.verify-email",
+          );
         } catch (err) {
           // Never let a mail failure break sign-up: the account exists and the
           // user can ask for another link. Log loudly so it is not invisible.
@@ -89,6 +99,11 @@ function build() {
         }
       },
     },
+
+    // OAuth access/refresh/id tokens are encrypted at rest (AES-256-GCM, keyed
+    // by BETTER_AUTH_SECRET). Existing plaintext tokens still read. Note: rotating
+    // BETTER_AUTH_SECRET makes stored tokens unreadable; users re-link.
+    account: { encryptOAuthTokens: true },
 
     socialProviders: googleEnabled()
       ? {
@@ -112,6 +127,10 @@ function build() {
       enabled: true,
       window: e.AUTH_RATE_LIMIT_WINDOW_SECONDS,
       max: e.AUTH_RATE_LIMIT_MAX,
+      // Shared across every process via Redis, not per-process memory.
+      customStorage: redisRateLimitStorage({
+        fallbackWindowSeconds: e.AUTH_RATE_LIMIT_WINDOW_SECONDS,
+      }),
       // better-auth applies its own STRICTER defaults to the credential paths,
       // so the global `max` above does not govern them. State them explicitly,
       // or tuning the ceiling silently has no effect where it matters.
@@ -174,6 +193,22 @@ function build() {
       organization({
         allowUserToCreateOrganization: true,
         organizationLimit: 10,
+        organizationHooks: {
+          // The org's own audit rows go with it (cascade), so the deletion is
+          // recorded as a GLOBAL event (organizationId null): never shown to a
+          // tenant, but the trail of who deleted what survives.
+          afterDeleteOrganization: async ({ organization, user }) => {
+            await recordAudit(db, {
+              organizationId: null,
+              actorType: "user",
+              actorId: user.id,
+              action: "org.delete",
+              targetType: "organization",
+              targetId: organization.id,
+              metadata: { name: organization.name, slug: organization.slug },
+            });
+          },
+        },
       }),
       // MUST stay last: the Expo plugin wraps responses so the native client can
       // pull the session cookie out of the deep-link callback.

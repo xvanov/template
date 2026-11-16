@@ -15,7 +15,8 @@
     "reset": "prisma migrate reset --force",
     "seed": "tsx prisma/seed.ts",
     "studio": "prisma studio",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",
@@ -26,6 +27,7 @@
     "@types/node": "^22.10.0",
     "@types/pg": "^8.20.0",
     "dotenv": "^17.2.4",
+    "eslint": "^9.39.5",
     "pg": "^8.22.0",
     "prisma": "^7.9.1",
     "tsx": "^4.20.0",

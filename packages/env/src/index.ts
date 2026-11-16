@@ -10,6 +10,22 @@
  */
 import { z } from "zod";
 
+/** "true"/"1" → true, anything else → false; a real boolean passes through. */
+const boolish = z
+  .union([z.boolean(), z.string()])
+  .transform((v) => v === true || v === "true" || v === "1");
+
+/** `VAR=` in a .env file means "unset", not "the empty string". */
+const blankIsUnset = (v: unknown) => (v === "" ? undefined : v);
+
+/** A base64 string that decodes to exactly 32 bytes (an AES-256 key). */
+const base64Key = z
+  .string()
+  .refine(
+    (v) => Buffer.from(v, "base64").length === 32,
+    "must be base64 of exactly 32 bytes (openssl rand -base64 32)",
+  );
+
 const serverSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
@@ -98,6 +114,53 @@ const serverSchema = z.object({
   LLM_MODEL: z.string().default("gpt-4.1-mini"),
   LLM_INPUT_COST_PER_MTOK: z.coerce.number().nonnegative().default(0),
   LLM_OUTPUT_COST_PER_MTOK: z.coerce.number().nonnegative().default(0),
+
+  // ── Outbound messages (packages/outbound) ──────────────────────────────
+  // Every email/SMS/push passes ONE guard. See CLAUDE.md "Outbound messages".
+
+  /**
+   * Safe mode: only allowlisted recipients get real messages; everyone else is
+   * logged as blocked. true = strict, false = off, local = allow everyone
+   * because SMTP is a local catcher (Mailpit; refused in production). Unset =
+   * off in production, strict everywhere else. Resolved by `resolveSafeMode`
+   * in packages/outbound.
+   */
+  OUTBOUND_SAFE_MODE: z.preprocess(
+    blankIsUnset,
+    z.union([z.literal("local"), boolish]).optional(),
+  ),
+  /** Comma-separated: exact addresses/numbers, or `@domain` for a whole domain. */
+  OUTBOUND_SAFE_RECIPIENTS: z.string().optional(),
+  /** Channel switch. On by default: sign-up needs it. */
+  OUTBOUND_EMAIL_ENABLED: boolish.default(true),
+  /** Global kill switch. A runtime switch also exists (`npm run outbound:freeze`). */
+  OUTBOUND_FROZEN: boolish.default(false),
+  /** Volume caps (fixed windows in Redis). Over the cap = blocked, not queued. */
+  OUTBOUND_CAP_RECIPIENT_PER_HOUR: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10),
+  OUTBOUND_CAP_ORG_PER_HOUR: z.coerce.number().int().positive().default(200),
+  OUTBOUND_CAP_ORG_PER_DAY: z.coerce.number().int().positive().default(2000),
+  OUTBOUND_CAP_GLOBAL_PER_HOUR: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(2000),
+
+  // ── Security helpers (packages/security) ───────────────────────────────
+  /** Bearer secret for HTTP cron endpoints. Unset in production = every call refused. */
+  CRON_SECRET: z.string().optional(),
+  /** HMAC secret for the email-provider events webhook (bounces, complaints). */
+  EMAIL_WEBHOOK_SECRET: z.string().optional(),
+  /**
+   * AES-256-GCM key for sealing third-party tokens at rest: base64 of 32 bytes
+   * (`openssl rand -base64 32`). Rotate by moving the old key into
+   * SECRETS_ENCRYPTION_OLD_KEYS (comma-separated); old ciphertexts still open.
+   */
+  SECRETS_ENCRYPTION_KEY: z.preprocess(blankIsUnset, base64Key.optional()),
+  SECRETS_ENCRYPTION_OLD_KEYS: z.string().optional(),
 
   // Storage
   STORAGE_DRIVER: z.enum(["local", "s3"]).default("local"),
