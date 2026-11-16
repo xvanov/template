@@ -19,7 +19,9 @@ packages/auth  better-auth: email+password, Google OAuth, organizations
 packages/ai    LLM calls against any OpenAI-compatible endpoint, priced per call
 packages/jobs  job registry + queue + schedules
 packages/storage  file storage: local disk or any S3-compatible bucket
-packages/email  outbound SMTP (nodemailer). Mailpit locally = real mail, no vendor
+packages/email  outbound SMTP (nodemailer), ONLY via the outbound guard. Mailpit locally
+packages/outbound  the outbound guard: every email/SMS/push passes it and is logged
+packages/security  rate limiting, cron/webhook auth, AES-GCM sealing of stored secrets
 packages/env   the validated environment — import `env()`, never `process.env`
 ```
 
@@ -109,6 +111,47 @@ re-inline its steps in the workflow.
    `packages/auth`, run `npm run auth:schema` and diff before migrating.
 7. **Shared packages export TypeScript source**, no build step. Next transpiles
    them (`transpilePackages`); Metro sees them via `watchFolders`.
+8. **Every outbound message goes through the guard** (`deliver` in
+   `packages/outbound`). Send email with `sendMail` from `@repo/email`; never
+   import nodemailer or a provider SDK anywhere else (a test enforces it). A
+   new channel (SMS, push) gets its own package that calls `deliver` and does
+   not export its raw transport.
+9. **Mutations write an audit event in the same transaction**:
+   `ctx.db.$transaction(async (tx) => { ...; await ctx.audit("item.delete", { targetId }, tx) })`.
+   `packages/api/src/routers/items.ts` is the reference.
+
+## Outbound messages and safe mode
+
+Exists because a production app emailed the wrong thing to 8 real customers.
+`deliver()` runs these gates in order; the first that fails blocks the message:
+
+1. channel switch `OUTBOUND_<EMAIL|SMS|PUSH>_ENABLED` (email on, others off)
+2. kill switch: `OUTBOUND_FROZEN=true`, or at runtime with no restart:
+   `npm run outbound:freeze -- on [email]` / `off` / `status` (stored in `app_setting`)
+3. **safe mode**: ON by default everywhere except `NODE_ENV=production`. Only
+   `OUTBOUND_SAFE_RECIPIENTS` (addresses, `@domain`, phone numbers) get real
+   messages; everything else is blocked and logged. A staging box loaded with a
+   copy of production data therefore cannot mail a customer.
+4. suppression list (`outbound_suppression`: global for bounces, per-org for unsubscribes)
+5. volume caps in Redis: per recipient/hour, per org/hour and /day, global/hour.
+   Redis unreachable = **blocked** (fails closed).
+
+Every attempt writes one `outbound_message` row, BEFORE the provider is
+called, so nothing leaves without a record. Blocked sends resolve with
+`status: "blocked"` (they do not throw); provider errors throw after being
+recorded as `failed`. Tenants read their own rows via `activity.outbound`.
+
+**Auth mail vs safe mode.** better-auth's verification mail is sent with
+`sendAuthMail`, which is exempt from the safe-mode allowlist and nothing else.
+The recipient just typed that address into the sign-up form, so it cannot be
+"the wrong person", and without the exemption nobody could sign up on a dev or
+staging box. The kill switch, suppression and the per-recipient cap still
+apply. Use `sendAuthMail` for better-auth callbacks only. `make smoke` forces
+safe mode ON with an empty allowlist, so the gate proves sign-up still works.
+
+In development, app mail to anyone not in `OUTBOUND_SAFE_RECIPIENTS` is
+blocked even though Mailpit would catch it. Allowlist your test domain
+(`OUTBOUND_SAFE_RECIPIENTS=@example.com`) rather than turning safe mode off.
 
 ## Things that will bite you (all learned here, the hard way)
 
@@ -177,6 +220,20 @@ re-inline its steps in the workflow.
 - **tailwindcss v4 (web) and v3 (mobile, for NativeWind) coexist** deliberately.
   If PostCSS throws `Cannot read properties of undefined (reading 'All')`, the
   wrong major got hoisted — run a full `npm install`.
+- **"I sent an email and nothing arrived"**: look in `outbound_message` first.
+  The row says whether it was sent, or which gate blocked it and why. The guard
+  also prints `[outbound] BLOCKED ...` to the log.
+- **Two Redis connections on purpose.** BullMQ's (packages/jobs) has no command
+  timeout because workers block; the request-path one (packages/security) has a
+  2s timeout so rate limits and caps fail fast. Do not merge them.
+- **Rate limits fail open, outbound caps fail closed.** A limit that protects
+  our capacity (`rateLimited` tRPC middleware) lets traffic through when Redis
+  is down; one that protects other people (outbound caps) blocks. The counter
+  store is in-memory only under `NODE_ENV=test`.
+- **Machine-to-machine endpoints fail closed.** `requireCronAuth` /
+  `verifyHmac` from `@repo/security` refuse every request in production when
+  their secret is unset (outside production an unset secret is allowed).
+  Third-party tokens at rest go through `sealSecret`/`openSecret`.
 - Mobile has one `@ts-expect-error` on the better-auth Expo plugin: an upstream
   generic-variance gap in 1.6.25. Suppressed rather than cast so session types
   still infer. Remove it when upstream types line up.

@@ -170,6 +170,12 @@ echo "→ booting the built app on :${PORT}"
 # second from one IP — exactly the traffic the limiter exists to stop. The
 # limiter stays ENABLED; only its ceiling moves, and only for the gate.
 #
+# OUTBOUND_SAFE_MODE is forced ON with an EMPTY allowlist, whatever .env says.
+# A production build would default it off; forcing it on makes the gate prove
+# the decision that matters: in a safe-mode environment, sign-up's verification
+# mail (auth mail to the address being signed up) still arrives, while any
+# other mail to these throwaway addresses would be blocked and logged.
+#
 # NOTE the override names: `.env` was sourced above with `set -a`, so SMTP_PORT
 # and MAILPIT_URL are ALREADY exported. A `${SMTP_PORT:-1036}` default would
 # therefore never apply, and the gate would quietly mail your dev inbox instead
@@ -179,6 +185,7 @@ APP_URL="$BASE_URL" BETTER_AUTH_URL="$BASE_URL" \
 AUTH_RATE_LIMIT_MAX="${AUTH_RATE_LIMIT_MAX:-5000}" \
 REQUIRE_EMAIL_VERIFICATION=true \
 DEV_MAIL_INBOX_URL= \
+OUTBOUND_SAFE_MODE=true OUTBOUND_SAFE_RECIPIENTS= OUTBOUND_FROZEN=false \
   node "${STANDALONE}/server.js" > "$WEB_LOG" 2>&1 &
 SERVER_PID=$!
 

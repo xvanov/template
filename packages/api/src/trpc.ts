@@ -9,6 +9,10 @@
  *   orgProcedure        — a signed-in user acting in a tenant; injects
  *                         `ctx.organizationId`
  *
+ * Inside `orgProcedure`, `ctx.audit(action, ...)` writes an audit_event row
+ * stamped with the actor, tenant, IP and user agent. Pass the transaction
+ * client when there is one, so the row commits with the change it describes.
+ *
  * Tenant isolation lives HERE, not in each resolver. If you write a resolver
  * that touches an org-scoped table, use `orgProcedure` and filter on
  * `ctx.organizationId`. Reviewers should reject any org-scoped query that does
@@ -18,7 +22,8 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { ZodError } from "zod";
 import { auth } from "@repo/auth";
-import { db } from "@repo/db";
+import { db, recordAudit, type AuditWriter, type Prisma } from "@repo/db";
+import { clientIp, rateLimit } from "@repo/security";
 
 export interface CreateContextOptions {
   headers: Headers;
@@ -72,7 +77,7 @@ export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
 export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   const active = ctx.session.session.activeOrganizationId;
   if (active) {
-    return next({ ctx: { ...ctx, organizationId: active } });
+    return next({ ctx: withAudit(ctx, active) });
   }
 
   // A session with no active tenant is recoverable: fall back to the user's
@@ -106,5 +111,73 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
     console.warn("[trpc] could not stamp session with active org:", err);
   }
 
-  return next({ ctx: { ...ctx, organizationId: membership.organizationId } });
+  return next({ ctx: withAudit(ctx, membership.organizationId) });
 });
+
+export interface AuditOptions {
+  /** Defaults to the action's prefix: `item.delete` → `item`. */
+  targetType?: string;
+  targetId?: string | null;
+  metadata?: Prisma.InputJsonValue;
+}
+
+function withAudit<C extends TRPCContext & { user: { id: string } }>(
+  ctx: C,
+  organizationId: string,
+) {
+  /**
+   * Record an audit event in this tenant, as this user.
+   *
+   *   await ctx.audit("item.delete", { targetId: id }, tx);
+   */
+  const audit = (
+    action: string,
+    opts: AuditOptions = {},
+    client: AuditWriter = ctx.db,
+  ) =>
+    recordAudit(client, {
+      organizationId,
+      actorType: "user",
+      actorId: ctx.user.id,
+      action,
+      targetType: opts.targetType ?? action.split(".")[0] ?? action,
+      targetId: opts.targetId,
+      metadata: opts.metadata,
+      ip: clientIp(ctx.headers),
+      userAgent: ctx.headers.get("user-agent"),
+    });
+  return { ...ctx, organizationId, audit };
+}
+
+/**
+ * Per-caller throttle for one procedure: by user when signed in, else by IP.
+ *
+ *   expensive: orgProcedure.use(rateLimited({ limit: 10, windowSeconds: 60 }))
+ *
+ * Shared across processes through Redis. Fails OPEN (with a warning) if Redis
+ * is unreachable: this protects our capacity, not other people, so a Redis
+ * blip should not become an outage. Outbound message caps fail closed instead.
+ */
+export function rateLimited(opts: { limit: number; windowSeconds: number }) {
+  return t.middleware(async ({ ctx, path, next }) => {
+    const who = ctx.session?.user
+      ? `user:${ctx.session.user.id}`
+      : `ip:${clientIp(ctx.headers) ?? "unknown"}`;
+    try {
+      const r = await rateLimit({ key: `trpc:${path}:${who}`, ...opts });
+      if (!r.allowed) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Too many requests. Try again in ${r.resetSeconds}s.`,
+        });
+      }
+    } catch (err) {
+      if (err instanceof TRPCError) throw err;
+      console.warn(
+        `[trpc] rate limiter unavailable for ${path}, allowing:`,
+        err,
+      );
+    }
+    return next();
+  });
+}

@@ -1,3 +1,4 @@
+import { activityRouter } from "./routers/activity";
 import { aiRouter } from "./routers/ai";
 import { healthRouter } from "./routers/health";
 import { itemsRouter } from "./routers/items";
@@ -11,6 +12,7 @@ export const appRouter = createTRPCRouter({
   items: itemsRouter,
   ai: aiRouter,
   media: mediaRouter,
+  activity: activityRouter,
 });
 
 export type AppRouter = typeof appRouter;

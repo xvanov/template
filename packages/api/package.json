@@ -18,6 +18,7 @@
     "@repo/db": "*",
     "@repo/env": "*",
     "@repo/jobs": "*",
+    "@repo/security": "*",
     "@repo/storage": "*",
     "@trpc/client": "^11.18.0",
     "@trpc/server": "^11.18.0",

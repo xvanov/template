@@ -58,3 +58,9 @@ function schemaOf(url: string): string | undefined {
 
 export * from "../generated/client";
 export type { PrismaClient };
+export {
+  recordAudit,
+  type AuditActorType,
+  type AuditInput,
+  type AuditWriter,
+} from "./audit";

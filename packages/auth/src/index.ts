@@ -21,7 +21,7 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { organization } from "better-auth/plugins";
 import { db } from "@repo/db";
-import { sendMail, verificationEmail } from "@repo/email";
+import { sendAuthMail, verificationEmail } from "@repo/email";
 import { env, googleEnabled } from "@repo/env";
 
 /**
@@ -78,7 +78,15 @@ function build() {
       expiresIn: 60 * 60,
       sendVerificationEmail: async ({ user, url }) => {
         try {
-          await sendMail({ to: user.email, ...verificationEmail(url) });
+          // Through the outbound guard like every message, as AUTH mail: the
+          // address was just typed in by whoever is signing up, so it is exempt
+          // from safe mode's allowlist (otherwise no one could sign up on a
+          // dev/staging box). Kill switch, suppression and caps still apply; a
+          // block is logged in outbound_message and by the guard.
+          await sendAuthMail(
+            { to: user.email, ...verificationEmail(url) },
+            "auth.verify-email",
+          );
         } catch (err) {
           // Never let a mail failure break sign-up: the account exists and the
           // user can ask for another link. Log loudly so it is not invisible.
