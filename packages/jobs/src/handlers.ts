@@ -95,7 +95,7 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
       const { count } = await db.jobRun.deleteMany({
         where: {
           createdAt: { lt: cutoff },
-          status: { in: ["completed", "failed"] },
+          status: { in: ["completed", "failed", "skipped"] },
         },
       });
       return { prunedJobRuns: count };
