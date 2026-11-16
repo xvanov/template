@@ -69,6 +69,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # Load .env FIRST, for the app's own settings (secret, feature flags) …
+# shellcheck source=/dev/null  # .env is per-machine; absent in a fresh checkout (CI)
 if [ -f .env ]; then set -a; . ./.env; set +a; fi
 
 # ── isolation (MUST come after sourcing .env) ─────────────────────────────
