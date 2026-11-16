@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { db } from "@repo/db";
 import { createTenant } from "@repo/db/testing";
-import { tenantOf } from "@repo/jobs";
+import { processJob, SKIPPED_ORG_GONE } from "@repo/jobs";
 
 import { callerFor } from "./caller";
 
@@ -29,30 +29,67 @@ describe("tenant isolation", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  it("job runs: a tenant sees its own, never another tenant's or a system job", async () => {
+  it("media: another tenant cannot delete it", async () => {
+    const a = await createTenant("media-a");
+    const b = await createTenant("media-b");
+    const asset = await db.mediaAsset.create({
+      data: {
+        organizationId: a.organizationId,
+        uploadedById: a.userId,
+        key: `test/${a.organizationId}/pic.png`,
+        filename: "pic.png",
+        contentType: "image/png",
+        sizeBytes: 1,
+      },
+    });
+
+    await expect(
+      callerFor(b).media.remove({ id: asset.id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(await db.mediaAsset.count({ where: { id: asset.id } })).toBe(1);
+
+    await callerFor(a).media.remove({ id: asset.id });
+    expect(await db.mediaAsset.count({ where: { id: asset.id } })).toBe(0);
+  });
+
+  it("job runs: the worker stamps the owner; only that tenant sees the run", async () => {
     const a = await createTenant("jobs-a");
     const b = await createTenant("jobs-b");
 
-    // Stamped exactly as the worker stamps them: from the payload.
-    const payload = { organizationId: a.organizationId, userId: a.userId };
-    const mine = await db.jobRun.create({
-      data: {
-        jobId: "1",
-        name: "items.summarize",
-        organizationId: tenantOf(payload),
-      },
+    // The worker's real recording path, minus Redis.
+    await processJob({
+      id: "jr-a",
+      name: "items.summarize",
+      data: { organizationId: a.organizationId, userId: a.userId },
+      attemptsMade: 0,
     });
     const system = await db.jobRun.create({
-      data: {
-        jobId: "2",
-        name: "maintenance.nightly",
-        organizationId: tenantOf({}),
-      },
+      data: { jobId: "jr-sys", name: "maintenance.nightly" },
     });
 
-    const seenByA = (await callerFor(a).items.recentJobs()).map((r) => r.id);
-    expect(seenByA).toEqual([mine.id]);
-    expect(seenByA).not.toContain(system.id);
+    const seenByA = await callerFor(a).items.recentJobs();
+    expect(seenByA.map((r) => [r.name, r.status])).toEqual([
+      ["items.summarize", "completed"],
+    ]);
+    expect(seenByA.map((r) => r.id)).not.toContain(system.id);
     expect(await callerFor(b).items.recentJobs()).toEqual([]);
+  });
+
+  it("job runs: a job whose organization was deleted does not run", async () => {
+    const gone = await createTenant("jobs-gone");
+    await db.organization.delete({ where: { id: gone.organizationId } });
+
+    const result = await processJob({
+      id: "jr-gone",
+      name: "items.summarize",
+      data: { organizationId: gone.organizationId },
+      attemptsMade: 0,
+    });
+
+    expect(result).toBe(SKIPPED_ORG_GONE);
+    const run = await db.jobRun.findFirstOrThrow({
+      where: { jobId: "jr-gone", payload: { contains: gone.organizationId } },
+    });
+    expect(run).toMatchObject({ status: "skipped", organizationId: null });
   });
 });

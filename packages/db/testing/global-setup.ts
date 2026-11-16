@@ -10,10 +10,22 @@
  * data) is never read or written.
  *
  * Migrations are applied as raw SQL over one connection (~40 ms) rather than
- * via `prisma migrate deploy` (~700 ms: a CLI process plus its engine). That
- * works because Prisma's generated Postgres migrations use unqualified names,
- * which resolve through `search_path` to the new schema. Do not hand-write
- * `"public".` into a migration.
+ * via `prisma migrate deploy` (~700 ms: a CLI process plus its engine). Like
+ * Prisma, each migration.sql is ONE query, in order, so a later migration can
+ * use an enum value an earlier one added (`ALTER TYPE ... ADD VALUE` cannot be
+ * used in the transaction that added it). That works because Prisma's
+ * generated migrations use unqualified names, which resolve through
+ * `search_path` = the new schema first, then `public`. Rules that follow:
+ *   - Do not hand-write `"public".` into a migration: it would escape the
+ *     throwaway schema and touch dev data.
+ *   - Extensions (pgvector, citext...) are per-DATABASE and usually live in
+ *     `public`; `public` is on the path so their types and functions resolve.
+ *     Install them in the dev/CI database once (`CREATE EXTENSION IF NOT
+ *     EXISTS` in a migration is a no-op if already there). An extension that is
+ *     NOT yet installed would be created inside the throwaway schema and
+ *     dropped with it, so the next run reinstalls it: correct, just slower.
+ *   - `CREATE INDEX CONCURRENTLY` cannot run inside a multi-statement query;
+ *     give it a migration.sql of its own.
  *
  * Postgres down = the run FAILS with instructions. It never skips: a skipped
  * isolation test looks exactly like a passing one.
@@ -41,15 +53,16 @@ function baseUrl(): string {
   return "postgresql://postgres:postgres@localhost:5442/app"; // .env.example
 }
 
-function migrationSql(): string {
+/** Each migration's SQL, in apply order (names are timestamp-prefixed). */
+function migrations(): { name: string; sql: string }[] {
   return readdirSync(MIGRATIONS, { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => d.name)
-    .sort() // timestamp-prefixed, so lexical order = apply order
-    .map((name) =>
-      readFileSync(resolve(MIGRATIONS, name, "migration.sql"), "utf8"),
-    )
-    .join("\n;\n");
+    .sort()
+    .map((name) => ({
+      name,
+      sql: readFileSync(resolve(MIGRATIONS, name, "migration.sql"), "utf8"),
+    }));
 }
 
 export default async function setup(project: TestProject) {
@@ -79,11 +92,26 @@ export default async function setup(project: TestProject) {
     );
   }
 
-  await sweepStaleSchemas(admin, now);
-  await admin.query(
-    `CREATE SCHEMA "${schema}"; SET search_path TO "${schema}";\n${migrationSql()}`,
-  );
-  await admin.query("RESET search_path");
+  let current = "setup";
+  try {
+    await sweepStaleSchemas(admin, now);
+    await admin.query(`CREATE SCHEMA "${schema}"`);
+    await admin.query(`SET search_path TO "${schema}", public`);
+    for (const m of migrations()) {
+      current = `migration ${m.name}`;
+      await admin.query(m.sql);
+    }
+    await admin.query("RESET search_path");
+  } catch (err) {
+    // Leave nothing behind, and do not hold the process open.
+    await admin
+      .query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+      .catch(() => {});
+    await admin.end().catch(() => {});
+    throw new Error(
+      `Test schema ${current} failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   const url = new URL(base);
   url.searchParams.set("schema", schema);

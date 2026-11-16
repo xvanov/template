@@ -49,10 +49,13 @@ make smoke        # THE GATE: production build, booted, driven in a real browser
 `make test` runs two kinds of test. `*.test.ts` are unit tests: no database,
 run anywhere. `*.int.test.ts` hit real Postgres: once per run,
 `packages/db/testing/global-setup.ts` creates a throwaway schema `vt_<ts>_<hex>`
-in the dev database, applies the migration SQL into it (~40 ms), and drops it
-afterwards; `public` is never touched. If Postgres is down the run FAILS with
-"start it with `make up`" (it never skips: a skipped isolation test looks like
-a passing one). `TEST_DATABASE_URL` points it at another database (CI does).
+in the dev database, applies each migration's SQL into it in order (~40 ms in
+all), and drops it afterwards; `public` is never touched. If Postgres is down
+and the tests actually execute, the run FAILS with "start it with `make up`";
+it never silently skips. Caveat: turbo replays a cached pass when nothing
+changed, without running anything, so a green `make test` does not prove
+Postgres is up. `npx turbo run test --force` re-runs for real.
+`TEST_DATABASE_URL` points it at another database (CI does).
 `npm run test:unit -w @repo/api` runs only the DB-free tests.
 
 **Writing an org-isolation test** (do this for every new org-scoped model), in
@@ -90,10 +93,13 @@ reload → sign-out through Chromium. **Nothing is "done" until it is green.**
 4. **The model is config.** Any OpenAI-compatible endpoint works via
    `LLM_BASE_URL`/`LLM_MODEL`. Every call is priced into the `llm_call` table.
 5. **Slow or failable work goes to `packages/jobs`**, not into a request. Every
-   run is recorded in `job_run` — Redis is ephemeral, that table is not. A run
-   is owned by the `organizationId` in its payload (`tenantOf()`); no
-   `organizationId` = a system job, never shown to any tenant. So a tenant's job
-   MUST carry `organizationId` in its payload, or its owner cannot see it.
+   run is recorded in `job_run` — Redis is ephemeral, that table is not. Each
+   registry entry declares `scope: "org" | "system"`, and the compiler holds it
+   to the payload schema: an org job's schema must have a required
+   `organizationId: string`, a system job's must not have one. The worker stamps
+   the run's owner from the validated payload; system runs are owned by nobody
+   and shown to no tenant. A tenant's job whose org was deleted while queued is
+   recorded as `skipped` and not run.
 6. **Auth schema belongs to better-auth.** After changing plugins in
    `packages/auth`, run `npm run auth:schema` and diff before migrating.
 7. **Shared packages export TypeScript source**, no build step. Next transpiles

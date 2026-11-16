@@ -40,17 +40,22 @@ export const mediaRouter = createTRPCRouter({
   remove: orgProcedure
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
+      // The storage key is needed to delete the blob. Reading it is scoped,
+      // and the delete itself is scoped too (rule 2): never delete-by-id
+      // trusting an earlier check.
       const asset = await ctx.db.mediaAsset.findFirst({
         where: { id: input.id, organizationId: ctx.organizationId },
         select: { id: true, key: true },
       });
-      if (!asset) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Asset not found." });
-      }
+      if (!asset) throw notFound();
 
       // Delete the row first: an orphaned blob is inert, an orphaned row is a
-      // broken image in the UI.
-      await ctx.db.mediaAsset.delete({ where: { id: asset.id } });
+      // broken image in the UI. 0 rows = a concurrent delete won the race.
+      const { count } = await ctx.db.mediaAsset.deleteMany({
+        where: { id: asset.id, organizationId: ctx.organizationId },
+      });
+      if (count === 0) throw notFound();
+
       try {
         await storage().delete(asset.key);
       } catch (err) {
@@ -59,3 +64,7 @@ export const mediaRouter = createTRPCRouter({
       return { id: asset.id };
     }),
 });
+
+function notFound() {
+  return new TRPCError({ code: "NOT_FOUND", message: "Asset not found." });
+}

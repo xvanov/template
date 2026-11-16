@@ -1,9 +1,16 @@
 /**
- * The job registry: name → payload schema + handler.
+ * The job registry: name → scope + payload schema + handler.
  *
  * Adding a job means adding one entry here. The worker needs no edit, the
  * producer gets type safety from `JobPayloads`, and an unknown job name fails
  * loudly instead of being silently dropped.
+ *
+ * `scope` says who owns the job's runs in `job_run`, and the compiler holds
+ * it to the schema (see `ScopeOf`):
+ *   "org"     the tenant named by the payload's `organizationId`, which the
+ *             schema must declare as a required string.
+ *   "system"  nobody; never shown to a tenant. The schema must not declare
+ *             `organizationId`, and the worker rejects payloads that carry one.
  */
 import { z } from "zod";
 import { db } from "@repo/db";
@@ -29,12 +36,31 @@ const schemas = {
 export type JobName = keyof typeof schemas;
 export type JobPayloads = { [K in JobName]: z.infer<(typeof schemas)[K]> };
 
-type Handler<N extends JobName> = (payload: JobPayloads[N]) => Promise<unknown>;
+/**
+ * The only scope a schema admits: "org" iff its payload has a required string
+ * `organizationId`, "system" iff it has none. Anything else (an optional or
+ * non-string `organizationId`) is `never`, so the entry does not compile.
+ */
+export type ScopeOf<S extends z.ZodType> = ScopeOfPayload<z.infer<S>>;
+type ScopeOfPayload<T> =
+  // `z.object({})` infers as Record<string, never>: no fields, so no tenant.
+  string extends keyof T
+    ? "system"
+    : T extends { organizationId: string }
+      ? "org"
+      : "organizationId" extends keyof T
+        ? never
+        : "system";
 
-export const handlers: {
-  [N in JobName]: { schema: (typeof schemas)[N]; run: Handler<N> };
-} = {
+export interface JobEntry<S extends z.ZodType> {
+  scope: ScopeOf<S>;
+  schema: S;
+  run: (payload: z.infer<S>) => Promise<unknown>;
+}
+
+export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
   "items.summarize": {
+    scope: "org",
     schema: schemas["items.summarize"],
     run: async ({ organizationId, userId }) => {
       const items = await db.item.findMany({
@@ -61,6 +87,7 @@ export const handlers: {
   },
 
   "maintenance.nightly": {
+    scope: "system",
     schema: schemas["maintenance.nightly"],
     run: async () => {
       // Bound the durable job history so this table cannot grow forever.
@@ -76,6 +103,7 @@ export const handlers: {
   },
 
   "notify.digest": {
+    scope: "org",
     schema: schemas["notify.digest"],
     run: async ({ organizationId, email }) => {
       const open = await db.item.count({
