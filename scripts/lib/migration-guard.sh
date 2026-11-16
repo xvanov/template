@@ -14,9 +14,10 @@
 #   * every DROP, except DROP INDEX / DROP DEFAULT / DROP NOT NULL /
 #     DROP CONSTRAINT (they only relax the schema) — so DROP COLUMN, DROP "a",
 #     DROP IF EXISTS a, DROP TABLE/VIEW/TYPE/SCHEMA… are all caught
-#   * every RENAME, except ALTER INDEX … RENAME (Prisma generates those for
-#     index renames; old code never names an index, and false alarms only
-#     teach people to reach for --allow-destructive)
+#   * every RENAME, except ALTER INDEX … RENAME and ALTER TABLE … RENAME
+#     CONSTRAINT (Prisma generates both, e.g. for a primary key after a model
+#     rename; old code never names an index or a constraint, and false alarms
+#     only teach people to reach for --allow-destructive)
 #   * any type change inside ALTER TABLE (ALTER COLUMN a TYPE …, ALTER a TYPE
 #     …, SET DATA TYPE …)
 #   * SET NOT NULL, and ADD COLUMN … NOT NULL without a DEFAULT (Prisma's
@@ -57,7 +58,7 @@ _guard_classify() {
         t = substr(t, 2)
       }
 
-      if (why == "" && u ~ / RENAME / && u !~ /^ ALTER INDEX /) why = "RENAME"
+      if (why == "" && u ~ / RENAME / && u !~ /^ ALTER INDEX / && u !~ / RENAME CONSTRAINT /) why = "RENAME"
       if (why == "" && u ~ /^ ALTER TABLE / && u ~ / TYPE /) why = "type change"
       if (why == "" && u ~ / SET NOT NULL /) why = "SET NOT NULL"
 

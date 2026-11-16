@@ -78,6 +78,7 @@ for case in \
   'safe|drop_not_null|ALTER TABLE "item" ALTER COLUMN "note" DROP NOT NULL;' \
   'safe|drop_constraint|ALTER TABLE "item" DROP CONSTRAINT "item_owner_fkey";' \
   'safe|rename_index|ALTER INDEX "item_a_idx" RENAME TO "item_b_idx";' \
+  'safe|rename_constraint|ALTER TABLE "thing" RENAME CONSTRAINT "item_pkey" TO "thing_pkey";' \
   'safe|add_required_with_default|ALTER TABLE "item" ADD COLUMN "n" INTEGER NOT NULL DEFAULT 0;' \
   'safe|add_foreign_key|ALTER TABLE "item" ADD CONSTRAINT "item_o_fkey" FOREIGN KEY ("o") REFERENCES "user"("id") ON DELETE CASCADE;' \
   'safe|create_table_not_null|CREATE TABLE "thing" ("id" TEXT NOT NULL, CONSTRAINT "thing_pkey" PRIMARY KEY ("id"));' \

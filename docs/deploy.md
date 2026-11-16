@@ -168,7 +168,8 @@ between the live commit and the new one, **deny by default**. It refuses:
 
 - every `DROP`, except `DROP INDEX`, `DROP DEFAULT`, `DROP NOT NULL` and
   `DROP CONSTRAINT`;
-- every `RENAME`, except `ALTER INDEX … RENAME`;
+- every `RENAME`, except `ALTER INDEX … RENAME` and
+  `ALTER TABLE … RENAME CONSTRAINT`;
 - any type change in `ALTER TABLE`;
 - `SET NOT NULL`;
 - `ADD COLUMN … NOT NULL` without a `DEFAULT`. That is what Prisma writes for
