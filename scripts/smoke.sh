@@ -34,7 +34,7 @@ dump_logs() {
 
 cleanup() {
   local code=$?
-  trap - EXIT INT TERM
+  trap - EXIT
   [ "$code" -ne 0 ] && dump_logs
   local pid
   for pid in "$SERVER_PID" "$WORKER_PID"; do
@@ -59,7 +59,13 @@ cleanup() {
   fi
   exit $code
 }
-trap cleanup EXIT INT TERM
+# Signals get their OWN traps that exit non-zero; cleanup runs once, from EXIT.
+# Trapping INT/TERM straight to cleanup would read `$?` from the interrupted
+# foreground command — often 0 — and a gate killed by timeout(1), a watchdog or
+# `docker stop` would report GREEN.
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Load .env FIRST, for the app's own settings (secret, feature flags) …
 if [ -f .env ]; then set -a; . ./.env; set +a; fi
@@ -210,8 +216,16 @@ echo "  worker up (pid $WORKER_PID)"
 
 echo "→ driving the user journey"
 # MAILPIT_URL points the suite at the test catcher's API, matching SMTP_PORT above.
+# EVERY e2e test runs — no tag filter — so a new test cannot silently run nowhere.
+# On a failed journey, check the processes FIRST: "the worker died" is the real
+# cause and must not be reported as a mere test failure.
 BASE_URL="$BASE_URL" MAILPIT_URL="http://127.0.0.1:${TEST_MAIL_UI_PORT}" \
-  npm run test:e2e:smoke --workspace web
+  npm run test:e2e --workspace web || {
+  alive_or_die "$WORKER_PID" worker "during the journey"
+  alive_or_die "$SERVER_PID" server "during the journey"
+  echo "✗ the journey failed (both processes still up)." >&2
+  exit 1
+}
 
 # A worker that died mid-run may still have let the journey pass (e.g. it
 # finished the one job and then crashed). That is a failure too.

@@ -56,7 +56,7 @@ async function signUp(
   await expect(page).toHaveURL(/\/app$/, { timeout: 20_000 });
 }
 
-test("@smoke health endpoint reports every dependency reachable", async ({
+test("health endpoint reports every dependency reachable", async ({
   request,
 }) => {
   const res = await request.get("/api/health");
@@ -70,7 +70,7 @@ test("@smoke health endpoint reports every dependency reachable", async ({
   expect(body.checks.redis?.ok).toBe(true);
 });
 
-test("@smoke sign up, create an item, and see it persist across a reload", async ({
+test("sign up, create an item, and see it persist across a reload", async ({
   page,
   baseURL,
 }) => {
@@ -114,10 +114,7 @@ test("@smoke sign up, create an item, and see it persist across a reload", async
   await expect(page.getByText(title)).toHaveCount(0);
 });
 
-test("@smoke signing out revokes access to the app", async ({
-  page,
-  baseURL,
-}) => {
+test("signing out revokes access to the app", async ({ page, baseURL }) => {
   await signUp(page, uniqueEmail("signout"), baseURL!);
 
   await page.getByRole("button", { name: /sign out/i }).click();
@@ -128,12 +125,12 @@ test("@smoke signing out revokes access to the app", async ({
   await expect(page).toHaveURL(/\/login$/);
 });
 
-test("@smoke an anonymous visitor cannot reach the app", async ({ page }) => {
+test("an anonymous visitor cannot reach the app", async ({ page }) => {
   await page.goto("/app");
   await expect(page).toHaveURL(/\/login$/);
 });
 
-test("@smoke an unconfirmed account cannot sign in", async ({ page }) => {
+test("an unconfirmed account cannot sign in", async ({ page }) => {
   const email = uniqueEmail("unconfirmed");
 
   // Sign up, but deliberately never open the emailed link.
@@ -157,7 +154,7 @@ test("@smoke an unconfirmed account cannot sign in", async ({ page }) => {
   await expect(page).toHaveURL(/\/login/);
 });
 
-test("@smoke one tenant's items are invisible to another", async ({
+test("one tenant's items are invisible to another", async ({
   browser,
   baseURL,
 }) => {

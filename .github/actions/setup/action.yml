@@ -23,7 +23,7 @@ runs:
           node_modules
           apps/*/node_modules
           packages/*/node_modules
-        key: node-modules-${{ runner.os }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+        key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
 
     - if: steps.nm.outputs.cache-hit != 'true'
       shell: bash

@@ -79,7 +79,8 @@ boot; the smoke gate builds for production, boots the standalone server **and
 the worker** on an isolated port against real Postgres and Redis, and drives
 sign-up → create → reload → a worker job → sign-out through Chromium. It fails
 if either process dies during boot or during the run, and prints the tail of
-both logs on any failure. **Nothing is "done" until it is green.** CI runs
+both logs on any failure. It runs **every** e2e test (no tag filter), so a new
+test in `apps/web/e2e` is in the gate automatically. **Nothing is "done" until it is green.** CI runs
 this same script (`.github/workflows/ci.yml`) — change the script, never
 re-inline its steps in the workflow.
 
@@ -141,6 +142,11 @@ re-inline its steps in the workflow.
   picked up is red too. The gate forces `LLM_API_KEY=""` (free, deterministic)
   and puts logs and `STORAGE_LOCAL_DIR` in a fresh `mktemp -d` dir, kept and
   printed on failure.
+- **The Dockerfiles build from `turbo prune <app> --docker`**, so each image
+  holds only its app and the workspace packages it imports, and `npm ci` runs
+  on manifests alone (source edits reuse that layer). Prune does NOT carry
+  root-level files: `tsconfig.base.json` is copied explicitly. A new root file
+  the build needs must be added there too, or the image build fails.
 - **The gate has its OWN mail catcher** (`mailpit-test`, :1036/:8036) separate
   from the dev inbox (:1035/:8035). Its links point at the gate's isolated port
   and die with the run, so mixing them into your inbox makes real mail look

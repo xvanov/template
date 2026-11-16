@@ -9,8 +9,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "test:e2e": "playwright test",
-    "test:e2e:smoke": "playwright test --grep @smoke"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@repo/ai": "*",
