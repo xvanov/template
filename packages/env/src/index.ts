@@ -20,6 +20,9 @@ const serverSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   REDIS_URL: z.string().min(1, "REDIS_URL is required"),
 
+  /** Jobs the worker runs in parallel. Bounded so a typo cannot fork-bomb Redis. */
+  WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(5),
+
   BETTER_AUTH_SECRET: z
     .string()
     .min(
@@ -107,6 +110,14 @@ const serverSchema = z.object({
 });
 
 export type ServerEnv = z.infer<typeof serverSchema>;
+
+/**
+ * Every variable the schema reads. Tests clear exactly these, and a test checks
+ * each is in turbo.json's globalEnv (turbo's strict env mode drops the rest).
+ */
+export const serverEnvKeys = Object.keys(
+  serverSchema.shape,
+) as (keyof ServerEnv)[];
 
 let cached: ServerEnv | undefined;
 

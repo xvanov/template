@@ -117,6 +117,11 @@ Two things must then be true:
   (`docker compose --profile full up -d --force-recreate web worker`); `env_file`
   is read at container creation.
 
+The same list also feeds the dev server's `allowedDevOrigins`: `next dev`
+refuses its scripts to hosts it does not know, so a page opened on the Tailscale
+name renders but never hydrates. Restart `make dev` after editing `.env` — the
+Next config is read once at startup.
+
 For the phone, start Expo advertising the Tailscale address and leave
 `EXPO_PUBLIC_API_URL` empty — the app derives its API origin from whichever host
 served the bundle, so the same build follows you between wifi and Tailscale:

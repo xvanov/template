@@ -1,4 +1,5 @@
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { env } from "@repo/env";
 
@@ -29,8 +30,27 @@ export function localDriver(): StorageDriver {
 
     async put(key, body, _contentType): Promise<PutResult> {
       const path = pathFor(key);
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, body);
+      const dir = dirname(path);
+      await mkdir(dir, { recursive: true });
+      // Durable AND atomic: write a temp file in the same directory, fsync it,
+      // rename it over the target, then fsync the directory so the rename
+      // itself survives a crash. Readers see the old object or the new one —
+      // never a torn write — and we only acknowledge once the bytes are on disk.
+      const tmp = `${path}.${randomUUID()}.tmp`;
+      try {
+        const handle = await open(tmp, "wx");
+        try {
+          await handle.writeFile(body);
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        await rename(tmp, path);
+      } catch (err) {
+        await rm(tmp, { force: true });
+        throw err;
+      }
+      await syncDir(dir);
       return { key, sizeBytes: body.byteLength };
     },
 
@@ -58,4 +78,23 @@ export function localDriver(): StorageDriver {
       return `/api/media/blob?key=${encodeURIComponent(key)}`;
     },
   };
+}
+
+/**
+ * fsync a directory so a rename into it is durable. Best-effort: Windows cannot
+ * open a directory for syncing, and some filesystems refuse it; the data file
+ * itself is already synced by then.
+ */
+async function syncDir(dir: string): Promise<void> {
+  if (process.platform === "win32") return;
+  try {
+    const handle = await open(dir, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    // Not fatal — see above.
+  }
 }

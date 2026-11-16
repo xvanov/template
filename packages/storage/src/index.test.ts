@@ -1,7 +1,27 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { dirname, join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Fault injection: when armed, the next FileHandle.sync() throws, simulating a
+// disk error after some bytes were already written.
+const fault = vi.hoisted(() => ({ failNextSync: false }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs/promises")>();
+  const open: typeof fs.open = async (...args) => {
+    const handle = await fs.open(...args);
+    const sync = handle.sync.bind(handle);
+    handle.sync = async () => {
+      if (fault.failNextSync) {
+        fault.failNextSync = false;
+        throw new Error("injected EIO");
+      }
+      return sync();
+    };
+    return handle;
+  };
+  return { ...fs, default: { ...fs, open }, open };
+});
 
 import {
   ALLOWED_CONTENT_TYPES,
@@ -82,6 +102,20 @@ describe("localDriver", () => {
 
     await driver.delete(key);
     expect(await driver.exists(key)).toBe(false);
+  });
+
+  it("a failed overwrite leaves the old object intact and no temp file", async () => {
+    const driver = localDriver();
+    const key = "org/o/2026-01/atomic.txt";
+    await driver.put(key, new TextEncoder().encode("original"), "text/plain");
+
+    fault.failNextSync = true;
+    await expect(
+      driver.put(key, new TextEncoder().encode("replacement"), "text/plain"),
+    ).rejects.toThrow(/injected EIO/);
+
+    expect(new TextDecoder().decode(await driver.get(key))).toBe("original");
+    expect(await readdir(dirname(join(dir, key)))).toEqual(["atomic.txt"]);
   });
 
   it("refuses a key that escapes the storage root", async () => {

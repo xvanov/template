@@ -12,12 +12,10 @@ import "@repo/env/load";
 import { createWorker, registerSchedules, closeQueue } from "@repo/jobs";
 import { env } from "@repo/env";
 
-const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY ?? 5);
-
 async function main() {
   // Validate the environment before connecting to anything, so a bad config
   // fails in one readable line instead of as a connection timeout.
-  env();
+  const CONCURRENCY = env().WORKER_CONCURRENCY;
 
   await registerSchedules();
 
