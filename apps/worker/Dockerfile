@@ -26,14 +26,28 @@ RUN turbo prune worker --docker
 
 # Install from manifests + the Prisma schema only (the root postinstall runs
 # `prisma generate`, which needs the schema and config — nothing else).
-FROM base AS deps
+FROM base AS install
 COPY --from=prune /app/out/json/ ./
 COPY --from=prune /app/out/full/packages/db/prisma.config.ts ./packages/db/
 COPY --from=prune /app/out/full/packages/db/prisma/schema.prisma ./packages/db/prisma/
-RUN npm ci --no-audit --fund=false \
-  # The worker runs its TypeScript through tsx — no bundling step to keep in
-  # sync — so the runtime needs production dependencies only.
-  && npm prune --omit=dev --no-audit --fund=false
+RUN npm ci --no-audit --fund=false
+
+# ── migrate: the one-shot `prisma migrate deploy` image ─────────────────────
+# Used by docker-compose.prod.yml's `migrate` service. The Prisma CLI is a dev
+# dependency, which the runtime image below prunes away, so migrations run from
+# the full install instead (it shares this file's cached `npm ci` layer, so it
+# costs no extra install). Build it with `--target migrate`.
+FROM install AS migrate
+ENV NODE_ENV=production
+COPY --from=prune /app/out/full/packages/db/prisma ./packages/db/prisma
+WORKDIR /app/packages/db
+USER node
+CMD ["npx", "--no-install", "prisma", "migrate", "deploy"]
+
+# The worker runs its TypeScript through tsx — no bundling step to keep in
+# sync — so the runtime needs production dependencies only.
+FROM install AS deps
+RUN npm prune --omit=dev --no-audit --fund=false
 
 FROM node:22-alpine AS runner
 RUN apk add --no-cache openssl

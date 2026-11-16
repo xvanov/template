@@ -1,0 +1,10 @@
+# OnFailure= hook for the backup and deploy units: %i is the unit that failed.
+# Writes an error-priority line to the journal (journalctl --user -p err) and
+# syslog. To be paged, add a second ExecStart, e.g. an ntfy/webhook call:
+#   ExecStart=/usr/bin/curl -fsS -m 10 -d "%i failed on %H" https://ntfy.sh/<topic>
+[Unit]
+Description=@APP_NAME@: report that %i failed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -t @APP_NAME@ -p user.err "%i FAILED on %H — journalctl --user -u %i"

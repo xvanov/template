@@ -1,0 +1,167 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Production stack for ONE Linux host running Docker. Driven by
+# scripts/deploy.sh — see docs/deploy.md. Do not `up` it by hand unless you
+# know which image tag you mean; the script tracks that for you.
+#
+# Why a separate file and not a profile in docker-compose.yml: almost nothing
+# is shared. Production has no mailpit, publishes NO database or Redis port,
+# runs prebuilt images by tag (that is what makes rollback possible), takes the
+# app's settings from .env.production and ops settings (interpolated below:
+# POSTGRES_PASSWORD, PROD_WEB_PORT, CLOUDFLARE_TUNNEL_TOKEN…) from .env.deploy,
+# so app containers never see ops secrets — and runs under its own Compose project
+# (`<dir>-prod`) so its volumes can never be confused with the dev stack's on
+# the same machine. A profile would mix all of that into the file every
+# developer reads daily, and one stray `--profile` flag would point dev
+# commands at production data.
+#
+# Order of a deploy: db + redis healthy → `migrate` runs to completion → web +
+# worker are replaced. `migrate` is also a `depends_on` of web and worker, so a
+# plain `up` keeps the same order.
+# ──────────────────────────────────────────────────────────────────────────
+
+x-app: &app
+  restart: unless-stopped
+  env_file: ${ENV_FILE:-.env.production}
+  environment: &app-env
+    # `environment` beats `env_file`, so these win over the dev-shaped values
+    # a copied .env carries. Inside the compose network the service names
+    # replace localhost.
+    DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/app?schema=public
+    REDIS_URL: redis://redis:6379
+    STORAGE_LOCAL_DIR: /app/storage
+  volumes:
+    - storage:/app/storage
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+  # Room for in-flight requests and the job being run to finish on SIGTERM.
+  stop_grace_period: 30s
+  logging: &logging
+    driver: local # rotated and compressed; json-file grows until the disk is full
+    options:
+      max-size: 20m
+      max-file: "5"
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.deploy (openssl rand -hex 24)}
+      POSTGRES_DB: app
+    # No `ports:` — nothing outside this compose network needs the database.
+    # Backups use `docker compose exec db pg_dump`; for a psql shell use
+    # `docker compose ... exec db psql -U postgres app`.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # `start_interval` (fast polling while starting) REQUIRES `start_period`.
+    # `docker compose config` does not catch a missing one — only `up` fails —
+    # so validate a healthcheck change by actually starting the stack.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d app"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      start_interval: 1s
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF so delayed/queued jobs survive a restart. No `ports:` — Redis has no
+    # auth and is the job broker; anything that reaches it can enqueue work.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+      start_interval: 1s
+    logging: *logging
+
+  # One-shot: `prisma migrate deploy`, then exit. Idempotent (applies only what
+  # is pending; each migration runs in a transaction). If it fails, web and
+  # worker are NOT replaced — the previous version keeps serving — and the
+  # reason is in this container's output, which deploy.sh prints.
+  migrate:
+    image: ${COMPOSE_PROJECT_NAME:?run via scripts/deploy.sh}-migrate:${APP_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+      target: migrate
+    restart: "no"
+    env_file: ${ENV_FILE:-.env.production}
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/app?schema=public
+    depends_on:
+      db:
+        condition: service_healthy
+    logging: *logging
+
+  web:
+    <<: *app
+    image: ${COMPOSE_PROJECT_NAME:?run via scripts/deploy.sh}-web:${APP_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      <<: *app-env
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
+    ports:
+      # LOOPBACK ONLY. The public door is a tunnel (cloudflared below, or
+      # `tailscale serve`) that terminates TLS. Docker's published ports bypass
+      # ufw, so this binding — not the firewall — is the real control.
+      - "127.0.0.1:${PROD_WEB_PORT:-3280}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
+      start_interval: 1s # report "healthy" within a second of it being true
+
+  worker:
+    <<: *app
+    image: ${COMPOSE_PROJECT_NAME:?run via scripts/deploy.sh}-worker:${APP_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+
+  # Optional public door: a Cloudflare Tunnel (outbound-only, no open port, TLS
+  # at Cloudflare). Enabled by COMPOSE_PROFILES=tunnel + CLOUDFLARE_TUNNEL_TOKEN
+  # in .env.deploy. In the Cloudflare dashboard point the tunnel's public
+  # hostname at http://web:3000. See docs/deploy.md → "Public exposure".
+  # The token comes from .env.deploy by interpolation, not from an env_file.
+  cloudflared:
+    profiles: ["tunnel"]
+    # Pinned (not :latest) so a deploy never changes the tunnel by surprise.
+    # Bump every few months: Cloudflare stops supporting versions older than
+    # about a year. github.com/cloudflare/cloudflared/releases
+    image: cloudflare/cloudflared:2026.11.0
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      web:
+        condition: service_started
+    logging: *logging
+
+volumes:
+  pgdata:
+  redisdata:
+  storage:

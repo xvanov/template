@@ -1,0 +1,14 @@
+# Nightly database (+ uploads) backup. A systemd --user unit (no After=
+# docker.service: user units cannot order against system units; the docker
+# daemon is up long before 03:17). Install with the one-liner in
+# docs/deploy.md, which replaces @APP_DIR@/@APP_NAME@ and renames the files to
+# <app>-* so several apps can share a host.
+[Unit]
+Description=@APP_NAME@ backup (scripts/backup.sh)
+OnFailure=@APP_NAME@-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@APP_DIR@
+ExecStart=@APP_DIR@/scripts/backup.sh
+TimeoutStartSec=2h

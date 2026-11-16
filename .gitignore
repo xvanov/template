@@ -18,6 +18,7 @@ packages/db/generated/
 .env
 .env.*
 !.env.example
+!.env.deploy.example
 
 # local runtime state
 #
@@ -28,6 +29,9 @@ packages/db/generated/
 # ignore rules that could collide with a source path.
 /storage/
 /apps/*/storage/
+# production state on the deploy host (scripts/deploy.sh, scripts/backup.sh)
+/.deploy/
+/backups/
 coverage/
 test-results/
 playwright-report/

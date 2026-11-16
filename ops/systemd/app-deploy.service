@@ -1,0 +1,14 @@
+# Runs scripts/deploy.sh in a unit of its own. Anything that triggers deploys
+# (a webhook listener, an agent, the optional timer) should do
+# `systemctl --user start @APP_NAME@-deploy` rather than run the script itself:
+# then stopping or restarting the caller cannot kill a deploy halfway.
+[Unit]
+Description=@APP_NAME@ deploy (scripts/deploy.sh)
+OnFailure=@APP_NAME@-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@APP_DIR@
+ExecStart=@APP_DIR@/scripts/deploy.sh deploy
+# A cold image build can take minutes; the default 90s would kill it.
+TimeoutStartSec=30min

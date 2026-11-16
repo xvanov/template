@@ -86,6 +86,14 @@ test in `apps/web/e2e` is in the gate automatically. **Nothing is "done" until i
 this same script (`.github/workflows/ci.yml`) — change the script, never
 re-inline its steps in the workflow.
 
+## Production
+
+One Docker host, documented in `docs/deploy.md`: `docker-compose.prod.yml`
+plus `scripts/deploy.sh` (`deploy`/`rollback`/`status`), `scripts/backup.sh`,
+`scripts/restore.sh`, and the systemd templates in `ops/systemd/`.
+`make test-ops` runs the migration-guard unit test and a backup/restore round
+trip (about 20s). `make lint` shellchecks every script.
+
 ## Architecture rules (a reviewer should reject violations)
 
 1. **The API is tRPC in `packages/api`.** Add a procedure there, not a Next route
@@ -264,6 +272,28 @@ to `strict` with an empty allowlist, so the gate proves sign-up still works.
   `verifyHmac` from `@repo/security` refuse every request in production when
   their secret is unset (outside production an unset secret is allowed).
   Third-party tokens at rest go through `sealSecret`/`openSecret`.
+- **Rollback swaps code, not schema.** `deploy.sh` migrates forward before
+  the swap, so a rolled-back image runs on the NEW schema. Migrations must
+  keep the previous code working: add a column, backfill it, and drop the old
+  one in a later deploy. `deploy.sh` refuses new migrations that drop, rename,
+  retype or add NOT NULL unless `--allow-destructive`
+  (`scripts/lib/migration-guard.sh`). Every deploy also takes a `pre-deploy`
+  dump right before migrating.
+- **Prod has two env files.** `.env.production` holds the app's settings and
+  goes to the containers through `env_file` only; the scripts never source it.
+  `.env.deploy` holds ops settings: `POSTGRES_PASSWORD`, `PROD_WEB_PORT` (not
+  the dev `WEB_PORT`), `DEPLOY_*`, `BACKUP_*` and the tunnel token. It is
+  sourced by the scripts and used for compose interpolation, and is never
+  handed to the app. Pin `DEPLOY_PROJECT` there: the default `<dir>-prod`
+  means renaming the directory points at new, empty volumes. Because
+  `.env.deploy` is sourced with `set -a`, a value it sets beats an inline
+  `VAR=x scripts/...` override.
+- **`backups/` and `.deploy/` must stay in `.dockerignore`.** Without that,
+  every image build ships the database dumps into the build context.
+- **A deploy started from inside a systemd service must run in its own unit**
+  (`scripts/deploy.sh --detach`, or `systemctl --user start <app>-deploy`).
+  `setsid nohup` leaves it in the caller's cgroup; stopping the caller kills
+  the deploy halfway.
 - Mobile has one `@ts-expect-error` on the better-auth Expo plugin: an upstream
   generic-variance gap in 1.6.25. Suppressed rather than cast so session types
   still infer. Remove it when upstream types line up.
