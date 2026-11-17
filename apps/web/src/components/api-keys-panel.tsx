@@ -65,7 +65,8 @@ export function ApiKeysPanel() {
         <CardDescription>
           Connect Claude Code or Claude Desktop to this workspace at{" "}
           <code className="font-mono">/api/mcp</code>. A key acts as you.
-          Without write access, its changes wait in the approval queue.
+          Without write access, its changes wait in the approval queue and it
+          cannot start agent runs.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

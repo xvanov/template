@@ -40,6 +40,7 @@ model User {
   agentRuns   AgentRun[]
   apiKeys     ApiKey[]
   reviewed    AgentProposal[] @relation("ProposalReviewer")
+  proposed    AgentProposal[] @relation("ProposalProposer")
 
   @@map("user")
 }
@@ -409,7 +410,7 @@ model AgentRun {
   /// "queued" | "running" | "completed" | "failed" | "cancelled"
   status            String       @default("queued")
   /// Why it stopped: "done" | "max_steps" | "max_cost" | "cancelled" |
-  /// "refusal" | "truncated" | "disabled" | "over_budget" | "error"
+  /// "refusal" | "truncated" | "disabled" | "over_budget" | "forbidden" | "error"
   stopReason        String?
   /// `provider/model` that ran it.
   model             String?
@@ -466,16 +467,28 @@ model AgentProposal {
   /// Null for a proposal that came from MCP rather than a run.
   runId          String?
   run            AgentRun?    @relation(fields: [runId], references: [id], onDelete: SetNull)
-  /// "agent" | "mcp"
+  /// Who asked: "agent" (a run), "mcp" (an API key without write access),
+  /// "user" (agent.propose from a signed-in session)
   source         String       @default("agent")
+  /// The user the proposal was made for: the run's starter, or the key's creator.
+  proposedById   String?
+  proposedBy     User?        @relation("ProposalProposer", fields: [proposedById], references: [id], onDelete: SetNull)
+  /// The API key that proposed it (source "mcp").
+  apiKeyId       String?
+  apiKey         ApiKey?      @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
   /// The write tool's name, e.g. `items_create`.
   tool           String
   /// The input as proposed (validated against the tool's schema).
   input          Json
   /// The input as the reviewer edited it, re-validated; what was applied.
   editedInput    Json?
-  /// One line for the queue: what applying it would do.
+  /// One line for the queue: what applying it would do, built from the
+  /// DATABASE at proposal time (e.g. the real item title), never from the
+  /// model's free text.
   summary        String
+  /// The proposer's own words (e.g. a delete's "reason"): an unverified claim,
+  /// shown to the reviewer as such.
+  claim          String?
   /// "pending" | "applied" | "failed" | "rejected"
   status         String       @default("pending")
   reviewerId     String?
@@ -504,11 +517,14 @@ model ApiKey {
   /// The first characters of the secret, to tell keys apart in a list.
   prefix         String
   hash           String       @unique
-  /// False: write tools queue a proposal. True: they act directly.
+  /// False: write tools queue a proposal. True: they act directly — but only
+  /// while the creator is still an owner/admin (checked on every request).
   canWrite       Boolean      @default(false)
   lastUsedAt     DateTime?
   revokedAt      DateTime?
   createdAt      DateTime     @default(now())
+
+  proposals AgentProposal[]
 
   @@index([organizationId, createdAt])
   @@map("api_key")

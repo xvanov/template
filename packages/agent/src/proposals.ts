@@ -25,7 +25,7 @@ import {
   NotFoundError,
 } from "./errors";
 import { writeTool } from "./registry";
-import { issuesLine } from "./tool";
+import { issuesLine, readOnly, type ToolContext, type WriteTool } from "./tool";
 
 /** ctx.audit's shape in packages/api: (action, opts, client). */
 export type Audit = (
@@ -41,14 +41,37 @@ export type Audit = (
 export type ProposalSource = "agent" | "mcp" | "user";
 
 /**
- * Validate a write-tool call and queue it. Throws DomainRuleError for an
- * unknown tool, an invalid input, or a failed `check`.
+ * A write-tool call checked and described: validated against the tool's
+ * schema and summarised from the database (read-only). Throws
+ * DomainRuleError / NotFoundError when it makes no sense. Shared by
+ * createProposal and the loop's unit tests.
+ */
+export async function prepareProposal(
+  tool: WriteTool,
+  ctx: ToolContext,
+  input: unknown,
+): Promise<{ input: unknown; summary: string; claim: string | null }> {
+  const parsed = tool.input.safeParse(input);
+  if (!parsed.success) {
+    throw new DomainRuleError(`Invalid input: ${issuesLine(parsed.error)}`);
+  }
+  const summary = (await tool.summarize(ctx, parsed.data)).slice(0, 300);
+  const claim = tool.claim?.(parsed.data)?.trim().slice(0, 500) || null;
+  return { input: parsed.data, summary, claim };
+}
+
+/**
+ * Validate a write-tool call and queue it, recording who proposed it (the
+ * user the run or key acts for, and the API key if any). Throws
+ * DomainRuleError for an unknown tool or an invalid input, and whatever the
+ * tool's `summarize` throws (NotFoundError for an id not in this tenant).
  */
 export async function createProposal(
   db: PrismaClient,
   args: {
     organizationId: string;
     userId: string | null;
+    apiKeyId?: string | null;
     runId?: string | null;
     source: ProposalSource;
     tool: string;
@@ -58,14 +81,13 @@ export async function createProposal(
 ): Promise<{ id: string; summary: string }> {
   const tool = writeTool(args.tool);
   if (!tool) throw new DomainRuleError(`Unknown write tool ${args.tool}.`);
-  const parsed = tool.input.safeParse(args.input);
-  if (!parsed.success) {
-    throw new DomainRuleError(`Invalid input: ${issuesLine(parsed.error)}`);
-  }
-  const ctx = { organizationId: args.organizationId, userId: args.userId, db };
-  const problem = tool.check ? await tool.check(ctx, parsed.data) : null;
-  if (problem) throw new DomainRuleError(problem);
-  const summary = tool.describe(parsed.data).slice(0, 300);
+  const prepared = await readOnly(db, (tx) =>
+    prepareProposal(
+      tool,
+      { organizationId: args.organizationId, userId: args.userId, db: tx },
+      args.input,
+    ),
+  );
 
   return db.$transaction(async (tx) => {
     const p = await tx.agentProposal.create({
@@ -73,9 +95,12 @@ export async function createProposal(
         organizationId: args.organizationId,
         runId: args.runId ?? null,
         source: args.source,
+        proposedById: args.userId,
+        apiKeyId: args.apiKeyId ?? null,
         tool: tool.name,
-        input: parsed.data as Prisma.InputJsonValue,
-        summary,
+        input: prepared.input as Prisma.InputJsonValue,
+        summary: prepared.summary,
+        claim: prepared.claim,
       },
       select: { id: true },
     });
@@ -92,7 +117,7 @@ export async function createProposal(
       },
       tx,
     );
-    return { id: p.id, summary };
+    return { id: p.id, summary: prepared.summary };
   });
 }
 

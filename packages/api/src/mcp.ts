@@ -10,8 +10,10 @@
  *    business logic lives here: tenant isolation, validation, audit events and
  *    rate limits are the procedures' own.
  *  - Read tools answer directly. Write tools QUEUE A PROPOSAL (agent.propose)
- *    for a person to approve in the app, unless the key was created with
- *    write access, in which case they call the mutation itself.
+ *    for a person to approve in the app, unless the key has write access
+ *    (created with it, AND its creator is still an owner/admin), in which
+ *    case they call the mutation itself. Starting an agent run spends AI
+ *    budget, so it needs write access too.
  *  - Stateless: a fresh server + transport per request, JSON responses, no
  *    session id. Nothing to pin to a replica, nothing to expire.
  */
@@ -174,11 +176,27 @@ export function createMcpServer(
   server.registerTool(
     "agent_start",
     {
-      description:
-        "Start an agent run on a goal in this workspace. It runs in the background; its changes are proposals a person approves. Returns the run id (see agent_run).",
+      description: principal.canWrite
+        ? "Start an agent run on a goal in this workspace. It runs in the background and costs AI spend; its changes are proposals a person approves. Returns the run id (see agent_run)."
+        : "Start an agent run. Needs a key with write access (this key has none).",
       inputSchema: { goal: z.string().min(1).max(2000) },
     },
-    (input) => attempt(async () => json(await api.agent.start(input))),
+    (input) =>
+      attempt(async () => {
+        // A run spends the workspace's AI budget: only a write key may start one.
+        if (!principal.canWrite) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "This API key cannot start agent runs: that needs a key with write access, created by an owner or admin.",
+              },
+            ],
+          };
+        }
+        return json(await api.agent.start(input));
+      }),
   );
 
   server.registerTool(

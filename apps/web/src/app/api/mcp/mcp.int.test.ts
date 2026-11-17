@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { db } from "@repo/db";
 import { createTenant, type TestTenant } from "@repo/db/testing";
 
-import { POST } from "./route";
+import { DELETE, GET, POST } from "./route";
 
 let rpcId = 0;
 
@@ -77,6 +77,14 @@ describe("/api/mcp", () => {
     expect((await rpc(`tk_${"x".repeat(43)}`, "tools/list")).status).toBe(401);
   });
 
+  it("GET and DELETE are 405 (stateless: no stream to open, no session to end)", async () => {
+    for (const handler of [GET, DELETE]) {
+      const res = handler();
+      expect(res.status).toBe(405);
+      expect(res.headers.get("allow")).toBe("POST");
+    }
+  });
+
   it("lists the tools over the official transport", async () => {
     const a = await createTenant("mcp-list");
     const { secret } = await keyFor(a);
@@ -132,6 +140,8 @@ describe("/api/mcp", () => {
       source: "mcp",
       tool: "items_create",
       status: "pending",
+      proposedById: a.userId,
+      apiKeyId: id,
     });
     // The audit row says which key did it.
     const audit = await db.auditEvent.findFirstOrThrow({
@@ -163,6 +173,32 @@ describe("/api/mcp", () => {
         await db.item.findMany({ where: { organizationId: a.organizationId } })
       ).map((i) => i.title),
     ).toEqual(["direct"]);
+  });
+
+  it("a write key acts only while its creator is still an owner/admin", async () => {
+    const a = await createTenant("mcp-demoted");
+    const { secret } = await keyFor(a, true);
+    await db.member.updateMany({
+      where: { organizationId: a.organizationId, userId: a.userId },
+      data: { role: "member" },
+    });
+    const r = (await call(secret, "items_create", { title: "after demotion" }))
+      .ok as { applied: boolean; proposalId: string };
+    expect(r.applied).toBe(false);
+    expect(
+      await db.item.count({ where: { organizationId: a.organizationId } }),
+    ).toBe(0);
+  });
+
+  it("starting an agent run (it spends AI budget) needs a write key", async () => {
+    const a = await createTenant("mcp-start");
+    const { secret } = await keyFor(a);
+    expect(await call(secret, "agent_start", { goal: "tidy" })).toEqual({
+      error: expect.stringMatching(/needs a key with write access/),
+    });
+    expect(
+      await db.agentRun.count({ where: { organizationId: a.organizationId } }),
+    ).toBe(0);
   });
 
   it("a revoked key stops working", async () => {

@@ -37,6 +37,7 @@ export type StopReason =
   | "truncated"
   | "disabled"
   | "over_budget"
+  | "forbidden"
   | "error";
 
 export type StepKind = "model" | "tool_call" | "tool_result" | "proposal";
@@ -48,12 +49,14 @@ export interface Recorder {
     payload: Record<string, unknown>,
     usage?: { inputTokens: number; outputTokens: number; costUsd: number },
   ): Promise<void>;
-  /** Queue a write tool call for a person. Returns the proposal id. */
+  /**
+   * Queue a write tool call for a person (validated, summarised from the
+   * database). Throws a typed error when the proposal makes no sense.
+   */
   propose(p: {
     tool: string;
     input: unknown;
-    summary: string;
-  }): Promise<string>;
+  }): Promise<{ id: string; summary: string }>;
   /** Has someone asked this run to stop? */
   cancelled(): Promise<boolean>;
 }
@@ -68,9 +71,15 @@ export interface LoopOptions {
   tools: readonly AgentTool[];
   model: Model;
   recorder: Recorder;
-  context: ToolContext;
+  /**
+   * Runs a read tool with its context. Production: inside a READ-ONLY
+   * transaction (tool.ts readOnly), so a read tool cannot write.
+   */
+  read: <T>(fn: (ctx: ToolContext) => Promise<T>) => Promise<T>;
   maxSteps: number;
   maxCostUsd: number;
+  /** A model turn longer than this is aborted and fails the run. */
+  turnTimeoutMs?: number;
   /** Aborted when the run is cancelled mid-turn. */
   signal?: AbortSignal;
 }
@@ -144,16 +153,30 @@ export async function runLoop(o: LoopOptions): Promise<LoopResult> {
       return end("cancelled", "Cancelled.");
     }
 
+    // One signal for the turn: cancellation, or the turn's own time limit.
+    // An abort is a hard wall, whatever the SDK's own retries would do.
+    const timeout = o.turnTimeoutMs
+      ? AbortSignal.timeout(o.turnTimeoutMs)
+      : undefined;
+    const signals = [o.signal, timeout].filter(
+      (x): x is AbortSignal => x !== undefined,
+    );
     let r: ConverseResult;
     try {
       r = await o.model({
         system: SYSTEM_PROMPT,
         transcript,
         tools: specs,
-        ...(o.signal ? { signal: o.signal } : {}),
+        ...(signals.length ? { signal: AbortSignal.any(signals) } : {}),
       });
     } catch (err) {
       if (o.signal?.aborted) return end("cancelled", "Cancelled.");
+      if (timeout?.aborted) {
+        return end(
+          "error",
+          `A model turn took longer than ${Math.ceil(o.turnTimeoutMs! / 1000)}s.`,
+        );
+      }
       const c = classify(err);
       if (c.stop === "error") console.error("[agent] model call failed:", err);
       return end(c.stop, c.error);
@@ -195,7 +218,11 @@ export async function runLoop(o: LoopOptions): Promise<LoopResult> {
         "The model's reply was cut off at the output limit.",
       );
     }
-    if (r.stop === "pause") continue; // send the turn back as is
+    if (r.stop === "pause") {
+      // Sent back as is next turn — but a paused turn still cost money.
+      if (costUsd >= o.maxCostUsd) return end("max_cost", overCost(o));
+      continue;
+    }
     if (r.toolCalls.length === 0) return end("done", null);
 
     const results: ToolResult[] = [];
@@ -216,15 +243,13 @@ export async function runLoop(o: LoopOptions): Promise<LoopResult> {
     }
     transcript.push({ role: "tool", results });
 
-    if (costUsd >= o.maxCostUsd) {
-      return end(
-        "max_cost",
-        `Stopped at the per-run spend limit ($${o.maxCostUsd}).`,
-      );
-    }
+    if (costUsd >= o.maxCostUsd) return end("max_cost", overCost(o));
   }
   return end("max_steps", `Stopped after ${o.maxSteps} model turns.`);
 }
+
+const overCost = (o: LoopOptions) =>
+  `Stopped at the per-run spend limit ($${o.maxCostUsd}).`;
 
 /** One tool call → its result for the model. Never throws for a tool's "no". */
 async function runTool(
@@ -246,22 +271,16 @@ async function runTool(
 
   try {
     if (tool.effect === "read") {
-      const out = await tool.run(o.context, parsed.data);
+      const out = await o.read((ctx) => tool.run(ctx, parsed.data));
       return {
         id: call.id,
         name: call.name,
         content: clip(JSON.stringify(out ?? null), MAX_RESULT_CHARS),
       };
     }
-    const problem = tool.check
-      ? await tool.check(o.context, parsed.data)
-      : null;
-    if (problem) return fail(problem);
-    const summary = tool.describe(parsed.data);
-    const proposalId = await o.recorder.propose({
+    const { id: proposalId, summary } = await o.recorder.propose({
       tool: tool.name,
       input: parsed.data,
-      summary,
     });
     await o.recorder.step("proposal", { proposalId, tool: tool.name, summary });
     return {

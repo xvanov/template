@@ -11,7 +11,9 @@
  * the same `orgProcedure` checks as a browser session — so a key whose
  * creator has left the organization stops working, and a revoked key is
  * refused. `canWrite` decides whether MCP write tools act directly or queue a
- * proposal (see ./mcp.ts).
+ * proposal (see ./mcp.ts) — and it holds only while the creator is STILL an
+ * owner or admin of the key's organization, checked on every request: a
+ * demoted admin's write key quietly becomes a proposals-only key.
  */
 import { createHash, randomBytes } from "node:crypto";
 import type { PrismaClient } from "@repo/db";
@@ -70,6 +72,21 @@ export async function authenticateApiKey(
     },
   });
   if (!key || key.revokedAt) return null;
+  const member = key.canWrite
+    ? await db.member.findUnique({
+        where: {
+          organizationId_userId: {
+            organizationId: key.organizationId,
+            userId: key.createdBy.id,
+          },
+        },
+        select: { role: true },
+      })
+    : null;
+  // better-auth stores multiple roles comma-separated ("owner,admin").
+  const roles = (member?.role ?? "").split(",").map((r) => r.trim());
+  const canWrite =
+    key.canWrite && (roles.includes("owner") || roles.includes("admin"));
   if (
     !key.lastUsedAt ||
     Date.now() - key.lastUsedAt.getTime() > TOUCH_EVERY_MS
@@ -83,7 +100,7 @@ export async function authenticateApiKey(
   }
   return {
     id: key.id,
-    canWrite: key.canWrite,
+    canWrite,
     organizationId: key.organizationId,
     userId: key.createdBy.id,
     user: key.createdBy,

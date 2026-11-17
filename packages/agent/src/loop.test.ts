@@ -11,6 +11,7 @@ import { z } from "zod";
 
 import { NotFoundError } from "./errors";
 import { classify, runLoop, type Model, type Recorder } from "./loop";
+import { prepareProposal } from "./proposals";
 import { TOOLS } from "./registry";
 import {
   defineReadTool,
@@ -18,6 +19,7 @@ import {
   TOOL_NAME,
   toolSpec,
   type ToolContext,
+  type WriteTool,
 } from "./tool";
 
 /** One scripted model turn. */
@@ -68,9 +70,19 @@ function memoryRecorder(cancelAfter = Infinity) {
   let checks = 0;
   const recorder: Recorder = {
     step: async (kind, payload) => void steps.push({ kind, payload }),
+    // What createProposal does, minus the database: validate + summarise.
     propose: async (p) => {
-      proposals.push(p);
-      return `prop_${proposals.length}`;
+      const prepared = await prepareProposal(
+        tools.find((t) => t.name === p.tool) as WriteTool,
+        ctx,
+        p.input,
+      );
+      proposals.push({
+        tool: p.tool,
+        input: prepared.input,
+        summary: prepared.summary,
+      });
+      return { id: `prop_${proposals.length}`, summary: prepared.summary };
     },
     cancelled: async () => ++checks > cancelAfter,
   };
@@ -90,8 +102,10 @@ const remove = defineWriteTool({
   name: "things_delete",
   description: "Delete a thing",
   input: z.object({ id: z.string() }),
-  describe: (i) => `Delete thing ${i.id}`,
-  check: async (_ctx, i) => (i.id === "missing" ? "No such thing." : null),
+  summarize: async (_ctx, i) => {
+    if (i.id === "missing") throw new NotFoundError("No such thing.");
+    return `Delete thing ${i.id}`;
+  },
   apply,
 });
 const tools = [search, remove];
@@ -103,7 +117,7 @@ const loop = (model: Model, recorder: Recorder, over = {}) =>
     tools,
     model,
     recorder,
-    context: ctx,
+    read: (fn) => fn(ctx),
     maxSteps: 5,
     maxCostUsd: 1,
     ...over,
@@ -273,6 +287,35 @@ describe("runLoop", () => {
       "user",
       "assistant",
     ]);
+  });
+
+  it("a paused turn counts against the per-run spend limit too", async () => {
+    const { model } = scripted(
+      turn({ stop: "pause", costUsd: 0.6 }),
+      turn({ text: "never reached" }),
+    );
+    expect(
+      await loop(model, memoryRecorder().recorder, { maxCostUsd: 0.5 }),
+    ).toMatchObject({ stopReason: "max_cost", turns: 1 });
+  });
+
+  it("aborts a model turn that runs past its time limit", async () => {
+    let aborted = false;
+    const hang: Model = (opts) =>
+      new Promise((_resolve, reject) => {
+        opts.signal?.addEventListener("abort", () => {
+          aborted = true;
+          reject(new Error("aborted"));
+        });
+      });
+    const r = await loop(hang, memoryRecorder().recorder, {
+      turnTimeoutMs: 20,
+    });
+    expect(aborted).toBe(true);
+    expect(r).toMatchObject({
+      stopReason: "error",
+      error: "A model turn took longer than 1s.",
+    });
   });
 
   it("stops when cancelled, before the next turn", async () => {

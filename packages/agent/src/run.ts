@@ -17,8 +17,8 @@
  * failure ("error": a provider outage, a bug) tells the operator, at LOW
  * priority (the digest), deduped per tenant per day.
  *
- * A run left "running" by a dead worker is marked failed by the nightly
- * maintenance job (abandonStaleRuns).
+ * A run left "running" by a dead worker is marked failed by the 15-minute
+ * operator tick (abandonStaleRuns), once past runCutoffMs().
  */
 import { converse } from "@repo/ai";
 import {
@@ -33,10 +33,23 @@ import { notifyOperator } from "@repo/notify";
 import { runLoop, type LoopResult, type Model, type Recorder } from "./loop";
 import { createProposal, type Audit } from "./proposals";
 import { TOOLS } from "./registry";
-import type { AgentTool } from "./tool";
+import { readOnly, type AgentTool } from "./tool";
 
 /** How often a running run looks for a cancel request (and aborts the turn). */
 const CANCEL_POLL_MS = 2_000;
+
+/** The longest one model turn may take; the turn is aborted after it. */
+export const TURN_TIMEOUT_MS = 120_000;
+
+/**
+ * The longest a run can legitimately stay "running": every turn at its time
+ * limit, plus slack for tools and the database. A "running" run older than
+ * this has no live worker behind it: the operator tick marks it failed
+ * (abandonStaleRuns), and Cancel ends it at once.
+ */
+export function runCutoffMs(): number {
+  return env().AGENT_MAX_STEPS * TURN_TIMEOUT_MS + 5 * 60_000;
+}
 
 export async function startRun(
   db: PrismaClient,
@@ -67,6 +80,7 @@ export async function startRun(
 
 export interface ExecuteDeps {
   db?: PrismaClient;
+  turnTimeoutMs?: number;
   model?: Model;
   tools?: readonly AgentTool[];
   notify?: typeof notifyOperator;
@@ -96,6 +110,30 @@ export async function executeRun(
     select: { goal: true, createdById: true },
   });
 
+  // The run acts for whoever started it. If they have left the workspace (or
+  // were deleted) since, it must not act at all.
+  const member = run.createdById
+    ? await db.member.findUnique({
+        where: {
+          organizationId_userId: { organizationId, userId: run.createdById },
+        },
+        select: { id: true },
+      })
+    : null;
+  if (!member) {
+    await db.agentRun.updateMany({
+      where: { ...where, status: "running" },
+      data: {
+        status: "failed",
+        stopReason: "forbidden",
+        error:
+          "The person who started this run is no longer a member of this workspace.",
+        finishedAt: new Date(),
+      },
+    });
+    return { runId, skipped: "starter is no longer a member" };
+  }
+
   const e = env();
   const model: Model =
     deps.model ??
@@ -109,6 +147,7 @@ export async function executeRun(
         userId: run.createdById,
         tier: e.AGENT_TIER,
         maxOutputTokens: 8_000,
+        timeoutMs: TURN_TIMEOUT_MS,
       }));
 
   const abort = new AbortController();
@@ -131,9 +170,13 @@ export async function executeRun(
       tools: deps.tools ?? TOOLS,
       model,
       recorder,
-      context: { organizationId, userId: run.createdById, db },
+      read: (fn) =>
+        readOnly(db, (tx) =>
+          fn({ organizationId, userId: run.createdById, db: tx }),
+        ),
       maxSteps: e.AGENT_MAX_STEPS,
       maxCostUsd: e.AGENT_MAX_COST_USD,
+      turnTimeoutMs: deps.turnTimeoutMs ?? TURN_TIMEOUT_MS,
       signal: abort.signal,
     });
   } catch (err) {
@@ -158,8 +201,10 @@ export async function executeRun(
       : result.stopReason === "cancelled"
         ? "cancelled"
         : "failed";
-  await db.agentRun.updateMany({
-    where,
+  // Only a run still "running": if the stale-run sweep (or a cancel of a run
+  // presumed dead) settled it meanwhile, that outcome stands.
+  const saved = await db.agentRun.updateMany({
+    where: { ...where, status: "running" },
     data: {
       status,
       stopReason: result.stopReason,
@@ -186,6 +231,12 @@ export async function executeRun(
     });
   }
   const { text: _text, ...rest } = result;
+  if (saved.count === 0) {
+    return {
+      runId,
+      skipped: "settled elsewhere while running (swept or cancelled)",
+    };
+  }
   return { runId, status, ...rest };
 }
 
@@ -218,8 +269,8 @@ export function dbRecorder(
         },
       });
     },
-    async propose(p) {
-      const { id } = await createProposal(db, {
+    propose(p) {
+      return createProposal(db, {
         organizationId: run.organizationId,
         userId: run.userId,
         runId: run.runId,
@@ -228,7 +279,6 @@ export function dbRecorder(
         input: p.input,
         audit,
       });
-      return id;
     },
     async cancelled() {
       const r = await db.agentRun.findFirst({
@@ -240,13 +290,19 @@ export function dbRecorder(
   };
 }
 
-/** Runs a dead worker left "running": failed, so nobody waits on them. */
+/**
+ * Runs a dead worker left "running": failed, so nobody waits on them. Called
+ * from the 15-minute operator tick (packages/jobs).
+ */
 export async function abandonStaleRuns(
   db: PrismaClient = defaultDb,
-  olderThanMs = 60 * 60 * 1000,
+  olderThanMs = runCutoffMs(),
+  /** Only this tenant's runs (tests); default every tenant. */
+  organizationId?: string,
 ): Promise<number> {
   const { count } = await db.agentRun.updateMany({
     where: {
+      ...(organizationId ? { organizationId } : {}),
       status: "running",
       startedAt: { lt: new Date(Date.now() - olderThanMs) },
     },

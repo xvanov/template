@@ -23,11 +23,33 @@ import { z } from "zod";
 /** Anthropic and OpenAI both require this (no dots). */
 export const TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
 
+/**
+ * What a read tool (and a write tool's `summarize`) gets. `db` is a
+ * READ-ONLY transaction (`SET TRANSACTION READ ONLY`, see readOnly below): a
+ * read tool that tries to write fails in Postgres, not in review.
+ */
 export interface ToolContext {
   organizationId: string;
   /** Who the run (or the MCP key) acts for. Null if that user was deleted. */
   userId: string | null;
-  db: PrismaClient;
+  db: Prisma.TransactionClient;
+}
+
+/**
+ * Run `fn` in a read-only transaction. Postgres refuses any write inside it
+ * ("cannot execute INSERT in a read-only transaction").
+ */
+export function readOnly<T>(
+  db: PrismaClient,
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  return db.$transaction(
+    async (tx) => {
+      await tx.$executeRawUnsafe("SET TRANSACTION READ ONLY");
+      return fn(tx);
+    },
+    { timeout: 15_000 },
+  );
 }
 
 /** Writes an audit event as the reviewer, in the approve transaction. */
@@ -66,14 +88,19 @@ export interface WriteTool<
   S extends z.ZodType = z.ZodType,
 > extends ToolBase<S> {
   effect: "write";
-  /** One line for the approval queue: what applying this would do. */
-  describe(input: z.infer<S>): string;
   /**
-   * Optional, at proposal time: why this proposal makes no sense (an id that
-   * does not exist in this tenant). The model gets the message back as a
-   * tool error instead of a proposal. Return null when fine.
+   * At proposal time: one line for the approval queue saying what applying
+   * this would do, built from the DATABASE (the real item title), never from
+   * the model's free text. Throw NotFoundError / DomainRuleError when the
+   * proposal makes no sense (an id that is not in this tenant): the model gets
+   * the message back instead of a proposal being queued. Runs read-only.
    */
-  check?(ctx: ToolContext, input: z.infer<S>): Promise<string | null>;
+  summarize(ctx: ToolContext, input: z.infer<S>): Promise<string>;
+  /**
+   * Optional: the proposer's own words worth showing the reviewer (a delete's
+   * "reason"). Shown as an unverified claim, apart from the summary.
+   */
+  claim?(input: z.infer<S>): string | null | undefined;
   /**
    * Do it. Runs only on approval, in the approve transaction: database writes
    * only, through `ctx.tx`, with an audit event per change. For a side

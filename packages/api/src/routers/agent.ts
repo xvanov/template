@@ -17,6 +17,7 @@ import {
   approveProposal,
   createProposal,
   rejectProposal,
+  runCutoffMs,
   startRun,
   TOOLS,
   toolSpec,
@@ -36,7 +37,10 @@ const PROPOSAL_FIELDS = {
   input: true,
   editedInput: true,
   summary: true,
+  claim: true,
   status: true,
+  apiKeyId: true,
+  proposedBy: { select: { id: true, name: true } },
   error: true,
   result: true,
   createdAt: true,
@@ -89,7 +93,9 @@ export const agentRouter = createTRPCRouter({
 
   /**
    * Stop a run. A queued run is cancelled at once; a running one at its next
-   * turn (the worker polls, and aborts the model call in flight).
+   * turn (the worker polls, and aborts the model call in flight). A run still
+   * "running" past runCutoffMs() has no live worker behind it, so it is
+   * cancelled at once too rather than waiting for the stale-run sweep.
    */
   cancel: orgProcedure.input(z.object({ id })).mutation(({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
@@ -104,6 +110,22 @@ export const agentRouter = createTRPCRouter({
           finishedAt: now,
         },
       });
+      if (count === 0) {
+        ({ count } = await tx.agentRun.updateMany({
+          where: {
+            ...where,
+            status: "running",
+            startedAt: { lt: new Date(now.getTime() - runCutoffMs()) },
+          },
+          data: {
+            status: "cancelled",
+            stopReason: "cancelled",
+            error: "Cancelled (no worker was running it).",
+            cancelRequestedAt: now,
+            finishedAt: now,
+          },
+        }));
+      }
       if (count === 0) {
         ({ count } = await tx.agentRun.updateMany({
           where: { ...where, status: "running", cancelRequestedAt: null },
@@ -229,6 +251,7 @@ export const agentRouter = createTRPCRouter({
       createProposal(ctx.db, {
         organizationId: ctx.organizationId,
         userId: ctx.user.id,
+        apiKeyId: ctx.apiKey?.id ?? null,
         source: ctx.apiKey ? "mcp" : "user",
         tool: input.tool,
         input: input.input,

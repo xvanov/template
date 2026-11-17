@@ -40,7 +40,7 @@ const schemas = {
   /** Demo scheduled job: prune soft state and log a heartbeat. */
   "maintenance.nightly": z.object({}),
 
-  /** Operator notifications' 15-minute tick: retry cap-held alerts, send a due digest. */
+  /** The 15-minute operator tick: retry cap-held alerts, send a due digest, fail stuck agent runs. */
   "operator.digest": z.object({}),
   /** Demo job: something a webhook or a UI action would fire. */
   "notify.digest": z.object({
@@ -147,13 +147,7 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
           status: { not: "held" },
         },
       });
-      // Agent runs a dead worker left "running" (nobody else will settle them).
-      const abandonedAgentRuns = await abandonStaleRuns(db);
-      return {
-        prunedJobRuns: count,
-        prunedNotifications: notifications.count,
-        abandonedAgentRuns,
-      };
+      return { prunedJobRuns: count, prunedNotifications: notifications.count };
     },
   },
 
@@ -161,8 +155,13 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     scope: "system",
     schema: schemas["operator.digest"],
     // Due-ness is decided inside (NOTIFY_DIGEST_TIMES in APP_TIMEZONE): most
-    // ticks retry nothing and find no digest due.
-    run: () => runOperatorTick(),
+    // ticks retry nothing and find no digest due. The same tick fails agent
+    // runs a dead worker left "running" (past runCutoffMs()), so a stuck run
+    // shows as failed within ~15 minutes of its cutoff, not the next night.
+    run: async () => {
+      const abandonedAgentRuns = await abandonStaleRuns(db);
+      return { ...(await runOperatorTick()), abandonedAgentRuns };
+    },
   },
   "notify.digest": {
     scope: "org",

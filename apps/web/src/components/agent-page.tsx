@@ -394,9 +394,21 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
           {proposal.tool}
         </Badge>
         <span className="text-xs text-muted-foreground">
-          from {proposal.source} · {format.date(proposal.createdAt, "datetime")}
+          from {proposal.source}
+          {proposal.proposedBy ? ` for ${proposal.proposedBy.name}` : ""} ·{" "}
+          {format.date(proposal.createdAt, "datetime")}
         </span>
       </div>
+      {proposal.claim ? (
+        // The proposer's own words: shown, but not as fact. The summary above
+        // is what the database says would change.
+        <p className="text-sm">
+          <span className="text-muted-foreground">
+            The agent says (unverified):
+          </span>{" "}
+          <q className="italic">{proposal.claim}</q>
+        </p>
+      ) : null}
       {editing ? (
         <>
           <Textarea

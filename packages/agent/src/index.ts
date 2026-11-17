@@ -29,6 +29,7 @@ export {
 export {
   approveProposal,
   createProposal,
+  prepareProposal,
   rejectProposal,
   type ApproveResult,
   type Audit,
@@ -39,7 +40,9 @@ export {
   abandonStaleRuns,
   dbRecorder,
   executeRun,
+  runCutoffMs,
   startRun,
+  TURN_TIMEOUT_MS,
   type ExecuteDeps,
   type ExecuteOutcome,
 } from "./run";
@@ -47,6 +50,7 @@ export {
   defineReadTool,
   defineWriteTool,
   issuesLine,
+  readOnly,
   TOOL_NAME,
   toolSpec,
   type AgentTool,

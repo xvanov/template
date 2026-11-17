@@ -20,6 +20,7 @@
     "@repo/ai": "*",
     "@repo/auth": "*",
     "@repo/db": "*",
+    "@repo/domain": "*",
     "@repo/env": "*",
     "@repo/jobs": "*",
     "@repo/security": "*",

@@ -121,3 +121,15 @@ ALTER TABLE "api_key" ADD CONSTRAINT "api_key_organizationId_fkey" FOREIGN KEY (
 
 -- AddForeignKey
 ALTER TABLE "api_key" ADD CONSTRAINT "api_key_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- Proposer, API key and the proposer's own words on agent_proposal
+-- AlterTable
+ALTER TABLE "agent_proposal" ADD COLUMN     "apiKeyId" TEXT,
+ADD COLUMN     "claim" TEXT,
+ADD COLUMN     "proposedById" TEXT;
+
+-- AddForeignKey
+ALTER TABLE "agent_proposal" ADD CONSTRAINT "agent_proposal_proposedById_fkey" FOREIGN KEY ("proposedById") REFERENCES "user"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "agent_proposal" ADD CONSTRAINT "agent_proposal_apiKeyId_fkey" FOREIGN KEY ("apiKeyId") REFERENCES "api_key"("id") ON DELETE SET NULL ON UPDATE CASCADE;

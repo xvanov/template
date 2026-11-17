@@ -54,4 +54,16 @@ async function handle(req: Request): Promise<Response> {
   return handleMcpRequest(req, principal);
 }
 
-export { handle as DELETE, handle as GET, handle as POST };
+/**
+ * Stateless server: no server-initiated stream (GET) and no session to end
+ * (DELETE). A 405 tells a client so; an empty 200 event stream would have it
+ * reconnect in a loop and burn the key's rate limit.
+ */
+function methodNotAllowed(): Response {
+  return Response.json(
+    { error: "Method not allowed: this MCP server is stateless, POST only." },
+    { status: 405, headers: { Allow: "POST" } },
+  );
+}
+
+export { handle as POST, methodNotAllowed as GET, methodNotAllowed as DELETE };

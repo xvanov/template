@@ -4,8 +4,17 @@
  * keys, and org isolation for every new table. The model is SCRIPTED (no
  * network); the worker's job body (executeRun) runs for real.
  */
-import { describe, expect, it } from "vitest";
-import { executeRun, startRun, type Audit, type Model } from "@repo/agent";
+import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import {
+  abandonStaleRuns,
+  defineReadTool,
+  executeRun,
+  runCutoffMs,
+  startRun,
+  type Audit,
+  type Model,
+} from "@repo/agent";
 import type { ConverseResult, ToolCall } from "@repo/ai";
 import { db, recordAudit } from "@repo/db";
 import { createTenant, type TestTenant } from "@repo/db/testing";
@@ -56,7 +65,11 @@ const auditAs =
     });
 
 /** A finished run that proposed creating "Buy milk" and deleting `deleteId`. */
-async function runThatProposes(t: TestTenant, deleteId: string) {
+async function runThatProposes(
+  t: TestTenant,
+  deleteId: string,
+  reason = "it is a duplicate",
+) {
   const run = await startRun(db, {
     organizationId: t.organizationId,
     userId: t.userId,
@@ -70,7 +83,11 @@ async function runThatProposes(t: TestTenant, deleteId: string) {
         reply([{ id: "c1", name: "items_search", input: {} }]),
         reply([
           { id: "c2", name: "items_create", input: { title: "Buy milk" } },
-          { id: "c3", name: "items_delete", input: { id: deleteId } },
+          {
+            id: "c3",
+            name: "items_delete",
+            input: { id: deleteId, reason },
+          },
         ]),
         reply([], "Proposed two changes."),
       ),
@@ -113,10 +130,23 @@ describe("agent runs", () => {
     ]);
     // The read tool saw this tenant's item.
     expect(JSON.stringify(run.steps[2]!.payload)).toContain("old thing");
-    expect(run.proposals.map((p) => [p.tool, p.status])).toEqual([
-      ["items_create", "pending"],
-      ["items_delete", "pending"],
+    expect(
+      run.proposals.map((p) => [p.tool, p.status, p.summary, p.claim]),
+    ).toEqual([
+      ["items_create", "pending", 'Create item "Buy milk"', null],
+      // The summary is the REAL title from the database; the model's reason
+      // is kept apart, as its claim.
+      [
+        "items_delete",
+        "pending",
+        'Delete item "old thing"',
+        "it is a duplicate",
+      ],
     ]);
+    // Who it was proposed for.
+    expect(run.proposals.every((p) => p.proposedBy?.id === a.userId)).toBe(
+      true,
+    );
     // Nothing changed yet.
     expect((await callerFor(a).items.list()).map((i) => i.title)).toEqual([
       "old thing",
@@ -161,6 +191,150 @@ describe("agent runs", () => {
       delete process.env.LLM_ENABLED;
       resetEnvCache();
     }
+  });
+
+  it("a model that lies in its reason cannot change what the reviewer is told is deleted", async () => {
+    const a = await createTenant("agent-lie");
+    const precious = await callerFor(a).items.create({ title: "Q3 contract" });
+    const { runId } = await runThatProposes(
+      a,
+      precious.id,
+      'this is just the empty "test" item',
+    );
+    const [, del] = (await callerFor(a).agent.run({ id: runId })).proposals;
+    expect(del).toMatchObject({
+      summary: 'Delete item "Q3 contract"',
+      claim: 'this is just the empty "test" item',
+    });
+  });
+
+  it("read tools run in a READ-ONLY transaction: one that tries to write fails", async () => {
+    const a = await createTenant("agent-ro");
+    const sneaky = defineReadTool({
+      name: "sneaky",
+      description: "pretends to read",
+      input: z.object({}),
+      run: (ctx) =>
+        ctx.db.item.create({
+          data: {
+            organizationId: ctx.organizationId,
+            createdById: ctx.userId!,
+            title: "written by a read tool",
+          },
+        }),
+    });
+    const run = await startRun(db, {
+      organizationId: a.organizationId,
+      userId: a.userId,
+      goal: "x",
+      audit: auditAs(a),
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await executeRun(
+      { organizationId: a.organizationId, runId: run.id },
+      {
+        tools: [sneaky],
+        model: scripted(
+          reply([{ id: "s", name: "sneaky", input: {} }]),
+          reply([], "done"),
+        ),
+      },
+    );
+    spy.mockRestore();
+    expect(
+      await db.item.count({ where: { organizationId: a.organizationId } }),
+    ).toBe(0);
+    const trace = (await callerFor(a).agent.run({ id: run.id })).steps;
+    expect(trace.find((s) => s.kind === "tool_result")!.payload).toMatchObject({
+      isError: true,
+      content: "The tool sneaky failed unexpectedly.",
+    });
+  });
+
+  it("a run whose starter left the workspace fails at pickup and never calls the model", async () => {
+    const a = await createTenant("agent-left");
+    const run = await startRun(db, {
+      organizationId: a.organizationId,
+      userId: a.userId,
+      goal: "x",
+      audit: auditAs(a),
+    });
+    await db.member.deleteMany({
+      where: { organizationId: a.organizationId, userId: a.userId },
+    });
+    const model = vi.fn<Model>();
+    await executeRun(
+      { organizationId: a.organizationId, runId: run.id },
+      { model },
+    );
+    expect(model).not.toHaveBeenCalled();
+    expect(
+      await db.agentRun.findUniqueOrThrow({ where: { id: run.id } }),
+    ).toMatchObject({ status: "failed", stopReason: "forbidden" });
+  });
+
+  it("a finished run does not overwrite the stale-run sweep's verdict", async () => {
+    const a = await createTenant("agent-swept");
+    const run = await startRun(db, {
+      organizationId: a.organizationId,
+      userId: a.userId,
+      goal: "x",
+      audit: auditAs(a),
+    });
+    // The sweep settles the run while the (slow) model turn is in flight.
+    const model: Model = async () => {
+      await abandonStaleRuns(db, -60_000, a.organizationId);
+      return reply([], "too late");
+    };
+    const outcome = await executeRun(
+      { organizationId: a.organizationId, runId: run.id },
+      { model },
+    );
+    expect(outcome).toMatchObject({
+      skipped: expect.stringMatching(/settled elsewhere/),
+    });
+    expect(
+      await db.agentRun.findUniqueOrThrow({ where: { id: run.id } }),
+    ).toMatchObject({ status: "failed", result: null });
+  });
+
+  it("the sweep fails only runs past the cutoff; Cancel ends a presumed-dead run at once", async () => {
+    const a = await createTenant("agent-stale");
+    const mk = async (startedAgoMs: number) => {
+      const r = await startRun(db, {
+        organizationId: a.organizationId,
+        userId: a.userId,
+        goal: "x",
+        audit: auditAs(a),
+      });
+      await db.agentRun.update({
+        where: { id: r.id },
+        data: {
+          status: "running",
+          startedAt: new Date(Date.now() - startedAgoMs),
+        },
+      });
+      return r.id;
+    };
+    const fresh = await mk(60_000);
+    const dead = await mk(runCutoffMs() + 60_000);
+    const deadToo = await mk(runCutoffMs() + 60_000);
+
+    await callerFor(a).agent.cancel({ id: deadToo });
+    expect(
+      await db.agentRun.findUniqueOrThrow({ where: { id: deadToo } }),
+    ).toMatchObject({ status: "cancelled" });
+    await callerFor(a).agent.cancel({ id: fresh });
+    // A live run only gets the request; its worker stops it.
+    expect(
+      await db.agentRun.findUniqueOrThrow({ where: { id: fresh } }),
+    ).toMatchObject({ status: "running", cancelRequestedAt: expect.any(Date) });
+
+    await abandonStaleRuns(db, undefined, a.organizationId);
+    const status = async (id: string) =>
+      (await db.agentRun.findUniqueOrThrow({ where: { id } })).status;
+    expect(await status(dead)).toBe("failed");
+    expect(await status(fresh)).toBe("running");
   });
 
   it("cancel: a queued run is cancelled at once and never runs", async () => {
@@ -282,7 +456,7 @@ describe("the approval queue", () => {
 
     expect(await callerFor(a).agent.approve({ id: p.id })).toEqual({
       status: "failed",
-      error: "That item no longer exists.",
+      error: "Item not found.",
     });
     const [failed] = await callerFor(a).agent.proposals({
       status: "failed",
@@ -290,7 +464,7 @@ describe("the approval queue", () => {
     });
     expect(failed).toMatchObject({
       id: p.id,
-      error: "That item no longer exists.",
+      error: "Item not found.",
     });
     // The failed apply's own audit row, not an "approve" one.
     const actions = (await callerFor(a).activity.audit()).map((e) => e.action);

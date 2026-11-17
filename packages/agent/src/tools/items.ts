@@ -2,20 +2,22 @@
  * The demo tools, over the template's Item model. The reference for adding
  * your own: one read tool, two write tools.
  *
- * Every query pins the tenant from the CONTEXT, and every write goes through
- * `updateMany`/`deleteMany` with the org in the `where` — the same rules as
- * packages/api/src/routers/items.ts, whose audit actions these reuse.
+ * The writes (and their input rules) are the DOMAIN FUNCTIONS in
+ * @repo/domain — the same ones the tRPC items router calls — so a proposal
+ * applied here and a click in the app make exactly the same change, with the
+ * same validation and the same audit action.
  */
+import {
+  createItem,
+  createItemInput,
+  findItem,
+  itemId,
+  NotFoundError,
+  removeItem,
+} from "@repo/domain";
 import { z } from "zod";
 
-import { NotFoundError } from "../errors";
 import { defineReadTool, defineWriteTool } from "../tool";
-
-const itemId = z
-  .string()
-  .min(1)
-  .max(64)
-  .describe("An item id from items_search.");
 
 export const itemsSearch = defineReadTool({
   name: "items_search",
@@ -46,30 +48,19 @@ export const itemsSearch = defineReadTool({
     }),
 });
 
+/** Marks an audit row as coming from an approved proposal. */
+const via = "agent.proposal";
+
 export const itemsCreate = defineWriteTool({
   name: "items_create",
   description: "Create an item in this workspace.",
-  input: z.object({
-    title: z.string().trim().min(1).max(200),
-    notes: z.string().trim().max(2000).optional(),
-  }),
-  describe: (input) => `Create item "${input.title}"`,
-  apply: async (ctx, input) => {
-    const item = await ctx.tx.item.create({
-      data: {
-        organizationId: ctx.organizationId,
-        title: input.title,
-        notes: input.notes,
-        createdById: ctx.userId,
-      },
-      select: { id: true, title: true },
-    });
-    await ctx.audit("item.create", {
-      targetId: item.id,
-      metadata: { title: item.title, via: "agent.proposal" },
-    });
-    return item;
-  },
+  input: createItemInput,
+  // The title IS what would be created, so it is the summary.
+  summarize: async (_ctx, input) => `Create item "${input.title}"`,
+  apply: (ctx, input) =>
+    createItem(ctx.tx, ctx, input, (action, opts) =>
+      ctx.audit(action, { ...opts, metadata: { title: input.title, via } }),
+    ),
 });
 
 export const itemsDelete = defineWriteTool({
@@ -77,32 +68,28 @@ export const itemsDelete = defineWriteTool({
   description:
     "Delete an item in this workspace (permanent). Use items_search first to find its id.",
   input: z.object({
-    id: itemId,
+    id: itemId.describe("An item id from items_search."),
     reason: z
       .string()
       .trim()
       .max(300)
       .optional()
-      .describe("Why, for the reviewer."),
+      .describe("Why, for the person reviewing the proposal."),
   }),
-  describe: (input) =>
-    `Delete item ${input.id}${input.reason ? ` (${input.reason})` : ""}`,
-  check: async (ctx, input) =>
-    (await ctx.db.item.count({
-      where: { id: input.id, organizationId: ctx.organizationId },
-    }))
-      ? null
-      : `No item ${input.id} in this workspace. Search first.`,
-  apply: async (ctx, input) => {
-    const { count } = await ctx.tx.item.deleteMany({
-      where: { id: input.id, organizationId: ctx.organizationId },
-    });
-    // Same message whether it never existed or another tenant owns it.
-    if (count === 0) throw new NotFoundError("That item no longer exists.");
-    await ctx.audit("item.delete", {
-      targetId: input.id,
-      metadata: { via: "agent.proposal" },
-    });
-    return { id: input.id, deleted: true };
+  // From the database: the reviewer sees the REAL title of what would be
+  // deleted, whatever the model claims about it.
+  summarize: async (ctx, input) => {
+    const item = await findItem(ctx.db, ctx.organizationId, input.id);
+    if (!item) {
+      throw new NotFoundError(
+        `No item ${input.id} in this workspace. Search first.`,
+      );
+    }
+    return `Delete item "${item.title}"`;
   },
+  claim: (input) => input.reason,
+  apply: (ctx, input) =>
+    removeItem(ctx.tx, ctx, { id: input.id }, (action, opts) =>
+      ctx.audit(action, { ...opts, metadata: { via } }),
+    ),
 });

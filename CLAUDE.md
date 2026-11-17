@@ -18,6 +18,8 @@ packages/db    Prisma schema + client (Postgres)
 packages/auth  better-auth: email+password, Google OAuth, organizations
 packages/ai    LLM calls routed by `provider/model` (Anthropic, OpenAI, Azure, local, Claude Code), priced + capped
 packages/jobs  job registry + queue + schedules
+packages/agent  agent runs: read tools run, write tools become proposals a person approves
+packages/domain  domain functions (input rules + writes) shared by tRPC routers and agent tools
 packages/storage  file storage: local disk or any S3-compatible bucket
 packages/email  outbound SMTP (nodemailer), ONLY via the outbound guard. Mailpit locally
 packages/outbound  the outbound guard: every outbound message passes it and is logged
@@ -264,8 +266,14 @@ cannot call tools and fails with a clear error. `agent.start` (tRPC) writes an
 `agent_run` row and enqueues the org job `agent.run`; the WORKER runs it, so a
 request never waits on a model. Bounds: `AGENT_MAX_STEPS` turns,
 `AGENT_MAX_COST_USD` per run, and the tenant's daily cap (calls are
-`discretionary`). Cancel is checked before every turn and aborts the call in
-flight. Every step lands in `agent_step` (the trace). Only an unexpected
+`discretionary`), and each model turn is aborted after 120s
+(`TURN_TIMEOUT_MS`). Cancel is checked before every turn and aborts the call
+in flight. At pickup the worker checks the run's starter is still a member;
+if not, the run fails without calling the model. A run still "running" past
+`runCutoffMs()` (max steps × turn timeout + 5 min) has no live worker: the
+15-minute operator tick marks it failed, Cancel ends it at once, and a late
+finish never overwrites either (the final save requires status "running").
+Every step lands in `agent_step` (the trace). Only an unexpected
 failure notifies the operator (low priority, once per tenant per day); "AI is
 off" or "over the cap" is the run's recorded outcome, not an alert.
 
@@ -278,24 +286,48 @@ proposal is decided once and never says "applied" for a change that rolled
 back. If `apply` throws (the item is gone), the proposal becomes `failed`
 with the message.
 
+**Domain functions, called by both tRPC and agent tools.** A write that a
+person can make in the app AND an agent can propose is defined once, in
+`packages/domain` (`items.ts` is the reference): the zod input schemas with
+their field limits, and `createItem(tx, actor, input, audit)`-style functions
+that take the transaction, the actor from the caller's context and an audit
+function bound to that transaction, write with `updateMany`/`deleteMany` and
+the org in the `where`, and throw `NotFoundError`. The tRPC router and the
+agent tool are then thin wrappers. `packages/api` and `packages/agent` never
+import each other; both import `packages/domain`.
+
 **Add a tool:** `defineReadTool` / `defineWriteTool` in
 `packages/agent/src/tools/` (`items.ts` is the reference), list it in
 `registry.ts`. Name it `[a-zA-Z0-9_-]` (no dots: both providers reject them).
-Take the tenant from the context, never from the input; writes go through
-`ctx.tx` with an audit event. `apply` is for database writes; for a side
-effect outside the database, enqueue a job from it. The unit test in
-`loop.test.ts` checks names and schemas of every registered tool.
+Take the tenant from the context, never from the input. A read tool gets a
+READ-ONLY transaction (`SET TRANSACTION READ ONLY`): if it writes, Postgres
+refuses. A write tool's `summarize` builds the queue's one-line summary from
+the DATABASE (the real title of what would be deleted), never from the
+model's text; the model's own words (a "reason") go in `claim` and are shown
+as unverified. `apply` calls the domain function with `ctx.tx`; it is for
+database writes, so for a side effect outside the database, enqueue a job
+from it. The unit test in `loop.test.ts` checks names and schemas of every
+registered tool.
 
 **MCP** is streamable HTTP at `/api/mcp`, stateless (a server per request,
 JSON responses), authenticated by a per-org API key (`Authorization: Bearer
 tk_...`; only its SHA-256 is stored; created and revoked by owners/admins via
-`apiKeys.*`, audited). A key acts as the member who made it, in the key's org
-only: if they leave, the key stops working (orgProcedure refuses an API key
-whose org it would otherwise fall back from). Each MCP tool calls the SAME
-tRPC procedure as the web app through a server-side caller
-(`packages/api/src/mcp.ts`): no business logic of its own. Read tools answer
-directly; write tools call `agent.propose` unless the key was created with
-"can write". Rate limited per key (`MCP_RATE_LIMIT_PER_MINUTE`) and per IP on
+`apiKeys.*`, audited). Key semantics:
+
+- A key acts as the member who made it, in the key's org only: if they leave,
+  the key stops working (orgProcedure refuses an API key whose org it would
+  otherwise fall back from). Revoked = refused, the same 401 as unknown.
+- "Can write" holds only while that member is STILL an owner/admin, checked
+  on every request; a demoted admin's write key becomes proposals-only.
+- Without write access: read tools work, write tools queue proposals
+  (recorded with `proposedById` and `apiKeyId`), and `agent_start` is
+  refused, since a run spends the workspace's AI budget.
+- POST only: GET and DELETE are 405 (stateless: no stream, no session).
+
+Each MCP tool calls the SAME tRPC procedure as the web app through a
+server-side caller (`packages/api/src/mcp.ts`): no business logic of its own.
+Read tools answer directly; write tools call `agent.propose` unless the key
+has write access. Rate limited per key (`MCP_RATE_LIMIT_PER_MINUTE`) and per IP on
 failed auth. Connect Claude Code:
 `claude mcp add --transport http app <APP_URL>/api/mcp --header "Authorization: Bearer tk_..."`.
 
