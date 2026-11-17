@@ -6,26 +6,11 @@
  * Rows with a null organizationId (system/auth mail, global actions) are never
  * returned to any tenant: the `where` always pins the tenant.
  */
-import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
-import { createTRPCRouter, orgProcedure } from "../trpc";
+import { adminOnlyProcedure, createTRPCRouter } from "../trpc";
 
-const adminProcedure = orgProcedure.use(async ({ ctx, next }) => {
-  const me = await ctx.db.member.findFirst({
-    where: { organizationId: ctx.organizationId, userId: ctx.user.id },
-    select: { role: true },
-  });
-  // better-auth stores multiple roles comma-separated ("owner,admin").
-  const roles = (me?.role ?? "").split(",").map((r) => r.trim());
-  if (!roles.includes("owner") && !roles.includes("admin")) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Only an owner or admin can view activity.",
-    });
-  }
-  return next();
-});
+const adminProcedure = adminOnlyProcedure("view activity");
 
 const page = {
   limit: z.number().int().min(1).max(200).default(50),

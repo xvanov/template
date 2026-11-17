@@ -27,15 +27,24 @@ import {
   jsonSchema,
   NoObjectGeneratedError,
   Output,
+  tool,
   type EmbeddingModel,
   type LanguageModel,
   type LanguageModelUsage,
+  type ModelMessage,
+  type ToolSet,
 } from "ai";
 
 import { LlmConfigError, LlmProviderError } from "../errors";
 import type { Effort, ProviderId, Route } from "../models";
 import type { TokenUsage } from "../pricing";
-import type { ProviderRequest, ProviderResult } from "./types";
+import type {
+  ChatEntry,
+  ProviderRequest,
+  ProviderResult,
+  ToolTurnRequest,
+  ToolTurnResult,
+} from "./types";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1";
 const DEEPSEEK_URL = "https://api.deepseek.com/v1";
@@ -223,6 +232,116 @@ export async function callOpenAiFamily(
         servedBy: route.id,
       };
     }
+    throw toProviderError(err, route.provider);
+  }
+}
+
+/** The provider-neutral transcript as AI SDK messages. */
+export function toModelMessages(transcript: ChatEntry[]): ModelMessage[] {
+  return transcript.flatMap((entry): ModelMessage[] => {
+    switch (entry.role) {
+      case "user":
+        return [{ role: "user", content: entry.text }];
+      case "assistant":
+        // The SDK's own response messages, reasoning parts included.
+        if (Array.isArray(entry.native)) return entry.native as ModelMessage[];
+        return [
+          {
+            role: "assistant",
+            content: [
+              ...(entry.text
+                ? [{ type: "text" as const, text: entry.text }]
+                : []),
+              ...entry.toolCalls.map((c) => ({
+                type: "tool-call" as const,
+                toolCallId: c.id,
+                toolName: c.name,
+                input: c.input,
+              })),
+            ],
+          },
+        ];
+      case "tool":
+        return [
+          {
+            role: "tool",
+            content: entry.results.map((r) => ({
+              type: "tool-result" as const,
+              toolCallId: r.id,
+              toolName: r.name,
+              output: r.isError
+                ? { type: "error-text" as const, value: r.content }
+                : { type: "text" as const, value: r.content },
+            })),
+          },
+        ];
+    }
+  });
+}
+
+/**
+ * One agent turn through the AI SDK's tool calling. Tools are declared with
+ * NO `execute`, so the SDK returns the calls instead of running anything: the
+ * caller (packages/agent) decides what runs, and write tools never do.
+ */
+export async function callOpenAiTools(
+  req: ToolTurnRequest,
+  generate: GenerateTextFn = generateText,
+): Promise<ToolTurnResult> {
+  const { route } = req;
+  const tools: ToolSet = Object.fromEntries(
+    req.tools.map((t) => [
+      t.name,
+      tool({
+        description: t.description,
+        inputSchema: jsonSchema(t.inputSchema),
+      }),
+    ]),
+  );
+  const signals = [
+    ...(req.signal ? [req.signal] : []),
+    ...(req.timeoutMs ? [AbortSignal.timeout(req.timeoutMs)] : []),
+  ];
+  try {
+    const result = await generate({
+      model: chatModel(route),
+      ...(req.system ? { system: req.system } : {}),
+      messages: toModelMessages(req.transcript),
+      tools,
+      maxOutputTokens: req.maxOutputTokens,
+      ...(signals.length ? { abortSignal: AbortSignal.any(signals) } : {}),
+    });
+    const toolCalls = result.toolCalls.map((c) => ({
+      id: c.toolCallId,
+      name: c.toolName,
+      input: c.input,
+    }));
+    // Truncation first: a tool call cut off at the limit must never run.
+    const stop: ToolTurnResult["stop"] =
+      result.finishReason === "length"
+        ? "max_tokens"
+        : result.finishReason === "content-filter"
+          ? "refusal"
+          : result.finishReason === "tool-calls" || toolCalls.length > 0
+            ? "tool_use"
+            : "end";
+    return {
+      text: result.text,
+      toolCalls,
+      usage: usageOf(result.usage),
+      stop,
+      ...(stop === "refusal"
+        ? { refusal: { category: "content_filter", explanation: null } }
+        : {}),
+      servedBy: route.id,
+      assistant: {
+        role: "assistant",
+        text: result.text,
+        toolCalls,
+        native: result.response.messages,
+      },
+    };
+  } catch (err) {
     throw toProviderError(err, route.provider);
   }
 }

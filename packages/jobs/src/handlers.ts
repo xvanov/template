@@ -13,6 +13,7 @@
  *             `organizationId`, and the worker rejects payloads that carry one.
  */
 import { z } from "zod";
+import { abandonStaleRuns, executeRun } from "@repo/agent";
 import { db } from "@repo/db";
 import { runOperatorTick } from "@repo/notify";
 import {
@@ -30,10 +31,16 @@ const schemas = {
     userId: z.string().optional(),
   }),
 
+  /** Execute one agent run (packages/agent). Started by `agent.start`. */
+  "agent.run": z.object({
+    organizationId: z.string().min(1),
+    runId: z.string().min(1),
+  }),
+
   /** Demo scheduled job: prune soft state and log a heartbeat. */
   "maintenance.nightly": z.object({}),
 
-  /** Operator notifications' 15-minute tick: retry cap-held alerts, send a due digest. */
+  /** The 15-minute operator tick: retry cap-held alerts, send a due digest, fail stuck agent runs. */
   "operator.digest": z.object({}),
   /** Demo job: something a webhook or a UI action would fire. */
   "notify.digest": z.object({
@@ -113,6 +120,14 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     },
   },
 
+  "agent.run": {
+    scope: "org",
+    schema: schemas["agent.run"],
+    // Never throws for a run that went wrong (that is recorded on agent_run),
+    // and a redelivered job finds the run already claimed: no double runs.
+    run: (payload) => executeRun(payload),
+  },
+
   "maintenance.nightly": {
     scope: "system",
     schema: schemas["maintenance.nightly"],
@@ -140,8 +155,13 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     scope: "system",
     schema: schemas["operator.digest"],
     // Due-ness is decided inside (NOTIFY_DIGEST_TIMES in APP_TIMEZONE): most
-    // ticks retry nothing and find no digest due.
-    run: () => runOperatorTick(),
+    // ticks retry nothing and find no digest due. The same tick fails agent
+    // runs a dead worker left "running" (past runCutoffMs()), so a stuck run
+    // shows as failed within ~15 minutes of its cutoff, not the next night.
+    run: async () => {
+      const abandonedAgentRuns = await abandonStaleRuns(db);
+      return { ...(await runOperatorTick()), abandonedAgentRuns };
+    },
   },
   "notify.digest": {
     scope: "org",

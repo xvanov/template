@@ -373,6 +373,22 @@ const serverSchema = z.object({
       ),
   ),
 
+  // ── Agents (packages/agent) and the MCP endpoint ───────────────────────
+  /** Which LLM tier agent runs use (LLM_MODEL_FAST / LLM_MODEL / LLM_MODEL_SMART). */
+  AGENT_TIER: z.preprocess(
+    blankIsUnset,
+    z.enum(["fast", "default", "smart"]).default("default"),
+  ),
+  /** Model turns one agent run may take before it is stopped. */
+  AGENT_MAX_STEPS: z.coerce.number().int().min(1).max(50).default(8),
+  /**
+   * USD one agent run may spend before it is stopped (checked after each
+   * turn). The tenant's LLM_DAILY_CAP_USD still applies on top.
+   */
+  AGENT_MAX_COST_USD: z.coerce.number().positive().default(0.5),
+  /** Requests per minute per API key on /api/mcp. */
+  MCP_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(120),
+
   // ── Security helpers (packages/security) ───────────────────────────────
   /** Bearer secret for HTTP cron endpoints. Unset in production = every call refused. */
   CRON_SECRET: z.string().optional(),

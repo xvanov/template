@@ -5,7 +5,7 @@
  * a header with the sidebar trigger, theme menu and account menu, and the page
  * in <main>. Add a route to NAV and it appears in the sidebar.
  */
-import { LayoutDashboard, LogOut, type LucideIcon } from "lucide-react";
+import { Bot, LayoutDashboard, LogOut, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { authClient } from "@repo/auth/client";
@@ -41,6 +41,7 @@ import { trpc } from "@/lib/trpc";
 
 const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/app", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/app/agent", label: "Agent", icon: Bot },
 ];
 
 function initials(name: string, email: string): string {

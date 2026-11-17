@@ -10,11 +10,23 @@
  * Every mutation also writes an audit event IN THE SAME TRANSACTION
  * (`ctx.audit(..., tx)`), so the trail cannot claim a change that rolled back
  * or miss one that committed.
+ *
+ * The writes and their input rules live in @repo/domain (domain functions),
+ * because the agent's item tools make the same changes: one definition, two
+ * callers. A resolver here is then just: input schema, transaction, actor
+ * from the context, audit bound to the transaction.
  */
 import { z } from "zod";
+import {
+  createItem,
+  createItemInput,
+  removeItem,
+  removeItemInput,
+  setItemDone,
+  setItemDoneInput,
+} from "@repo/domain";
 import { enqueue } from "@repo/jobs";
 
-import { NotFoundError } from "../errors";
 import { createTRPCRouter, orgProcedure, rateLimited } from "../trpc";
 
 export const itemsRouter = createTRPCRouter({
@@ -47,67 +59,27 @@ export const itemsRouter = createTRPCRouter({
     ),
 
   create: orgProcedure
-    .input(
-      z.object({
-        title: z.string().trim().min(1, "Title is required").max(200),
-        notes: z.string().trim().max(2000).optional(),
-      }),
-    )
+    .input(createItemInput)
     .mutation(({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) => {
-        const item = await tx.item.create({
-          data: {
-            organizationId: ctx.organizationId,
-            title: input.title,
-            notes: input.notes,
-            createdById: ctx.user.id,
-          },
-          select: {
-            id: true,
-            title: true,
-            notes: true,
-            done: true,
-            createdAt: true,
-          },
-        });
-        await ctx.audit(
-          "item.create",
-          { targetId: item.id, metadata: { title: item.title } },
-          tx,
-        );
-        return item;
-      }),
+      ctx.db.$transaction((tx) =>
+        createItem(tx, actor(ctx), input, (a, o) => ctx.audit(a, o, tx)),
+      ),
     ),
 
   setDone: orgProcedure
-    .input(z.object({ id: z.string().min(1), done: z.boolean() }))
+    .input(setItemDoneInput)
     .mutation(({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) => {
-        const { count } = await tx.item.updateMany({
-          where: { id: input.id, organizationId: ctx.organizationId },
-          data: { done: input.done },
-        });
-        if (count === 0) throw notFound();
-        await ctx.audit(
-          "item.update",
-          { targetId: input.id, metadata: { done: input.done } },
-          tx,
-        );
-        return { id: input.id, done: input.done };
-      }),
+      ctx.db.$transaction((tx) =>
+        setItemDone(tx, actor(ctx), input, (a, o) => ctx.audit(a, o, tx)),
+      ),
     ),
 
   remove: orgProcedure
-    .input(z.object({ id: z.string().min(1) }))
+    .input(removeItemInput)
     .mutation(({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) => {
-        const { count } = await tx.item.deleteMany({
-          where: { id: input.id, organizationId: ctx.organizationId },
-        });
-        if (count === 0) throw notFound();
-        await ctx.audit("item.delete", { targetId: input.id }, tx);
-        return { id: input.id };
-      }),
+      ctx.db.$transaction((tx) =>
+        removeItem(tx, actor(ctx), input, (a, o) => ctx.audit(a, o, tx)),
+      ),
     ),
 
   /**
@@ -146,9 +118,6 @@ export const itemsRouter = createTRPCRouter({
   ),
 });
 
-function notFound() {
-  // Same error whether the row is absent or owned by another tenant — never
-  // let a 404-vs-403 difference confirm that someone else's id exists.
-  // A typed error, not a TRPCError: the API layer maps it to NOT_FOUND.
-  return new NotFoundError("Item not found.");
+function actor(ctx: { organizationId: string; user: { id: string } }) {
+  return { organizationId: ctx.organizationId, userId: ctx.user.id };
 }

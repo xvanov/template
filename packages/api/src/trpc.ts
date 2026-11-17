@@ -32,9 +32,29 @@ export interface CreateContextOptions {
   headers: Headers;
 }
 
-export async function createTRPCContext(opts: CreateContextOptions) {
+/**
+ * Set when the caller is a machine with an org API key (the MCP endpoint),
+ * not a browser session. See ./api-keys.ts: such a caller acts AS the member
+ * who created the key, in the key's organization.
+ */
+export interface ApiKeyIdentity {
+  id: string;
+  canWrite: boolean;
+}
+
+export interface TRPCContextShape {
+  db: typeof db;
+  session: Awaited<ReturnType<typeof auth.api.getSession>>;
+  headers: Headers;
+  /** Absent/null for a browser session. */
+  apiKey?: ApiKeyIdentity | null;
+}
+
+export async function createTRPCContext(
+  opts: CreateContextOptions,
+): Promise<TRPCContextShape> {
   const session = await auth.api.getSession({ headers: opts.headers });
-  return { db, session, headers: opts.headers };
+  return { db, session, headers: opts.headers, apiKey: null };
 }
 
 export type TRPCContext = Awaited<ReturnType<typeof createTRPCContext>>;
@@ -143,6 +163,18 @@ export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
 
 export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   const organizationId = await resolveOrganizationId(ctx.db, ctx.session);
+  // An API key is bound to ONE organization. resolveOrganizationId falls back
+  // to the user's first membership when they left the active org; for a
+  // browser that is a convenience, for a key it would be a cross-tenant leak.
+  if (
+    ctx.apiKey &&
+    organizationId !== ctx.session.session.activeOrganizationId
+  ) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "This API key's creator is no longer a member of its workspace.",
+    });
+  }
   if (!organizationId) {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -151,6 +183,30 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   }
   return next({ ctx: withAudit(ctx, organizationId) });
 });
+
+/**
+ * An org procedure for owners and admins only, checked against this tenant's
+ * membership row (never a claim from the client).
+ *
+ *   const adminProcedure = adminOnlyProcedure("manage API keys");
+ */
+export function adminOnlyProcedure(what: string) {
+  return orgProcedure.use(async ({ ctx, next }) => {
+    const me = await ctx.db.member.findFirst({
+      where: { organizationId: ctx.organizationId, userId: ctx.user.id },
+      select: { role: true },
+    });
+    // better-auth stores multiple roles comma-separated ("owner,admin").
+    const roles = (me?.role ?? "").split(",").map((r) => r.trim());
+    if (!roles.includes("owner") && !roles.includes("admin")) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `Only an owner or admin can ${what}.`,
+      });
+    }
+    return next();
+  });
+}
 
 type Session = NonNullable<TRPCContext["session"]>;
 
@@ -246,11 +302,24 @@ function withAudit<C extends TRPCContext & { user: { id: string } }>(
       action,
       targetType: opts.targetType ?? action.split(".")[0] ?? action,
       targetId: opts.targetId,
-      metadata: opts.metadata,
+      metadata: viaApiKey(opts.metadata, ctx.apiKey),
       ip: clientIp(ctx.headers),
       userAgent: ctx.headers.get("user-agent"),
     });
   return { ...ctx, organizationId, audit };
+}
+
+/** A change made through an API key says which key, in its audit metadata. */
+function viaApiKey(
+  metadata: Prisma.InputJsonValue | undefined,
+  apiKey: ApiKeyIdentity | null | undefined,
+): Prisma.InputJsonValue | undefined {
+  if (!apiKey) return metadata;
+  if (metadata === undefined) return { apiKeyId: apiKey.id };
+  if (typeof metadata === "object" && !Array.isArray(metadata)) {
+    return { ...metadata, apiKeyId: apiKey.id };
+  }
+  return { value: metadata, apiKeyId: apiKey.id };
 }
 
 /**

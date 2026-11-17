@@ -22,7 +22,14 @@ import { env } from "@repo/env";
 
 import { LlmProviderError } from "../errors";
 import { priceUsage, type TokenUsage } from "../pricing";
-import type { ProviderRequest, ProviderResult } from "./types";
+import type {
+  ChatEntry,
+  ProviderRequest,
+  ProviderResult,
+  ToolCall,
+  ToolTurnRequest,
+  ToolTurnResult,
+} from "./types";
 
 type StreamParams = Anthropic.Beta.Messages.MessageCreateParamsStreaming;
 
@@ -190,4 +197,141 @@ export async function callAnthropic(
     default:
       return { ...base, stop: "end" };
   }
+}
+
+// ── tool use ─────────────────────────────────────────────────────────────
+
+type MessageParam = Anthropic.Beta.Messages.BetaMessageParam;
+type ContentParam = Anthropic.Beta.Messages.BetaContentBlockParam;
+
+/** The provider-neutral transcript as Anthropic messages. */
+export function toAnthropicMessages(transcript: ChatEntry[]): MessageParam[] {
+  return transcript.map((entry): MessageParam => {
+    switch (entry.role) {
+      case "user":
+        return { role: "user", content: entry.text };
+      case "assistant": {
+        // Our own reply comes back exactly as it was sent to us — thinking
+        // blocks included, which the API requires unchanged.
+        if (entry.native) {
+          return { role: "assistant", content: entry.native as ContentParam[] };
+        }
+        const content: ContentParam[] = [];
+        if (entry.text) content.push({ type: "text", text: entry.text });
+        for (const c of entry.toolCalls) {
+          content.push({
+            type: "tool_use",
+            id: c.id,
+            name: c.name,
+            input: c.input as Record<string, unknown>,
+          });
+        }
+        return { role: "assistant", content };
+      }
+      case "tool":
+        // Every result of one turn in ONE user message: splitting them teaches
+        // the model to stop making parallel calls.
+        return {
+          role: "user",
+          content: entry.results.map((r) => ({
+            type: "tool_result" as const,
+            tool_use_id: r.id,
+            content: r.content,
+            ...(r.isError ? { is_error: true } : {}),
+          })),
+        };
+    }
+  });
+}
+
+/**
+ * The request body for one agent turn. Same rules as buildParams, plus:
+ *  - tool_choice is NOT sent (auto): forcing a tool 400s on Opus/Sonnet 5.5,
+ *    and an agent must be free to answer without one.
+ *  - no `eager_input_streaming`: our tool inputs are a few hundred bytes, and
+ *    without it the API validates each input's JSON before returning it, so
+ *    finalMessage() cannot reject on a half-parsed input. (Inputs are still
+ *    validated against the zod schema by the caller before anything runs.)
+ */
+export function buildToolParams(
+  req: ToolTurnRequest,
+): Omit<StreamParams, "stream"> {
+  const model = req.route.model;
+  return {
+    model,
+    max_tokens: req.maxOutputTokens,
+    ...(req.system ? { system: req.system } : {}),
+    messages: toAnthropicMessages(req.transcript),
+    tools: req.tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema:
+        t.inputSchema as Anthropic.Beta.Messages.BetaTool.InputSchema,
+    })),
+    ...(supportsEffort(model) ? { output_config: { effort: req.effort } } : {}),
+    // Tools + system are the stable prefix across turns: cache it.
+    cache_control: { type: "ephemeral" },
+    ...(supportsFallbacks(model)
+      ? { betas: [FALLBACK_BETA], fallbacks: "default" as const }
+      : {}),
+  };
+}
+
+/** One agent turn: native tool use through the official SDK. */
+export async function callAnthropicTools(
+  req: ToolTurnRequest,
+  sdk: AnthropicLike = defaultClient(),
+): Promise<ToolTurnResult> {
+  let msg: Anthropic.Beta.Messages.BetaMessage;
+  try {
+    msg = await sdk.beta.messages
+      .stream(buildToolParams(req), {
+        ...(req.timeoutMs ? { timeout: req.timeoutMs } : {}),
+        ...(req.signal ? { signal: req.signal } : {}),
+      })
+      .finalMessage();
+  } catch (err) {
+    throw toProviderError(err);
+  }
+
+  const text = msg.content
+    .filter(
+      (b): b is Anthropic.Beta.Messages.BetaTextBlock => b.type === "text",
+    )
+    .map((b) => b.text)
+    .join("");
+  const toolCalls: ToolCall[] = msg.content
+    .filter(
+      (b): b is Anthropic.Beta.Messages.BetaToolUseBlock =>
+        b.type === "tool_use",
+    )
+    .map((b) => ({ id: b.id, name: b.name, input: b.input }));
+  const stop: ToolTurnResult["stop"] =
+    msg.stop_reason === "tool_use"
+      ? "tool_use"
+      : msg.stop_reason === "pause_turn"
+        ? "pause"
+        : msg.stop_reason === "refusal"
+          ? "refusal"
+          : msg.stop_reason === "max_tokens" ||
+              msg.stop_reason === "model_context_window_exceeded"
+            ? "max_tokens"
+            : "end";
+  return {
+    text,
+    toolCalls,
+    usage: usageOf(msg.usage),
+    costUsd: messageCost(req.route.model, msg),
+    servedBy: `anthropic/${msg.model}`,
+    stop,
+    ...(stop === "refusal"
+      ? {
+          refusal: {
+            category: msg.stop_details?.category ?? null,
+            explanation: msg.stop_details?.explanation ?? null,
+          },
+        }
+      : {}),
+    assistant: { role: "assistant", text, toolCalls, native: msg.content },
+  };
 }

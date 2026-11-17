@@ -12,6 +12,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@repo/agent": "*",
     "@repo/ai": "*",
     "@repo/db": "*",
     "@repo/env": "*",

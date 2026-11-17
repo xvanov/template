@@ -64,14 +64,23 @@ import {
   ZERO_USAGE,
   type TokenUsage,
 } from "./pricing";
-import { callAnthropic } from "./providers/anthropic";
+import { callAnthropic, callAnthropicTools } from "./providers/anthropic";
 import { callCli } from "./providers/cli";
 import {
   callOpenAiFamily,
+  callOpenAiTools,
   EMBEDDING_PROVIDERS,
   embedOpenAiFamily,
 } from "./providers/openai";
-import type { ProviderCall, ProviderResult } from "./providers/types";
+import type {
+  ChatEntry,
+  ProviderCall,
+  ProviderResult,
+  ProviderTurn,
+  ToolCall,
+  ToolSpec,
+  ToolTurnResult,
+} from "./providers/types";
 
 export * from "./errors";
 export { assertGrounded, unknownFactsIn, UngroundedOutputError } from "./guard";
@@ -82,6 +91,16 @@ export { parseModel, PROVIDERS } from "./models";
 export type { Effort, Priority, ProviderId, Route, Tier } from "./models";
 export { costUsd, parsePrices, priceFor } from "./pricing";
 export type { Price, TokenUsage } from "./pricing";
+export type {
+  ChatEntry,
+  ProviderTurn,
+  ToolCall,
+  ToolResult,
+  ToolSpec,
+  ToolTurnRequest,
+  ToolTurnResult,
+  TurnStop,
+} from "./providers/types";
 
 // ── options and results ──────────────────────────────────────────────────
 
@@ -148,6 +167,27 @@ export type AskObjectResult<T> =
       rawText?: string;
     };
 
+export interface ConverseOptions extends CallOptions {
+  system?: string;
+  transcript: ChatEntry[];
+  tools: ToolSpec[];
+  /** Default 16000 per turn. The cap reserves the FULL allowance. */
+  maxOutputTokens?: number;
+  effort?: Effort;
+  timeoutMs?: number;
+  /** Aborts the in-flight request (cancellation). */
+  signal?: AbortSignal;
+}
+
+export interface ConverseResult extends CallMeta {
+  text: string;
+  toolCalls: ToolCall[];
+  stop: ToolTurnResult["stop"];
+  refusal?: { category: string | null; explanation: string | null };
+  /** Append this to the transcript before the tool results. */
+  assistant: ToolTurnResult["assistant"];
+}
+
 export interface EmbedOptions extends Omit<CallOptions, "tier"> {
   texts: string[];
 }
@@ -165,6 +205,8 @@ export interface EmbedResult {
 
 export interface LlmDeps {
   call: ProviderCall;
+  /** One tool-use turn (converse). */
+  converse: ProviderTurn;
   embed: (
     route: Route,
     texts: string[],
@@ -243,8 +285,30 @@ const dispatch: ProviderCall = (req) => {
   }
 };
 
+/**
+ * Tool use: Anthropic natively through the official SDK, the OpenAI family
+ * through the AI SDK. `cli/` (headless `claude -p`) runs Claude Code's own
+ * tools, not ours, so it cannot drive an agent here.
+ */
+const dispatchTurn: ProviderTurn = (req) => {
+  switch (req.route.provider) {
+    case "anthropic":
+      return callAnthropicTools(req);
+    case "cli":
+      return Promise.reject(
+        new LlmConfigError(
+          `${req.route.id} cannot call tools: cli/ models do not support tool use. ` +
+            "Point the agent's tier (AGENT_TIER) at an anthropic/ or OpenAI-family model.",
+        ),
+      );
+    default:
+      return callOpenAiTools(req);
+  }
+};
+
 const defaultDeps: LlmDeps = {
   call: dispatch,
+  converse: dispatchTurn,
   embed: (route, texts) => embedOpenAiFamily(route, texts),
   ledger: dbLedger,
   warn: (message, data) => console.warn(`[ai] ${message}`, data),
@@ -360,11 +424,24 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
     };
   }
 
-  async function run(
-    opts: AskOptions,
-    jsonSchema?: (route: Route) => Record<string, unknown>,
-    validate?: (text: string) => string | null,
-  ): Promise<{ result: ProviderResult; meta: CallMeta }> {
+  /**
+   * The metering every chat-kind call goes through: enabled check, cap
+   * reservation (estimate from `inputChars` + the full output allowance),
+   * the provider call, and settling `llm_call` with the real numbers — or
+   * with the failure, so "the AI feature is broken" shows up where its spend
+   * does.
+   */
+  async function metered<
+    R extends Pick<ProviderResult, "text" | "usage" | "costUsd" | "refusal"> & {
+      stop: string;
+    },
+  >(
+    opts: CallOptions,
+    inputChars: number,
+    maxOutputTokens: number,
+    send: (route: Route) => Promise<R>,
+    validate?: (result: R) => string | null,
+  ): Promise<{ result: R; meta: CallMeta }> {
     const route = resolve(opts);
     if (!routeEnabled(route)) {
       throw new LlmDisabledError(
@@ -373,9 +450,7 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
           : "LLM is switched off (LLM_ENABLED=false).",
       );
     }
-    const maxOutputTokens = opts.maxOutputTokens ?? 16_000;
     const tier = opts.model ? null : (opts.tier ?? "default");
-    const inputChars = (opts.system?.length ?? 0) + opts.prompt.length;
     const estimate = estimateUsd(route.id, inputChars, maxOutputTokens);
 
     const row: LlmCallRow = {
@@ -398,20 +473,10 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
     const id = await reserve(opts, route, row, estimate);
 
     const started = Date.now();
-    let result: ProviderResult;
+    let result: R;
     try {
-      result = await deps.call({
-        route,
-        ...(opts.system ? { system: opts.system } : {}),
-        prompt: opts.prompt,
-        maxOutputTokens,
-        effort: opts.effort ?? env().LLM_EFFORT,
-        ...(jsonSchema ? { jsonSchema: jsonSchema(route) } : {}),
-        ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
-      });
+      result = await send(route);
     } catch (err) {
-      // A failed call still cost time, and maybe tokens. Record it, so "the AI
-      // feature is broken" shows up where its spend does.
       await deps.ledger.settle(
         id,
         failedRow(row, err, estimate, Date.now() - started),
@@ -430,7 +495,7 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
         : result.stop === "max_tokens"
           ? "max_tokens"
           : validate
-            ? validate(result.text)
+            ? validate(result)
             : null;
     await deps.ledger.settle(id, {
       ...row,
@@ -445,7 +510,7 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
     });
     const meta: CallMeta = {
       model: route.id,
-      servedBy: result.servedBy,
+      servedBy: (result as { servedBy?: string }).servedBy ?? route.id,
       provider: route.provider,
       tier,
       usage: result.usage,
@@ -454,6 +519,69 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
       latencyMs,
     };
     return { result, meta };
+  }
+
+  function run(
+    opts: AskOptions,
+    jsonSchema?: (route: Route) => Record<string, unknown>,
+    validate?: (text: string) => string | null,
+  ): Promise<{ result: ProviderResult; meta: CallMeta }> {
+    const maxOutputTokens = opts.maxOutputTokens ?? 16_000;
+    return metered(
+      opts,
+      (opts.system?.length ?? 0) + opts.prompt.length,
+      maxOutputTokens,
+      (route) =>
+        deps.call({
+          route,
+          ...(opts.system ? { system: opts.system } : {}),
+          prompt: opts.prompt,
+          maxOutputTokens,
+          effort: opts.effort ?? env().LLM_EFFORT,
+          ...(jsonSchema ? { jsonSchema: jsonSchema(route) } : {}),
+          ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+        }),
+      validate ? (r) => validate(r.text) : undefined,
+    );
+  }
+
+  /**
+   * One turn of a tool-using conversation (packages/agent drives the loop).
+   * Capped, recorded and priced like ask(). Unlike ask() it does NOT throw on
+   * a refusal or a truncated reply: `stop` says so and the caller ends the
+   * conversation. It throws for disabled / over budget / unpriced / provider
+   * errors, and LlmConfigError for a provider without tool use (cli/).
+   */
+  async function converse(opts: ConverseOptions): Promise<ConverseResult> {
+    const maxOutputTokens = opts.maxOutputTokens ?? 16_000;
+    const inputChars =
+      (opts.system?.length ?? 0) +
+      JSON.stringify(opts.tools).length +
+      transcriptChars(opts.transcript);
+    const { result, meta } = await metered(
+      opts,
+      inputChars,
+      maxOutputTokens,
+      (route) =>
+        deps.converse({
+          route,
+          ...(opts.system ? { system: opts.system } : {}),
+          transcript: opts.transcript,
+          tools: opts.tools,
+          maxOutputTokens,
+          effort: opts.effort ?? env().LLM_EFFORT,
+          ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+          ...(opts.signal ? { signal: opts.signal } : {}),
+        }),
+    );
+    return {
+      ...meta,
+      text: result.text,
+      toolCalls: result.toolCalls,
+      stop: result.stop,
+      ...(result.refusal ? { refusal: result.refusal } : {}),
+      assistant: result.assistant,
+    };
   }
 
   function stopError(result: ProviderResult, meta: CallMeta): Error | null {
@@ -638,11 +766,24 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
     };
   }
 
-  return { ask, askObject, embed };
+  return { ask, askObject, embed, converse };
+}
+
+/** Rough size of a transcript for the pre-send estimate (errs high). */
+function transcriptChars(transcript: ChatEntry[]): number {
+  let n = 0;
+  for (const e of transcript) {
+    if (e.role === "user") n += e.text.length;
+    else if (e.role === "tool")
+      n += e.results.reduce((m, r) => m + r.content.length + 40, 0);
+    else n += e.text.length + JSON.stringify(e.toolCalls).length;
+  }
+  return n;
 }
 
 const llm = createLlm();
 export const ask = llm.ask;
+export const converse = llm.converse;
 export const askObject = llm.askObject;
 export const embed = llm.embed;
 

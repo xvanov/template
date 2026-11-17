@@ -6,12 +6,14 @@ import { parseModel } from "../models";
 import { setLlmEnv } from "../test-env";
 import {
   buildParams,
+  buildToolParams,
   callAnthropic,
+  callAnthropicTools,
   FALLBACK_BETA,
   toProviderError,
   type AnthropicLike,
 } from "./anthropic";
-import type { ProviderRequest } from "./types";
+import type { ProviderRequest, ToolTurnRequest } from "./types";
 
 beforeEach(() => setLlmEnv({ ANTHROPIC_API_KEY: "test" }));
 
@@ -246,5 +248,128 @@ describe("toProviderError", () => {
     await expect(
       callAnthropic(req("claude-opus-5-5"), client),
     ).rejects.toBeInstanceOf(LlmProviderError);
+  });
+});
+
+describe("tool use", () => {
+  const turn = (
+    model: string,
+    extra: Partial<ToolTurnRequest> = {},
+  ): ToolTurnRequest => ({
+    route: parseModel(`anthropic/${model}`),
+    system: "agent",
+    transcript: [{ role: "user", text: "tidy my list" }],
+    tools: [
+      {
+        name: "items_search",
+        description: "Search items",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ],
+    maxOutputTokens: 4000,
+    effort: "low",
+    ...extra,
+  });
+
+  it("sends tools with auto choice: no tool_choice, no thinking, no sampling; explicit effort; fallbacks", () => {
+    const p = buildToolParams(turn("claude-opus-5-5")) as Record<
+      string,
+      unknown
+    >;
+    for (const banned of [
+      "tool_choice",
+      "thinking",
+      "temperature",
+      "top_p",
+      "top_k",
+    ]) {
+      expect(p).not.toHaveProperty(banned);
+    }
+    expect(p).toMatchObject({
+      output_config: { effort: "low" },
+      tools: [{ name: "items_search", input_schema: { type: "object" } }],
+      fallbacks: "default",
+      betas: [FALLBACK_BETA],
+    });
+  });
+
+  it("returns the assistant's own content unchanged and all of a turn's results in ONE user message", () => {
+    const native = [
+      { type: "thinking", thinking: "", signature: "sig" },
+      { type: "tool_use", id: "t1", name: "items_search", input: {} },
+      { type: "tool_use", id: "t2", name: "items_search", input: { q: "x" } },
+    ];
+    const p = buildToolParams(
+      turn("claude-opus-5-5", {
+        transcript: [
+          { role: "user", text: "go" },
+          { role: "assistant", text: "", toolCalls: [], native },
+          {
+            role: "tool",
+            results: [
+              { id: "t1", name: "items_search", content: "[]" },
+              { id: "t2", name: "items_search", content: "bad", isError: true },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(p.messages[1]).toEqual({ role: "assistant", content: native });
+    expect(p.messages[2]).toEqual({
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "t1", content: "[]" },
+        {
+          type: "tool_result",
+          tool_use_id: "t2",
+          content: "bad",
+          is_error: true,
+        },
+      ],
+    });
+  });
+
+  it("maps tool_use, pause_turn and refusal stops and extracts the calls", async () => {
+    const toolMsg = message({
+      stop_reason: "tool_use",
+      content: [
+        { type: "text", text: "Looking", citations: null },
+        { type: "tool_use", id: "t1", name: "items_search", input: { q: "a" } },
+      ] as Msg["content"],
+    });
+    const r = await callAnthropicTools(
+      turn("claude-opus-5-5"),
+      fakeClient(toolMsg).client,
+    );
+    expect(r).toMatchObject({
+      stop: "tool_use",
+      text: "Looking",
+      toolCalls: [{ id: "t1", name: "items_search", input: { q: "a" } }],
+      assistant: { native: toolMsg.content },
+    });
+
+    const paused = await callAnthropicTools(
+      turn("claude-opus-5-5"),
+      fakeClient(message({ stop_reason: "pause_turn" })).client,
+    );
+    expect(paused.stop).toBe("pause");
+
+    const refused = await callAnthropicTools(
+      turn("claude-opus-5-5"),
+      fakeClient(
+        message({
+          stop_reason: "refusal",
+          stop_details: {
+            type: "refusal",
+            category: "cyber",
+            explanation: null,
+          },
+        } as Partial<Msg>),
+      ).client,
+    );
+    expect(refused).toMatchObject({
+      stop: "refusal",
+      refusal: { category: "cyber" },
+    });
   });
 });
