@@ -11,6 +11,8 @@
  * And from @repo/ai (same name-matching, so @repo/api need not import it):
  *   LlmBudgetExceededError → TOO_MANY_REQUESTS   (daily AI cap reached)
  *   LlmDisabledError       → PRECONDITION_FAILED (no provider configured)
+ *   LlmUnpricedError       → PRECONDITION_FAILED (capped, model has no price)
+ *   LlmConfigError         → PRECONDITION_FAILED (a model string that does not route)
  *   LlmRefusalError        → BAD_REQUEST         (the model declined)
  *
  * LlmProviderError is deliberately NOT mapped: its message carries the
@@ -49,6 +51,8 @@ export const DOMAIN_ERROR_CODES = {
   ForbiddenError: "FORBIDDEN",
   LlmBudgetExceededError: "TOO_MANY_REQUESTS",
   LlmDisabledError: "PRECONDITION_FAILED",
+  LlmUnpricedError: "PRECONDITION_FAILED",
+  LlmConfigError: "PRECONDITION_FAILED",
   LlmRefusalError: "BAD_REQUEST",
 } as const;
 

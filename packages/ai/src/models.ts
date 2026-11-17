@@ -80,9 +80,41 @@ export function modelForTier(tier: Tier = "default"): string {
   return defaultModel();
 }
 
-/** Explicit `model` wins over `tier`. */
+const OPENAI_DEFAULT_BASE = "https://api.openai.com/v1";
+
+/** LLM_BASE_URL points somewhere other than the OpenAI default. */
+function customBaseUrl(): boolean {
+  return env().LLM_BASE_URL.replace(/\/+$/, "") !== OPENAI_DEFAULT_BASE;
+}
+
+/**
+ * A model string from .env (LLM_MODEL, a tier), read the way the config was
+ * MEANT. Before the router, `LLM_BASE_URL=https://openrouter.ai/api/v1` with
+ * `LLM_MODEL=openai/gpt-4o-mini` meant "OpenRouter's id openai/gpt-4o-mini".
+ * So when LLM_BASE_URL is custom and the prefix is not a provider that is
+ * configured (or not a provider at all), the WHOLE string is a model id on
+ * LLM_BASE_URL — `legacy: true`, and announceLlmConfig() says so at boot.
+ * Write `local/<id>` to say it explicitly and silence the warning.
+ */
+export function parseConfigured(value: string): Route & { legacy?: true } {
+  const raw = value.trim();
+  const slash = raw.indexOf("/");
+  if (slash < 0 || !customBaseUrl()) return parseModel(raw);
+  const prefix = raw.slice(0, slash).toLowerCase();
+  if (prefix === "local") return parseModel(raw);
+  const known = (PROVIDERS as readonly string[]).includes(prefix);
+  if (known && providerConfigured(prefix as ProviderId)) return parseModel(raw);
+  return { provider: "local", model: raw, id: `local/${raw}`, legacy: true };
+}
+
+/**
+ * Explicit `model` (from code) wins over `tier` and is parsed strictly; a tier
+ * reads .env through parseConfigured (legacy-compatible).
+ */
 export function resolve(opts: { model?: string; tier?: Tier }): Route {
-  return parseModel(opts.model ?? modelForTier(opts.tier));
+  return opts.model
+    ? parseModel(opts.model)
+    : parseConfigured(modelForTier(opts.tier));
 }
 
 /**
@@ -107,10 +139,7 @@ export function providerConfigured(provider: ProviderId): boolean {
     case "local":
       // A keyless local server (Ollama) is configured by pointing the base URL
       // somewhere other than the OpenAI default.
-      return (
-        Boolean(e.LLM_API_KEY) ||
-        e.LLM_BASE_URL.replace(/\/+$/, "") !== "https://api.openai.com/v1"
-      );
+      return Boolean(e.LLM_API_KEY) || customBaseUrl();
     case "cli":
       return true;
   }

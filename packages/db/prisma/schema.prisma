@@ -208,12 +208,18 @@ model LlmCall {
   cacheReadTokens  Int      @default(0)
   cacheWriteTokens Int      @default(0)
   costUsd          Float    @default(0)
-  /// False when no price is configured for the model: costUsd is then 0 and
-  /// the day's total is a floor, not a fact.
+  /// False when the real cost is not known: no price is configured, or the
+  /// call died mid-flight (timeout, dropped stream). costUsd then holds the
+  /// pre-send estimate (0 for an unpriced model), so it still counts against
+  /// the cap — and the day's total is a floor, not a fact.
   costKnown        Boolean  @default(true)
   latencyMs        Int      @default(0)
   ok               Boolean  @default(true)
   error            String?
+  /// "pending" from the moment the cap reserved this call (costUsd = the
+  /// estimate) until it settles to "done". Pending rows count against the cap,
+  /// so concurrent calls cannot all slip under it.
+  status           String   @default("done")
   createdAt        DateTime @default(now())
 
   @@index([organizationId, createdAt])

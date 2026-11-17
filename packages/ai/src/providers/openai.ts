@@ -160,7 +160,9 @@ export function toProviderError(
     `${provider}${status ? ` ${status}` : ""}: ${message.slice(0, 300)}`,
     provider,
     retryable,
-    { cause: err },
+    // An HTTP error status = refused, nothing billed; anything else (abort,
+    // dropped connection) may have been billed for output we never saw.
+    { cause: err, costUnknown: status === undefined },
   );
 }
 

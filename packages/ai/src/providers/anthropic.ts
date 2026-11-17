@@ -131,14 +131,21 @@ export function toProviderError(err: unknown): LlmProviderError {
     err instanceof Anthropic.RateLimitError ||
     err instanceof Anthropic.InternalServerError ||
     err instanceof Anthropic.APIConnectionError;
-  const status =
-    err instanceof Anthropic.APIError ? ` ${err.status ?? ""}` : "";
+  // An HTTP error status means the API refused the request: nothing billed.
+  // A connection error or timeout may have been billed for unseen output.
+  const httpStatus =
+    err instanceof Anthropic.APIError &&
+    !(err instanceof Anthropic.APIConnectionError)
+      ? err.status
+      : undefined;
+  const answered = typeof httpStatus === "number";
+  const status = answered ? ` ${httpStatus}` : "";
   const message = err instanceof Error ? err.message : String(err);
   return new LlmProviderError(
     `anthropic${status}: ${message.slice(0, 300)}`,
     "anthropic",
     retryable,
-    { cause: err },
+    { cause: err, costUnknown: !answered },
   );
 }
 

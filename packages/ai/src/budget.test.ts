@@ -26,6 +26,7 @@ describe("decide", () => {
     ).toEqual({
       allowed: false,
       overCap: true,
+      reason: "over_cap",
     });
   });
 
@@ -43,6 +44,28 @@ describe("decide", () => {
     });
   });
 
+  it("refuses discretionary work on a model with no price — a cap cannot cap what it cannot price", () => {
+    expect(
+      decide({
+        priority: "discretionary",
+        spentUsd: 0,
+        estimateUsd: null,
+        capUsd: cap,
+      }),
+    ).toMatchObject({
+      allowed: false,
+      reason: "unpriced",
+    });
+    expect(
+      decide({
+        priority: "essential",
+        spentUsd: 0,
+        estimateUsd: null,
+        capUsd: cap,
+      }).allowed,
+    ).toBe(true);
+  });
+
   it("fails closed for discretionary work when spend is unknown, open for essential", () => {
     expect(
       decide({
@@ -50,8 +73,11 @@ describe("decide", () => {
         spentUsd: null,
         estimateUsd: 0,
         capUsd: cap,
-      }).allowed,
-    ).toBe(false);
+      }),
+    ).toMatchObject({
+      allowed: false,
+      reason: "spend_unknown",
+    });
     expect(
       decide({
         priority: "essential",

@@ -1,9 +1,10 @@
 /**
- * USD per call. Anthropic list prices are built in (claude-api reference,
- * cached 2026-11); everything else comes from LLM_PRICES or, for local/, the
- * legacy LLM_INPUT/OUTPUT_COST_PER_MTOK. An unknown price is `null` — recorded
- * as costKnown=false — never a guess: a made-up number in the spend table is
- * worse than an honest gap.
+ * USD per call. Only prices we can source are built in: Claude Opus 5.5,
+ * Sonnet 5.5 and Haiku 5.5 (claude-api reference, cached 2026-11). Every other
+ * model is priced through LLM_PRICES (or, for local/, non-zero legacy
+ * LLM_INPUT/OUTPUT_COST_PER_MTOK). An unknown price is `null` — never a guess —
+ * and the spend cap refuses discretionary calls on such a model (budget.ts):
+ * a cap that cannot price a call cannot cap it.
  */
 import { env } from "@repo/env";
 
@@ -37,16 +38,12 @@ export const ZERO_USAGE: TokenUsage = {
 const ANTHROPIC: Record<string, Price> = {
   "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2 },
   "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.1 },
+  // $0.50/$2.50 beyond 100K-token prompts.
   "claude-haiku-5-5": {
     input: 0.1,
     output: 0.5,
     longContext: { above: 100_000, input: 0.5, output: 2.5 },
   },
-  "claude-fable-5-2": { input: 8, output: 40, cacheRead: 0.2 },
-  "claude-opus-5": { input: 5, output: 25 },
-  "claude-sonnet-5": { input: 2, output: 10 },
-  "claude-opus-4-8": { input: 5, output: 25 },
-  "claude-haiku-4-5": { input: 1, output: 5 },
 };
 
 /** `a=1:2,b=0.4:1.6:0.04` → { a: Price, b: Price }. Malformed entries are skipped. */
@@ -88,11 +85,12 @@ export function priceFor(model: string): Price | null {
     return ANTHROPIC[route.model.toLowerCase()] ?? null;
   }
   if (route.provider === "local") {
+    // Legacy rates count only when actually set: 0/0 is "nobody said", not
+    // "free". A free local model says so in LLM_PRICES (local/<model>=0:0).
     const e = env();
-    return {
-      input: e.LLM_INPUT_COST_PER_MTOK,
-      output: e.LLM_OUTPUT_COST_PER_MTOK,
-    };
+    const input = e.LLM_INPUT_COST_PER_MTOK ?? 0;
+    const output = e.LLM_OUTPUT_COST_PER_MTOK ?? 0;
+    return input > 0 || output > 0 ? { input, output } : null;
   }
   return null;
 }
@@ -128,14 +126,15 @@ export function priceUsage(model: string, usage: TokenUsage): number | null {
  * Upper-bound estimate for the pre-send budget check: ~4 chars per input
  * token, and the full output allowance. Errs high on purpose — refusing a
  * call slightly early is the right direction of error for a spending control.
+ * null = the model has no known price.
  */
 export function estimateUsd(
   model: string,
   inputChars: number,
   maxOutputTokens: number,
-): number {
+): number | null {
   const price = priceFor(model);
-  if (!price) return 0;
+  if (!price) return null;
   return costUsd(
     {
       ...ZERO_USAGE,

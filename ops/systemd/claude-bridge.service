@@ -15,7 +15,14 @@
 #
 # Then in the app's .env: CLAUDE_BRIDGE_URL=http://<that tailnet IP>:3017 and
 # the same CLAUDE_BRIDGE_KEY. The server refuses any bind address that is not
-# loopback or Tailscale.
+# loopback or held by this host's tailscale interface (CLAUDE_BRIDGE_TRUST_HOST
+# overrides, deliberately). Tailscale must be up before the unit starts;
+# Restart= retries until it is.
+#
+# Sandboxing: the whole file system is read-only except what Claude Code writes
+# (its login/state under ~/.claude, ~/.claude.json, caches). Verified with
+# `claude -p` under exactly these settings. If a Claude Code update needs
+# another path, the run fails with EROFS in the journal — add it here.
 [Unit]
 Description=@APP_NAME@ Claude bridge (scripts/claude-bridge/server.mjs)
 After=network-online.target
@@ -30,6 +37,9 @@ ExecStart=/usr/bin/env node @APP_DIR@/scripts/claude-bridge/server.mjs
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ReadWritePaths=%h/.claude -%h/.claude.json -%h/.cache -%h/.local/state
 
 [Install]
 WantedBy=default.target

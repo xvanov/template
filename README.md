@@ -173,6 +173,14 @@ there is nothing extra to configure for the phone.
   latency and USD cost go to `llm_call` per tenant and feature; a per-tenant
   daily cap refuses optional calls before they are sent. Structured output is
   zod-validated and never silently repaired.
+
+  _Upgrading an existing `.env`:_ the old single-endpoint config keeps working.
+  `LLM_BASE_URL` + `LLM_MODEL` (bare, or a slashed id like `openai/gpt-4o-mini`
+  on OpenRouter) is read as a model id on that URL whenever the prefix's own
+  provider has no key, and the boot log says so; write `local/<id>` to make it
+  explicit. New: `LLM_DAILY_CAP_USD` (blank = no cap) and `LLM_PRICES` — a
+  model with no price is refused for optional calls while a cap is set.
+
 - **File uploads.** Content-type allow-list, size cap, tenant-namespaced keys,
   authenticated download. Local disk by default; S3/R2/MinIO by changing one
   variable.

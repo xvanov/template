@@ -102,15 +102,18 @@ describe("env", () => {
     setBaseline();
     expect(env()).toMatchObject({
       LLM_ENABLED: true,
-      LLM_DAILY_CAP_USD: 2,
       LLM_EFFORT: "medium",
     });
+    // Unset or blank = no cap (not $0).
+    expect(env().LLM_DAILY_CAP_USD).toBeUndefined();
     expect(env().LLM_MODEL).toBeUndefined();
 
     resetEnvCache();
     process.env.LLM_ENABLED = "false";
     process.env.LLM_MODEL = "";
+    process.env.LLM_DAILY_CAP_USD = "";
     expect(env().LLM_ENABLED).toBe(false);
+    expect(env().LLM_DAILY_CAP_USD).toBeUndefined();
     expect(env().LLM_MODEL).toBeUndefined();
 
     resetEnvCache();

@@ -42,6 +42,20 @@ export class LlmBudgetExceededError extends Error {
   }
 }
 
+/**
+ * A discretionary call refused BEFORE sending because its model has no known
+ * price while a cap is set: a cap that cannot price a call cannot cap it.
+ * Fix with LLM_PRICES, or mark the call essential.
+ */
+export class LlmUnpricedError extends Error {
+  constructor(readonly model: string) {
+    super(
+      `No price is configured for ${model}, so optional AI calls on it are paused while a daily cap is set — add it to LLM_PRICES.`,
+    );
+    this.name = "LlmUnpricedError";
+  }
+}
+
 /** The model declined (Anthropic `stop_reason: "refusal"`, OpenAI content filter). */
 export class LlmRefusalError extends Error {
   constructor(
@@ -70,15 +84,25 @@ export class LlmTruncatedError extends Error {
 /**
  * The provider failed (HTTP error, timeout, CLI exit). `retryable` is decided
  * from the SDK's typed errors (429/5xx/connection = true; 400/401/404 = false).
+ *
+ * `costUnknown`: false only when the provider answered with an error status
+ * (nothing was generated, nothing billed). A timeout, a dropped connection or
+ * a killed process may have been billed for work we never saw, so the call is
+ * recorded with costKnown=false and its pre-send estimate kept against the cap.
  */
 export class LlmProviderError extends Error {
+  readonly costUnknown: boolean;
   constructor(
     message: string,
     readonly provider: string,
     readonly retryable: boolean,
-    options?: { cause?: unknown },
+    options?: { cause?: unknown; costUnknown?: boolean },
   ) {
-    super(message, options);
+    super(
+      message,
+      options?.cause !== undefined ? { cause: options.cause } : undefined,
+    );
     this.name = "LlmProviderError";
+    this.costUnknown = options?.costUnknown ?? true;
   }
 }

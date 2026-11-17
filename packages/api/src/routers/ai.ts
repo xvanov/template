@@ -4,18 +4,28 @@
  * Everything that matters lives in `@repo/ai`: routing (`provider/model` from
  * .env by tier), the per-tenant daily cap checked BEFORE sending, and pricing
  * into `llm_call`. Its typed errors map to tRPC codes by name (../errors):
- * over the cap → TOO_MANY_REQUESTS, not configured → PRECONDITION_FAILED,
- * refused → BAD_REQUEST.
+ * over the cap → TOO_MANY_REQUESTS, not configured / unpriced / bad model
+ * string → PRECONDITION_FAILED, refused → BAD_REQUEST. Never a bare 500.
  */
 import { z } from "zod";
-import { ask, describeLlm, LlmTruncatedError, spendByPurpose } from "@repo/ai";
+import {
+  ask,
+  describeLlm,
+  llmEnabled,
+  LlmTruncatedError,
+  spendByPurpose,
+} from "@repo/ai";
 
 import { createTRPCRouter, orgProcedure, publicProcedure } from "../trpc";
 
 export const aiRouter = createTRPCRouter({
-  enabled: publicProcedure.query(() => {
+  /** Public: a boolean only. Which model runs is not for anonymous visitors. */
+  enabled: publicProcedure.query(() => ({ enabled: llmEnabled() })),
+
+  /** Signed in: which model each tier routes to, and the cap. Never a key. */
+  info: orgProcedure.query(() => {
     const d = describeLlm();
-    return { enabled: d.enabled, model: d.tiers.default };
+    return { enabled: d.enabled, tiers: d.tiers, dailyCapUsd: d.dailyCapUsd };
   }),
 
   ask: orgProcedure

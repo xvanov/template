@@ -12,7 +12,16 @@
  *  - --no-session-persistence: a thousand calls do not land in session history.
  *  - --tools "" + --strict-mcp-config: no tools, no MCP servers spawned.
  *  - --max-turns 3: structured output uses one internal turn; slack for one more.
- *  - one call at a time (a queue), and a hard timeout that kills the process.
+ *  - --system-prompt ALWAYS: without one, Claude Code sends its whole built-in
+ *    agent prompt (~3.7K input tokens for "pong"). A neutral one is used when
+ *    the caller gives none. Organisation-managed policy (managed settings set
+ *    by a Claude for Work admin) may still apply — it is outside our control.
+ *  - an ALLOWLISTED environment (childEnv): the child never sees DATABASE_URL,
+ *    auth secrets or SMTP credentials, and never ANTHROPIC_* — an
+ *    ANTHROPIC_API_KEY in the app's env would otherwise silently switch the
+ *    CLI from the subscription login to that (paid) key.
+ *  - one call at a time (a queue); the timeout covers the queue wait too, so
+ *    a caller never waits longer than it asked.
  *
  * Cost comes from the CLI itself (`total_cost_usd`, API-equivalent dollars) —
  * it draws on the subscription's credit pool, and it is recorded like any call.
@@ -33,6 +42,28 @@ import { LlmProviderError } from "../errors";
 import type { Effort } from "../models";
 import type { TokenUsage } from "../pricing";
 import type { ProviderRequest, ProviderResult } from "./types";
+
+/** Used when the caller gives no system prompt. Kept identical in the bridge. */
+export const NEUTRAL_SYSTEM_PROMPT =
+  "You are a text-generation endpoint. You have no tools. Reply with only the requested content.";
+
+/** Variables `claude` may see. Kept identical in scripts/claude-bridge/server.mjs. */
+const CHILD_ENV_ALLOW =
+  /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TMPDIR|TEMP|TMP|XDG_[A-Z_]+|CLAUDE_CONFIG_DIR|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR)$/;
+
+/**
+ * The child's environment: an allowlist, never the app's whole env. Pure —
+ * the caller passes the source (the process env) in.
+ */
+export function childEnv(
+  source: Record<string, string | undefined>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(source)) {
+    if (v !== undefined && CHILD_ENV_ALLOW.test(k)) out[k] = v;
+  }
+  return out;
+}
 
 /** The argv for one call. Kept identical to scripts/claude-bridge/server.mjs. */
 export function cliArgs(opts: {
@@ -57,7 +88,7 @@ export function cliArgs(opts: {
     opts.model,
   ];
   if (opts.effort) args.push("--effort", opts.effort);
-  if (opts.system) args.push("--system-prompt", opts.system);
+  args.push("--system-prompt", opts.system || NEUTRAL_SYSTEM_PROMPT);
   if (opts.jsonSchema)
     args.push("--json-schema", JSON.stringify(opts.jsonSchema));
   return args;
@@ -97,6 +128,7 @@ export function parseCliOutput(
       `claude -p returned non-JSON output: ${stdout.trim().slice(0, 200)}`,
       "cli",
       false,
+      { costUnknown: true },
     );
   }
   const u = j.usage ?? {};
@@ -113,7 +145,11 @@ export function parseCliOutput(
       : null;
   const servedModel = Object.keys(j.modelUsage ?? {})[0] ?? requested;
 
-  if (j.subtype === "error_max_turns" || j.subtype === "error_max_tokens") {
+  if (
+    j.subtype === "error_max_turns" ||
+    j.subtype === "error_max_tokens" ||
+    j.stop_reason === "max_tokens"
+  ) {
     return {
       text: String(j.result ?? ""),
       usage,
@@ -164,6 +200,11 @@ function enqueue<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/**
+ * Run `claude` with `args`, the prompt on stdin. `timeoutMs` is the caller's
+ * whole budget INCLUDING time spent waiting in the queue: a run that reaches
+ * the front with no time left is never started.
+ */
 export function runClaude(
   args: string[],
   prompt: string,
@@ -171,11 +212,26 @@ export function runClaude(
   spawn: SpawnFn = nodeSpawn,
   bin: string = env().CLAUDE_BIN,
 ): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  const timedOut = (started: boolean) =>
+    new LlmProviderError(
+      `claude -p timed out after ${Math.round(timeoutMs / 1000)}s${started ? "" : " waiting in the queue"}`,
+      "cli",
+      true,
+      // Killed mid-run: it may have spent. Never started: it did not.
+      { costUnknown: started },
+    );
   return enqueue(
     () =>
       new Promise<string>((resolve, reject) => {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return reject(timedOut(false));
         const child = spawn(bin, args, {
           cwd: emptyCwd(),
+          // Rule 3 is about app CONFIG; this only forwards an allowlist of the
+          // process's own variables (PATH, HOME, locale…) to the child.
+          // (Cast: some workspaces augment ProcessEnv with required keys.)
+          env: childEnv(process.env) as NodeJS.ProcessEnv,
           stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,
         });
@@ -183,14 +239,8 @@ export function runClaude(
         let err = "";
         const timer = setTimeout(() => {
           child.kill("SIGKILL");
-          reject(
-            new LlmProviderError(
-              `claude -p timed out after ${Math.round(timeoutMs / 1000)}s`,
-              "cli",
-              true,
-            ),
-          );
-        }, timeoutMs);
+          reject(timedOut(true));
+        }, remaining);
         child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
         child.stderr?.on("data", (d: Buffer) => (err += d.toString()));
         child.on("error", (e) => {
@@ -200,7 +250,7 @@ export function runClaude(
               `could not start ${bin} (set CLAUDE_BIN, or use the bridge): ${e.message}`,
               "cli",
               false,
-              { cause: e },
+              { cause: e, costUnknown: false },
             ),
           );
         });
@@ -226,6 +276,9 @@ export function runClaude(
 
 export type FetchFn = typeof fetch;
 
+/** Slack for the HTTP round trip on top of the run's own timeout. */
+const BRIDGE_SLACK_MS = 15_000;
+
 export async function viaBridge(
   body: {
     prompt: string;
@@ -239,6 +292,7 @@ export async function viaBridge(
 ): Promise<string> {
   const e = env();
   let res: Response;
+  let text: string;
   try {
     res = await fetchFn(
       `${e.CLAUDE_BRIDGE_URL!.replace(/\/+$/, "")}/generate`,
@@ -248,25 +302,29 @@ export async function viaBridge(
           "content-type": "application/json",
           "x-bridge-key": e.CLAUDE_BRIDGE_KEY!,
         },
-        body: JSON.stringify(body),
-        // The bridge queues; allow for one call ahead of us.
-        signal: AbortSignal.timeout(timeoutMs * 2),
+        // The bridge counts its queue wait inside timeoutMs and kills `claude`
+        // if we hang up, so giving up here does not leave it spending.
+        body: JSON.stringify({ ...body, timeoutMs }),
+        signal: AbortSignal.timeout(timeoutMs + BRIDGE_SLACK_MS),
       },
     );
+    text = await res.text();
   } catch (err) {
     throw new LlmProviderError(
-      `claude bridge unreachable: ${err instanceof Error ? err.message : String(err)}`,
+      `claude bridge unreachable or timed out: ${err instanceof Error ? err.message : String(err)}`,
       "cli",
       true,
-      { cause: err },
+      { cause: err, costUnknown: true },
     );
   }
-  const text = await res.text();
   if (!res.ok) {
+    // 502 = the run itself failed or timed out on the bridge (may have spent);
+    // 4xx / 503 (queue full) = refused before running.
     throw new LlmProviderError(
       `claude bridge ${res.status}: ${text.slice(0, 300)}`,
       "cli",
       res.status >= 500,
+      { costUnknown: res.status === 502 },
     );
   }
   return text;

@@ -117,9 +117,12 @@ trip (about 20s). `make lint` shellchecks every script.
    (`anthropic/…`, `openai/…`, `azure/<deployment>`, `openrouter/…`, `local/…`,
    `cli/…`), picked by tier: app code calls `ask({ tier: "fast", priority, … })`,
    never a model id. Every call declares `priority: "essential" | "discretionary"`
-   — the per-tenant daily cap (`LLM_DAILY_CAP_USD`) refuses discretionary calls
-   BEFORE sending and never refuses essential ones. Every call is priced into
-   `llm_call`. Claude goes through the official `@anthropic-ai/sdk`, never an
+   — the per-tenant daily cap (`LLM_DAILY_CAP_USD`, per UTC day, blank = none)
+   refuses discretionary calls BEFORE sending (over the cap, or on a model with
+   no known price) and never refuses essential ones. Each call first RESERVES
+   its estimate as a `pending` `llm_call` row under a per-tenant advisory lock,
+   so concurrent calls cannot all slip under the cap; the row is then settled
+   with the real cost. Claude goes through the official `@anthropic-ai/sdk`, never an
    OpenAI-compatible shim. Structured output is `askObject`: zod-validated, never
    repaired — a failure is `{ ok: false, reason }` for a human to handle.
 5. **Slow or failable work goes to `packages/jobs`**, not into a request. Every
@@ -338,11 +341,24 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   `@ai-sdk/azure`/`@ai-sdk/openai`, which send `max_completion_tokens`; the
   generic OpenAI-compatible provider is only for `local/`, OpenRouter, DeepSeek.
   Name Azure deployments after the model (`gpt-5`), or detection by name fails.
-- **A model string with an unknown prefix is an error, not a bare name.** A
-  slash-containing id for a local server is `local/meta-llama/…`.
+- **A model string with an unknown prefix is an error, not a bare name** — in
+  CODE. From .env, with a custom `LLM_BASE_URL`, a prefix whose provider has no
+  key (or no provider at all) is read as a whole model id on that URL (legacy
+  mode, warned at boot). `local/meta-llama/…` says it explicitly.
+- **Only Claude Opus/Sonnet/Haiku 5.5 are priced built in.** Everything else
+  needs `LLM_PRICES`; with a cap set, discretionary calls on an unpriced model
+  are refused (`LlmUnpricedError`). The boot log lists every unpriced tier.
+- **A failed call whose cost is unknown** (timeout, dropped stream, killed CLI)
+  is recorded `costKnown=false` with its estimate still counted against the cap.
+  An HTTP error status from the provider is recorded as $0.
 - **`cli/` runs `claude -p` one call at a time** from an empty temp dir, tools
-  off. In Docker there is no `claude`: use `scripts/claude-bridge` on the host
-  (`ops/systemd/claude-bridge.service`), bound to loopback/tailnet only.
+  off, a neutral system prompt, and an allowlisted environment: an
+  `ANTHROPIC_API_KEY` in the app's env would otherwise silently switch it from
+  the subscription login to the paid key, and the app's secrets would leak to
+  it. The timeout includes the queue wait. In Docker there is no `claude`: use
+  `scripts/claude-bridge` on the host (`ops/systemd/claude-bridge.service`),
+  bound to loopback or this host's tailscale address only; it caps its queue
+  (503) and kills a run whose client hung up.
 - **`npm run ai:live` spends real money** on every configured provider. It is
   never part of `make test` or CI; unit tests use fakes and stay offline.
 - **tailwindcss v4 (web) and v3 (mobile, for NativeWind) coexist** deliberately.

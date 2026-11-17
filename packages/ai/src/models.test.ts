@@ -4,6 +4,7 @@ import { LlmConfigError } from "./errors";
 import {
   defaultModel,
   modelForTier,
+  parseConfigured,
   parseModel,
   providerConfigured,
   resolve,
@@ -82,5 +83,47 @@ describe("providerConfigured", () => {
   it("is switched off wholesale by LLM_ENABLED=false (the smoke gate)", () => {
     setLlmEnv({ ANTHROPIC_API_KEY: "k", LLM_ENABLED: "false" });
     expect(routeEnabled(parseModel("anthropic/claude-opus-5-5"))).toBe(false);
+  });
+});
+
+describe("legacy single-endpoint config (LLM_BASE_URL + slashed LLM_MODEL)", () => {
+  const openrouter = {
+    LLM_BASE_URL: "https://openrouter.ai/api/v1",
+    LLM_API_KEY: "or-key",
+  };
+
+  it("reads an OpenRouter-style id as a model on LLM_BASE_URL when its prefix's provider has no key", () => {
+    setLlmEnv({ ...openrouter, LLM_MODEL: "openai/gpt-4o-mini" });
+    expect(resolve({})).toEqual({
+      provider: "local",
+      model: "openai/gpt-4o-mini",
+      id: "local/openai/gpt-4o-mini",
+      legacy: true,
+    });
+    setLlmEnv({ ...openrouter, LLM_MODEL: "meta-llama/llama-4" });
+    expect(resolve({}).id).toBe("local/meta-llama/llama-4");
+    expect(routeEnabled(resolve({}))).toBe(true);
+  });
+
+  it("routes to the real provider once that provider is configured, or when written local/ explicitly", () => {
+    setLlmEnv({
+      ...openrouter,
+      OPENAI_API_KEY: "k",
+      LLM_MODEL: "openai/gpt-4o-mini",
+    });
+    expect(resolve({}).provider).toBe("openai");
+    expect(parseConfigured("local/openai/gpt-4o-mini")).toMatchObject({
+      provider: "local",
+      model: "openai/gpt-4o-mini",
+    });
+  });
+
+  it("stays strict for model strings passed in code, and without a custom base URL", () => {
+    setLlmEnv(openrouter);
+    expect(() => resolve({ model: "meta-llama/llama-4" })).toThrow(
+      LlmConfigError,
+    );
+    setLlmEnv({ LLM_MODEL: "meta-llama/llama-4" });
+    expect(() => resolve({})).toThrow(LlmConfigError);
   });
 });

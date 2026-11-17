@@ -261,7 +261,7 @@ export function Dashboard() {
                 </Button>
                 {askAi.data && (
                   <p className="text-xs text-muted-foreground">
-                    {askAi.data.servedBy ?? aiEnabled.data?.model}
+                    {askAi.data.servedBy ?? "model"}
                     {askAi.data.outputTokens !== null &&
                       ` · ${askAi.data.inputTokens}→${askAi.data.outputTokens} tokens`}
                     {" · "}

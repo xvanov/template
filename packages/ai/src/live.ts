@@ -17,7 +17,17 @@ import { z } from "zod";
 import { createLlm, describeLlm } from "./index";
 import { parseModel, providerConfigured } from "./models";
 
-const llm = createLlm({ record: async () => undefined });
+// A diagnostic, not app usage: nothing is written to llm_call.
+const llm = createLlm({
+  ledger: {
+    reserve: async () => ({
+      id: null,
+      decision: { allowed: true, overCap: false },
+      spentUsd: null,
+    }),
+    settle: async () => undefined,
+  },
+});
 
 function claudeInstalled(): boolean {
   return (

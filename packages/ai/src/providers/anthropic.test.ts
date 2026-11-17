@@ -171,33 +171,43 @@ describe("callAnthropic", () => {
   });
 
   it("prices a fallback-served turn per hop, and reports who served it", async () => {
+    const hop = (type: string, model?: string) => ({
+      type,
+      ...(model ? { model } : {}),
+      input_tokens: 1e6,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    });
     const { client } = fakeClient(
       message({
-        model: "claude-opus-4-8",
+        model: "claude-sonnet-5-5",
         usage: {
           iterations: [
-            {
-              type: "message",
-              input_tokens: 1e6,
-              output_tokens: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            {
-              type: "fallback_message",
-              model: "claude-opus-4-8",
-              input_tokens: 1e6,
-              output_tokens: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
+            hop("message"),
+            hop("fallback_message", "claude-sonnet-5-5"),
           ] as unknown as Msg["usage"]["iterations"],
         },
       }),
     );
     const r = await callAnthropic(req("claude-opus-5-5"), client);
-    expect(r.servedBy).toBe("anthropic/claude-opus-4-8");
-    expect(r.costUsd).toBe(9); // $4 declined hop + $5 rescue
+    expect(r.servedBy).toBe("anthropic/claude-sonnet-5-5");
+    expect(r.costUsd).toBe(6); // $4 declined hop + $2 rescue
+
+    // A fallback model with no sourced price makes the whole cost unknown.
+    const unknown = fakeClient(
+      message({
+        usage: {
+          iterations: [
+            hop("message"),
+            hop("fallback_message", "claude-opus-4-8"),
+          ] as unknown as Msg["usage"]["iterations"],
+        },
+      }),
+    );
+    expect(
+      (await callAnthropic(req("claude-opus-5-5"), unknown.client)).costUsd,
+    ).toBeNull();
   });
 });
 

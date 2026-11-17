@@ -199,10 +199,15 @@ const serverSchema = z.object({
     z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
   ),
   /**
-   * Per-tenant daily spend cap in USD (UTC day). Discretionary calls that would
-   * cross it are refused BEFORE sending; essential calls always run (logged).
+   * Per-tenant daily spend cap in USD, per UTC day (resets at 00:00 UTC).
+   * Discretionary calls that would cross it — or that use a model with no known
+   * price — are refused BEFORE sending; essential calls always run (logged).
+   * Unset or blank = NO cap. 0 = no discretionary AI at all.
    */
-  LLM_DAILY_CAP_USD: z.coerce.number().nonnegative().default(2),
+  LLM_DAILY_CAP_USD: z.preprocess(
+    blankIsUnset,
+    z.coerce.number().nonnegative().optional(),
+  ),
   /**
    * Price overrides, USD per 1M tokens: `model=in:out[:cacheRead[:cacheWrite]]`,
    * comma-separated, e.g. `openai/gpt-4.1-mini=0.4:1.6,azure/gpt-5=1.25:10`.
@@ -214,9 +219,19 @@ const serverSchema = z.object({
   // local/ (and bare names): any OpenAI-compatible server — Ollama, vLLM, LM Studio…
   LLM_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
   LLM_API_KEY: z.string().optional(),
-  /** local/ prices (USD per 1M tokens). Kept from before the router. */
-  LLM_INPUT_COST_PER_MTOK: z.coerce.number().nonnegative().default(0),
-  LLM_OUTPUT_COST_PER_MTOK: z.coerce.number().nonnegative().default(0),
+  /**
+   * local/ prices (USD per 1M tokens), kept from before the router. Both unset
+   * or both 0 = price UNKNOWN (a free local model is declared explicitly with
+   * LLM_PRICES=local/<model>=0:0).
+   */
+  LLM_INPUT_COST_PER_MTOK: z.preprocess(
+    blankIsUnset,
+    z.coerce.number().nonnegative().optional(),
+  ),
+  LLM_OUTPUT_COST_PER_MTOK: z.preprocess(
+    blankIsUnset,
+    z.coerce.number().nonnegative().optional(),
+  ),
 
   ANTHROPIC_API_KEY: z.preprocess(blankIsUnset, z.string().optional()),
   ANTHROPIC_BASE_URL: optionalUrl,

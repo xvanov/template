@@ -152,6 +152,7 @@ describe("local/ and stop reasons", () => {
     );
     expect(err).toBeInstanceOf(LlmProviderError);
     expect((err as LlmProviderError).retryable).toBe(false);
+    expect((err as LlmProviderError).costUnknown).toBe(false); // refused: nothing billed
   });
 });
 

@@ -14,7 +14,13 @@
  */
 import { z } from "zod";
 import { db } from "@repo/db";
-import { ask, LlmBudgetExceededError, llmEnabled } from "@repo/ai";
+import {
+  ask,
+  LlmBudgetExceededError,
+  LlmDisabledError,
+  llmEnabled,
+  LlmUnpricedError,
+} from "@repo/ai";
 
 const schemas = {
   /** Demo job: summarise a tenant's open items with the LLM. */
@@ -73,7 +79,7 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
       const fallback = (why: string) => ({
         summary: `${items.length} open items (${why}).`,
       });
-      if (!llmEnabled()) return fallback("LLM disabled");
+      if (!llmEnabled("fast")) return fallback("LLM disabled");
 
       let result;
       try {
@@ -92,8 +98,12 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
             .join("\n"),
         });
       } catch (err) {
+        // Expected states, not failures: the job still produces a summary.
         if (err instanceof LlmBudgetExceededError)
           return fallback("daily AI budget reached");
+        if (err instanceof LlmUnpricedError)
+          return fallback("AI model has no price configured");
+        if (err instanceof LlmDisabledError) return fallback("LLM disabled");
         throw err;
       }
       return { summary: result.text, costUsd: result.costUsd };

@@ -26,17 +26,25 @@ import { db } from "@repo/db";
 import { env } from "@repo/env";
 import { z } from "zod";
 
-import { decide, spentTodayUsd } from "./budget";
+import {
+  dbLedger,
+  decide,
+  type Decision,
+  type Ledger,
+  type LlmCallRow,
+} from "./budget";
 import {
   LlmBudgetExceededError,
   LlmConfigError,
   LlmDisabledError,
+  LlmProviderError,
   LlmRefusalError,
   LlmTruncatedError,
+  LlmUnpricedError,
 } from "./errors";
 import {
-  defaultModel,
   modelForTier,
+  parseConfigured,
   parseModel,
   PROVIDERS,
   providerConfigured,
@@ -67,6 +75,7 @@ export * from "./errors";
 export { assertGrounded, unknownFactsIn, UngroundedOutputError } from "./guard";
 export type { UnknownFacts } from "./guard";
 export { decide, startOfUtcDay } from "./budget";
+export type { Decision, Ledger, LlmCallRow, Reservation } from "./budget";
 export { parseModel, PROVIDERS } from "./models";
 export type { Effort, Priority, ProviderId, Route, Tier } from "./models";
 export { costUsd, parsePrices, priceFor } from "./pricing";
@@ -90,7 +99,7 @@ interface CallOptions {
 export interface AskOptions extends CallOptions {
   prompt: string;
   system?: string;
-  /** Default 16000. The budget check prices the FULL allowance — lower it for cheap calls. */
+  /** Default 16000. The cap reserves the FULL allowance — lower it for cheap calls. */
   maxOutputTokens?: number;
   /** Reasoning depth. Default LLM_EFFORT ("medium"). */
   effort?: Effort;
@@ -118,6 +127,7 @@ export interface AskResult extends CallMeta {
 export type AskObjectFailure =
   | "disabled"
   | "over_budget"
+  | "unpriced"
   | "refusal"
   | "truncated"
   | "invalid_output"
@@ -151,31 +161,13 @@ export interface EmbedResult {
 
 // ── dependencies (the test seam) ─────────────────────────────────────────
 
-export interface LlmCallRow {
-  organizationId: string | null;
-  userId: string | null;
-  purpose: string;
-  model: string;
-  provider: string;
-  tier: string | null;
-  priority: Priority;
-  kind: "chat" | "embed";
-  usage: TokenUsage;
-  costUsd: number;
-  costKnown: boolean;
-  latencyMs: number;
-  ok: boolean;
-  error: string | null;
-}
-
 export interface LlmDeps {
   call: ProviderCall;
   embed: (
     route: Route,
     texts: string[],
   ) => Promise<{ embeddings: number[][]; tokens: number }>;
-  spentToday: (organizationId: string) => Promise<number>;
-  record: (row: LlmCallRow) => Promise<void>;
+  ledger: Ledger;
   warn: (message: string, data: Record<string, unknown>) => void;
 }
 
@@ -190,40 +182,10 @@ const dispatch: ProviderCall = (req) => {
   }
 };
 
-/** Accounting must never take down the feature it is measuring. */
-async function recordRow(row: LlmCallRow): Promise<void> {
-  try {
-    await db.llmCall.create({
-      data: {
-        organizationId: row.organizationId,
-        userId: row.userId,
-        purpose: row.purpose,
-        model: row.model,
-        provider: row.provider,
-        tier: row.tier,
-        priority: row.priority,
-        kind: row.kind,
-        inputTokens: row.usage.inputTokens,
-        outputTokens: row.usage.outputTokens,
-        cacheReadTokens: row.usage.cacheReadTokens,
-        cacheWriteTokens: row.usage.cacheWriteTokens,
-        costUsd: row.costUsd,
-        costKnown: row.costKnown,
-        latencyMs: row.latencyMs,
-        ok: row.ok,
-        error: row.error,
-      },
-    });
-  } catch (err) {
-    console.error("[ai] failed to record llm_call:", err);
-  }
-}
-
 const defaultDeps: LlmDeps = {
   call: dispatch,
   embed: (route, texts) => embedOpenAiFamily(route, texts),
-  spentToday: (org) => spentTodayUsd(org),
-  record: recordRow,
+  ledger: dbLedger,
   warn: (message, data) => console.warn(`[ai] ${message}`, data),
 };
 
@@ -235,34 +197,59 @@ const errText = (err: unknown) =>
 export function createLlm(overrides: Partial<LlmDeps> = {}) {
   const deps: LlmDeps = { ...defaultDeps, ...overrides };
 
-  /** Refuse BEFORE sending when a discretionary call would cross the cap. */
-  async function checkBudget(
+  /**
+   * Reserve the call in the ledger (the cap check happens there, under the
+   * tenant's lock) or throw the typed refusal. Returns the pending row's id.
+   */
+  async function reserve(
     opts: CallOptions,
     route: Route,
-    estimate: number,
-  ): Promise<void> {
-    if (!opts.organizationId) return;
+    row: LlmCallRow,
+    estimate: number | null,
+  ): Promise<string | null> {
+    announceLlmConfig();
     const capUsd = env().LLM_DAILY_CAP_USD;
+    const capped =
+      opts.organizationId && capUsd !== undefined
+        ? { organizationId: opts.organizationId }
+        : null;
+    const check = (spentUsd: number | null): Decision =>
+      decide({
+        priority: opts.priority,
+        spentUsd,
+        estimateUsd: estimate,
+        capUsd: capUsd ?? Number.POSITIVE_INFINITY,
+      });
+
+    let id: string | null;
+    let decision: Decision;
     let spentUsd: number | null;
     try {
-      spentUsd = await deps.spentToday(opts.organizationId);
+      ({ id, decision, spentUsd } = await deps.ledger.reserve(
+        row,
+        capped,
+        check,
+      ));
     } catch (err) {
+      id = null;
       spentUsd = null;
-      deps.warn("spend unknown — discretionary calls refused", {
-        organizationId: opts.organizationId,
-        error: errText(err),
-      });
+      decision = capped ? check(null) : { allowed: true, overCap: false };
+      deps.warn(
+        decision.allowed
+          ? "could not reserve the call in llm_call — proceeding unrecorded"
+          : "spend unknown — discretionary call refused",
+        {
+          organizationId: opts.organizationId,
+          purpose: opts.purpose,
+          error: errText(err),
+        },
+      );
     }
-    const d = decide({
-      priority: opts.priority,
-      spentUsd,
-      estimateUsd: estimate,
-      capUsd,
-    });
-    if (!d.allowed) {
-      throw new LlmBudgetExceededError(spentUsd, estimate, capUsd);
+    if (!decision.allowed) {
+      if (decision.reason === "unpriced") throw new LlmUnpricedError(route.id);
+      throw new LlmBudgetExceededError(spentUsd, estimate ?? 0, capUsd ?? 0);
     }
-    if (d.overCap) {
+    if (decision.overCap) {
       deps.warn("essential call over the daily cap — allowed", {
         organizationId: opts.organizationId,
         purpose: opts.purpose,
@@ -272,6 +259,28 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
         capUsd,
       });
     }
+    return id;
+  }
+
+  /** What a failed call is recorded as: unknown cost keeps the estimate. */
+  function failedRow(
+    row: LlmCallRow,
+    err: unknown,
+    estimate: number | null,
+    latencyMs: number,
+  ): LlmCallRow {
+    const costUnknown =
+      err instanceof LlmProviderError ? err.costUnknown : true;
+    return {
+      ...row,
+      usage: ZERO_USAGE,
+      costUsd: costUnknown ? (estimate ?? 0) : 0,
+      costKnown: !costUnknown,
+      latencyMs,
+      ok: false,
+      error: errText(err),
+      status: "done",
+    };
   }
 
   async function run(
@@ -290,13 +299,9 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
     const maxOutputTokens = opts.maxOutputTokens ?? 16_000;
     const tier = opts.model ? null : (opts.tier ?? "default");
     const inputChars = (opts.system?.length ?? 0) + opts.prompt.length;
-    await checkBudget(
-      opts,
-      route,
-      estimateUsd(route.id, inputChars, maxOutputTokens),
-    );
+    const estimate = estimateUsd(route.id, inputChars, maxOutputTokens);
 
-    const base = {
+    const row: LlmCallRow = {
       organizationId: opts.organizationId ?? null,
       userId: opts.userId ?? null,
       purpose: opts.purpose,
@@ -304,8 +309,17 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
       provider: route.provider,
       tier,
       priority: opts.priority,
-      kind: "chat" as const,
+      kind: "chat",
+      usage: ZERO_USAGE,
+      costUsd: estimate ?? 0,
+      costKnown: false,
+      latencyMs: 0,
+      ok: false,
+      error: null,
+      status: "pending",
     };
+    const id = await reserve(opts, route, row, estimate);
+
     const started = Date.now();
     let result: ProviderResult;
     try {
@@ -319,17 +333,12 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
         ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
       });
     } catch (err) {
-      // A failed call still cost time (and sometimes tokens). Record it, so
-      // "the AI feature is broken" shows up where its spend does.
-      await deps.record({
-        ...base,
-        usage: ZERO_USAGE,
-        costUsd: 0,
-        costKnown: true,
-        latencyMs: Date.now() - started,
-        ok: false,
-        error: errText(err),
-      });
+      // A failed call still cost time, and maybe tokens. Record it, so "the AI
+      // feature is broken" shows up where its spend does.
+      await deps.ledger.settle(
+        id,
+        failedRow(row, err, estimate, Date.now() - started),
+      );
       throw err;
     }
 
@@ -346,14 +355,16 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
           : validate
             ? validate(result.text)
             : null;
-    await deps.record({
-      ...base,
+    await deps.ledger.settle(id, {
+      ...row,
       usage: result.usage,
-      costUsd: cost ?? 0,
+      // Unknown real cost: the estimate stays on the books against the cap.
+      costUsd: cost ?? estimate ?? 0,
       costKnown: cost !== null,
       latencyMs,
       ok: error === null,
       error,
+      status: "done",
     });
     const meta: CallMeta = {
       model: route.id,
@@ -422,11 +433,11 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
         return betaZodOutputFormat(schema).schema;
       // `$schema` names draft 2020-12, which Claude Code's validator rejects;
       // the schema body is plain enough for every validator without it.
-      const { $schema: _draft, ...rest } = z.toJSONSchema(schema) as Record<
+      const { $schema: _draft, ...body } = z.toJSONSchema(schema) as Record<
         string,
         unknown
       >;
-      return rest;
+      return body;
     };
 
     let model = "";
@@ -466,7 +477,9 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
           ? "disabled"
           : err instanceof LlmBudgetExceededError
             ? "over_budget"
-            : "provider_error";
+            : err instanceof LlmUnpricedError
+              ? "unpriced"
+              : "provider_error";
       return { ok: false, reason, detail: errText(err), costUsd: 0, model };
     }
   }
@@ -482,7 +495,9 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
         "Embeddings are off — set LLM_EMBEDDING_MODEL (e.g. openai/text-embedding-3-small).",
       );
     }
-    const route = parseModel(modelString);
+    const route = opts.model
+      ? parseModel(modelString)
+      : parseConfigured(modelString);
     if (!EMBEDDING_PROVIDERS.includes(route.provider)) {
       throw new LlmConfigError(
         `embeddings are not wired for ${route.provider}/ — use ${EMBEDDING_PROVIDERS.join(", ")}`,
@@ -492,9 +507,8 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
       throw new LlmDisabledError(`${route.id} is not configured.`);
     }
     const chars = opts.texts.reduce((n, t) => n + t.length, 0);
-    await checkBudget(opts, route, estimateUsd(route.id, chars, 0));
-
-    const base = {
+    const estimate = estimateUsd(route.id, chars, 0);
+    const row: LlmCallRow = {
       organizationId: opts.organizationId ?? null,
       userId: opts.userId ?? null,
       purpose: opts.purpose,
@@ -502,43 +516,49 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
       provider: route.provider,
       tier: null,
       priority: opts.priority,
-      kind: "embed" as const,
+      kind: "embed",
+      usage: ZERO_USAGE,
+      costUsd: estimate ?? 0,
+      costKnown: false,
+      latencyMs: 0,
+      ok: false,
+      error: null,
+      status: "pending",
     };
+    const id = await reserve(opts, route, row, estimate);
+
     const started = Date.now();
+    let r: { embeddings: number[][]; tokens: number };
     try {
-      const r = await deps.embed(route, opts.texts);
-      const usage = { ...ZERO_USAGE, inputTokens: r.tokens };
-      const cost = priceUsage(route.id, usage);
-      const latencyMs = Date.now() - started;
-      await deps.record({
-        ...base,
-        usage,
-        costUsd: cost ?? 0,
-        costKnown: cost !== null,
-        latencyMs,
-        ok: true,
-        error: null,
-      });
-      return {
-        embeddings: r.embeddings,
-        model: route.id,
-        tokens: r.tokens,
-        costUsd: cost ?? 0,
-        costKnown: cost !== null,
-        latencyMs,
-      };
+      r = await deps.embed(route, opts.texts);
     } catch (err) {
-      await deps.record({
-        ...base,
-        usage: ZERO_USAGE,
-        costUsd: 0,
-        costKnown: true,
-        latencyMs: Date.now() - started,
-        ok: false,
-        error: errText(err),
-      });
+      await deps.ledger.settle(
+        id,
+        failedRow(row, err, estimate, Date.now() - started),
+      );
       throw err;
     }
+    const usage = { ...ZERO_USAGE, inputTokens: r.tokens };
+    const cost = priceUsage(route.id, usage);
+    const latencyMs = Date.now() - started;
+    await deps.ledger.settle(id, {
+      ...row,
+      usage,
+      costUsd: cost ?? estimate ?? 0,
+      costKnown: cost !== null,
+      latencyMs,
+      ok: true,
+      error: null,
+      status: "done",
+    });
+    return {
+      embeddings: r.embeddings,
+      model: route.id,
+      tokens: r.tokens,
+      costUsd: cost ?? 0,
+      costKnown: cost !== null,
+      latencyMs,
+    };
   }
 
   return { ask, askObject, embed };
@@ -551,43 +571,102 @@ export const embed = llm.embed;
 
 // ── introspection ────────────────────────────────────────────────────────
 
-/** True when the default model can be called right now. */
-export function llmEnabled(): boolean {
+/** True when the tier's model (default tier if omitted) can be called right now. */
+export function llmEnabled(tier: Tier = "default"): boolean {
   try {
-    return routeEnabled(parseModel(defaultModel()));
+    return routeEnabled(resolve({ tier }));
   } catch {
     return false;
   }
 }
 
-/** What the app will use, safe to render: never a key. */
+/**
+ * What the AI config will do, as lines worth reading at boot: which model each
+ * tier routes to, the cap, and every problem — a model with no price (its
+ * discretionary calls are refused while a cap is set), a legacy-mode model
+ * string, a string that does not parse.
+ */
+export function llmConfigReport(): { summary: string; warnings: string[] } {
+  const e = env();
+  if (!e.LLM_ENABLED)
+    return { summary: "[ai] LLM: off (LLM_ENABLED=false)", warnings: [] };
+  const warnings: string[] = [];
+  const parts: string[] = [];
+  for (const tier of ["default", "fast", "smart"] as const) {
+    const value = modelForTier(tier);
+    try {
+      const route = parseConfigured(value);
+      parts.push(
+        `${tier}=${route.id}${providerConfigured(route.provider) ? "" : " (no key)"}`,
+      );
+      if (route.legacy) {
+        warnings.push(
+          `[ai] ${value} is read as a model id on LLM_BASE_URL (legacy). Write local/${value} to say so explicitly.`,
+        );
+      }
+      if (providerConfigured(route.provider) && priceFor(route.id) === null) {
+        warnings.push(
+          e.LLM_DAILY_CAP_USD !== undefined
+            ? `[ai] NO PRICE for ${route.id} (tier ${tier}): its discretionary calls are REFUSED while LLM_DAILY_CAP_USD is set. Add it to LLM_PRICES.`
+            : `[ai] NO PRICE for ${route.id} (tier ${tier}): its spend is recorded as unknown. Add it to LLM_PRICES.`,
+        );
+      }
+    } catch (err) {
+      warnings.push(`[ai] tier ${tier}: ${errText(err)}`);
+    }
+  }
+  const cap =
+    e.LLM_DAILY_CAP_USD === undefined
+      ? "no daily cap"
+      : `cap $${e.LLM_DAILY_CAP_USD}/tenant/UTC day`;
+  return {
+    summary: `[ai] LLM: ${[...new Set(parts)].join(" · ")} · ${cap}`,
+    warnings: [...new Set(warnings)],
+  };
+}
+
+let announced = false;
+/** Print llmConfigReport() once per process. Called at boot and on first use. */
+export function announceLlmConfig(): void {
+  if (announced) return;
+  announced = true;
+  try {
+    const { summary, warnings } = llmConfigReport();
+    console.log(summary);
+    for (const w of warnings) console.warn(w);
+  } catch (err) {
+    console.warn(`[ai] could not read the AI config: ${errText(err)}`);
+  }
+}
+
+/**
+ * What the app will use, safe to render to a SIGNED-IN user: never a key.
+ * (Model ids are not for anonymous visitors.)
+ */
 export function describeLlm() {
   const e = env();
   const tiers = Object.fromEntries(
-    (["fast", "default", "smart"] as const).map((t) => [t, modelForTier(t)]),
+    (["fast", "default", "smart"] as const).map((t) => {
+      try {
+        return [t, resolve({ tier: t }).id];
+      } catch {
+        return [t, modelForTier(t)];
+      }
+    }),
   ) as Record<Tier, string>;
   return {
     enabled: llmEnabled(),
     tiers,
     embeddingModel: e.LLM_EMBEDDING_MODEL ?? null,
-    dailyCapUsd: e.LLM_DAILY_CAP_USD,
+    dailyCapUsd: e.LLM_DAILY_CAP_USD ?? null,
     providers: PROVIDERS.map((id) => ({
       id,
       configured: providerConfigured(id),
     })),
-    priced: Object.fromEntries(
-      Object.values(tiers).map((m) => {
-        try {
-          return [m, priceFor(m) !== null];
-        } catch {
-          return [m, false];
-        }
-      }),
-    ),
   };
 }
 
-/** Spend rollup for a tenant over the last N days. */
+/** Spend rollup for a tenant over the last N days (pending reservations included). */
 export async function spendByPurpose(organizationId: string, days = 30) {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
   const rows = await db.llmCall.groupBy({

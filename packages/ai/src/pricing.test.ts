@@ -39,6 +39,13 @@ describe("built-in Anthropic prices", () => {
     expect(priceFor("openrouter/anthropic/claude-opus-5-5")).toBeNull();
     expect(priceUsage("openai/gpt-5", usage(1000, 1000))).toBeNull();
     expect(priceUsage("anthropic/claude-unknown-9", usage(1, 1))).toBeNull();
+    // Only prices we can source are built in.
+    expect(priceFor("anthropic/claude-opus-4-8")).toBeNull();
+    expect(priceFor("cli/claude-sonnet-5-5")).toEqual({
+      input: 2,
+      output: 10,
+      cacheRead: 0.1,
+    });
   });
 });
 
@@ -57,6 +64,14 @@ describe("overrides and the legacy local rates", () => {
     expect(priceUsage("anthropic/claude-opus-5-5", usage(1e6, 0))).toBe(1);
   });
 
+  it("treats local/ with no (or 0/0) legacy rates as UNKNOWN, unless LLM_PRICES says free", () => {
+    expect(priceFor("local/qwen3")).toBeNull();
+    setLlmEnv({ LLM_INPUT_COST_PER_MTOK: "0", LLM_OUTPUT_COST_PER_MTOK: "0" });
+    expect(priceFor("local/qwen3")).toBeNull();
+    setLlmEnv({ LLM_PRICES: "local/qwen3=0:0" });
+    expect(priceUsage("local/qwen3", usage(1e6, 1e6))).toBe(0);
+  });
+
   it("prices local/ (and bare names) from LLM_INPUT/OUTPUT_COST_PER_MTOK", () => {
     setLlmEnv({
       LLM_INPUT_COST_PER_MTOK: "0.40",
@@ -72,7 +87,7 @@ describe("estimateUsd", () => {
   it("prices ~4 chars per token plus the FULL output allowance", () => {
     // 4000 chars → 1000 input tokens @ $4/M + 1000 output @ $20/M
     expect(estimateUsd("anthropic/claude-opus-5-5", 4000, 1000)).toBe(0.024);
-    expect(estimateUsd("openai/unpriced", 4000, 1000)).toBe(0);
+    expect(estimateUsd("openai/unpriced", 4000, 1000)).toBeNull();
   });
 
   it("costUsd is zero for an empty call", () => {
