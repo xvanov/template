@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { env, googleEnabled } from "@repo/env";
 
 import { LoginForm } from "@/components/login-form";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { getServerSession } from "@/lib/session";
 
 /**
@@ -29,6 +30,7 @@ export default async function LoginPage({
   // receives the boolean, never the credentials.
   return (
     <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center px-6 py-16">
+      <ThemeToggle className="absolute top-4 right-4" />
       <LoginForm
         googleEnabled={googleEnabled()}
         mode={mode === "signup" ? "signup" : "signin"}

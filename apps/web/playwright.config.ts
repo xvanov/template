@@ -28,6 +28,12 @@ export default defineConfig({
     // Keep one phone-sized viewport honest so a mobile layout regression cannot
     // ship unnoticed. Deliberately a Chromium device, not iPhone/WebKit, so
     // `npx playwright install chromium` is all a contributor needs.
-    { name: "mobile", use: { ...devices["Pixel 7"] } },
+    // Only the viewport-sensitive journey runs here; API-level and
+    // theme/manifest specs gain nothing from a second browser size.
+    {
+      name: "mobile",
+      use: { ...devices["Pixel 7"] },
+      testMatch: /journey\.spec\.ts/,
+    },
   ],
 });

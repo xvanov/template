@@ -33,6 +33,12 @@ const nextConfig: NextConfig = {
   // config is evaluated before anything validates; the root .env is already
   // loaded by scripts/with-root-env.mjs. Production ignores this setting.
   allowedDevOrigins: devOriginHosts(process.env),
+
+  // Type errors are caught by `make typecheck` (tsc --noEmit, its own gate in
+  // CI and the factory). Checking again inside `next build` costs ~7s on every
+  // smoke run and Docker build for no extra safety. Never ship without the
+  // typecheck gate green.
+  typescript: { ignoreBuildErrors: true },
 };
 
 export default nextConfig;

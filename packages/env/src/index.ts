@@ -108,6 +108,47 @@ const serverSchema = z.object({
 
   APP_SCHEME: z.string().default("apptemplate"),
 
+  // ── Display formatting (apps/web/src/lib/format.ts) ────────────────────
+  // How money, dates and numbers are shown to users. Server-side defaults for
+  // the whole app; the /app layout hands them to client components.
+  /** BCP 47 locale, e.g. en-US, en-GB, de-DE. */
+  APP_LOCALE: z.preprocess(
+    blankIsUnset,
+    z
+      .string()
+      .default("en-US")
+      .refine((v) => {
+        try {
+          return Intl.getCanonicalLocales(v).length === 1;
+        } catch {
+          return false;
+        }
+      }, "must be a BCP 47 locale tag such as en-US"),
+  ),
+  /** ISO 4217 currency code, e.g. USD, EUR, GBP, JPY. */
+  APP_CURRENCY: z.preprocess(
+    blankIsUnset,
+    z
+      .string()
+      .regex(/^[A-Z]{3}$/, "must be a 3-letter ISO 4217 code such as USD")
+      .default("USD"),
+  ),
+  /** IANA timezone used for "today" and for rendering instants, e.g. America/New_York. */
+  APP_TIMEZONE: z.preprocess(
+    blankIsUnset,
+    z
+      .string()
+      .default("UTC")
+      .refine((v) => {
+        try {
+          new Intl.DateTimeFormat("en-US", { timeZone: v });
+          return true;
+        } catch {
+          return false;
+        }
+      }, "must be an IANA timezone such as Europe/London"),
+  ),
+
   // LLM — any OpenAI-compatible endpoint. Absent key = feature disabled.
   LLM_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
   LLM_API_KEY: z.string().optional(),

@@ -55,6 +55,30 @@ describe("env", () => {
     expect(e.TRUSTED_ORIGINS).toBeUndefined();
   });
 
+  it("defaults display formatting to en-US · USD · UTC and validates overrides", () => {
+    setBaseline();
+    expect(env()).toMatchObject({
+      APP_LOCALE: "en-US",
+      APP_CURRENCY: "USD",
+      APP_TIMEZONE: "UTC",
+    });
+
+    resetEnvCache();
+    process.env.APP_LOCALE = "de-DE";
+    process.env.APP_CURRENCY = "EUR";
+    process.env.APP_TIMEZONE = "Europe/Berlin";
+    expect(env()).toMatchObject({
+      APP_LOCALE: "de-DE",
+      APP_CURRENCY: "EUR",
+      APP_TIMEZONE: "Europe/Berlin",
+    });
+
+    resetEnvCache();
+    process.env.APP_CURRENCY = "euro";
+    process.env.APP_TIMEZONE = "Mars/Olympus";
+    expect(() => env()).toThrow(/APP_CURRENCY[\s\S]*APP_TIMEZONE/);
+  });
+
   it("parses WORKER_CONCURRENCY as an int and bounds it to 1–50", () => {
     setBaseline();
     process.env.WORKER_CONCURRENCY = "12";

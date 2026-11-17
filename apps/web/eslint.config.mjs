@@ -9,6 +9,30 @@ const eslintConfig = defineConfig([
   ...nextTs,
   // No mail library in the web app: send through @repo/email (CLAUDE.md rule 8).
   ...mailBoundary("__none__"),
+  // src/components/ui is vendored shadcn/ui: keep it close to upstream so
+  // `shadcn add`/diff stay easy. The React Compiler rules (react-hooks v6+)
+  // flag upstream patterns there; they stay on for all of OUR code.
+  {
+    files: ["src/components/ui/**"],
+    rules: Object.fromEntries(
+      [
+        "static-components",
+        "use-memo",
+        "preserve-manual-memoization",
+        "incompatible-library",
+        "immutability",
+        "globals",
+        "refs",
+        "set-state-in-effect",
+        "set-state-in-render",
+        "purity",
+        "error-boundaries",
+        "unsupported-syntax",
+        "config",
+        "gating",
+      ].map((rule) => [`react-hooks/${rule}`, "off"]),
+    ),
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

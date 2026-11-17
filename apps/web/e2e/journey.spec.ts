@@ -110,14 +110,28 @@ test("sign up, create an item, and see it persist across a reload", async ({
   await toggle.click();
   await expect(toggle).toBeChecked();
 
-  await page.getByRole("button", { name: `Delete "${title}"` }).click();
+  // Delete goes through a confirm dialog. Escape must cancel it and hand focus
+  // back to the trigger (keyboard users would otherwise be lost on the page).
+  const deleteButton = page.getByRole("button", { name: `Delete "${title}"` });
+  const confirm = page.getByRole("alertdialog", { name: "Delete this item?" });
+  await deleteButton.click();
+  await expect(confirm).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(confirm).toBeHidden();
+  await expect(deleteButton).toBeFocused();
+  await expect(page.getByText(title)).toBeVisible();
+
+  await deleteButton.click();
+  await confirm.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(page.getByText(title)).toHaveCount(0);
 });
 
 test("signing out revokes access to the app", async ({ page, baseURL }) => {
   await signUp(page, uniqueEmail("signout"), baseURL!);
 
-  await page.getByRole("button", { name: /sign out/i }).click();
+  // Sign out lives in the account menu (header, top right) on every viewport.
+  await page.getByRole("button", { name: "Account menu" }).click();
+  await page.getByRole("menuitem", { name: /sign out/i }).click();
   await expect(page).toHaveURL(/\/$/, { timeout: 20_000 });
 
   // The guard is server-side, so asking for /app directly must also bounce.

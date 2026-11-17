@@ -2,11 +2,53 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { MailCheck } from "lucide-react";
+import { useForm } from "react-hook-form";
+// zod/mini, not "zod": same schemas, but tree-shakable — classic zod adds
+// ~60 kB gzipped to a browser bundle. Server code keeps classic zod.
+import {
+  email,
+  maxLength,
+  minLength,
+  object,
+  string,
+  type infer as Infer,
+} from "zod/mini";
 import { authClient } from "@repo/auth/client";
 
-import { Button, Card, ErrorText, Hint, Input } from "./ui";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import { FieldError } from "@/components/ui/states";
 
 type Mode = "signin" | "signup";
+
+const schema = object({
+  name: string().check(maxLength(100)),
+  email: email("Enter a valid email address."),
+  password: string().check(minLength(8, "At least 8 characters.")),
+});
+type Values = Infer<typeof schema>;
+
+const linkClass =
+  "text-sm font-medium underline-offset-4 hover:underline focus-visible:underline";
 
 export function LoginForm({
   googleEnabled,
@@ -18,9 +60,10 @@ export function LoginForm({
   /** Local dev mail inbox, when one is configured. See DEV_MAIL_INBOX_URL. */
   devInboxUrl?: string | null;
 }) {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const form = useForm<Values>({
+    resolver: zodResolver(schema),
+    defaultValues: { name: "", email: "", password: "" },
+  });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
@@ -35,8 +78,7 @@ export function LoginForm({
     formRef.current?.setAttribute("data-hydrated", "true");
   }, []);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit({ name, email, password }: Values) {
     setError(null);
     setBusy(true);
     try {
@@ -111,144 +153,184 @@ export function LoginForm({
   if (sentTo) {
     return (
       <Card>
-        <h1 className="text-xl font-semibold">Confirm your email</h1>
-        <Hint className="mt-2" data-testid="verify-sent">
-          We sent a confirmation link to <strong>{sentTo}</strong>. Open it to
-          finish setting up your account — you will be signed in automatically.
-        </Hint>
-
-        {/* Development only. Without this, mail sent to a local catcher looks
-            exactly like mail that was never sent: you check your real inbox,
-            find nothing, and assume the feature is broken. */}
-        {devInboxUrl && (
-          <p className="mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3 text-sm">
-            <strong>Development:</strong> mail is delivered to a local inbox,
-            not to the real address.{" "}
-            <a
-              href={devInboxUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="text-[var(--color-accent)] underline underline-offset-4"
-            >
-              Open the local inbox
-            </a>{" "}
-            to find the link.
-          </p>
-        )}
-
-        <ErrorText>{error}</ErrorText>
-        <div className="mt-5 flex items-center gap-3">
-          <Button
-            variant="secondary"
-            onClick={resend}
-            disabled={busy || resent}
-          >
+        <CardHeader>
+          <MailCheck
+            aria-hidden
+            className="mb-2 size-6 text-muted-foreground"
+          />
+          <CardTitle>
+            <h1 className="text-xl">Confirm your email</h1>
+          </CardTitle>
+          <CardDescription data-testid="verify-sent">
+            We sent a confirmation link to{" "}
+            <strong className="text-foreground">{sentTo}</strong>. Open it to
+            finish setting up your account — you will be signed in
+            automatically.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {/* Development only. Without this, mail sent to a local catcher looks
+              exactly like mail that was never sent: you check your real inbox,
+              find nothing, and assume the feature is broken. */}
+          {devInboxUrl && (
+            <p className="rounded-md border bg-muted p-3 text-sm">
+              <strong>Development:</strong> mail is delivered to a local inbox,
+              not to the real address.{" "}
+              <a
+                href={devInboxUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium underline underline-offset-4"
+              >
+                Open the local inbox
+              </a>{" "}
+              to find the link.
+            </p>
+          )}
+          <FieldError>{error}</FieldError>
+        </CardContent>
+        <CardFooter className="gap-3">
+          <Button variant="outline" onClick={resend} disabled={busy || resent}>
             {resent ? "Link sent" : busy ? "Sending…" : "Resend link"}
           </Button>
-          <Link
-            href="/login"
-            className="text-sm text-[var(--color-accent)] underline-offset-4 hover:underline"
-          >
+          <Link href="/login" className={linkClass}>
             Back to sign in
           </Link>
-        </div>
+        </CardFooter>
       </Card>
     );
   }
 
   return (
     <Card>
-      <h1 className="text-xl font-semibold">
-        {mode === "signin" ? "Sign in" : "Create an account"}
-      </h1>
-      <Hint className="mt-1">
-        {mode === "signin"
-          ? "Email and password work with no external setup."
-          : "You will get your own workspace immediately."}
-      </Hint>
+      <CardHeader>
+        <CardTitle>
+          <h1 className="text-xl">
+            {mode === "signin" ? "Sign in" : "Create an account"}
+          </h1>
+        </CardTitle>
+        <CardDescription>
+          {mode === "signin"
+            ? "Email and password work with no external setup."
+            : "You will get your own workspace immediately."}
+        </CardDescription>
+      </CardHeader>
 
-      <form ref={formRef} onSubmit={submit} className="mt-5 space-y-3">
-        {mode === "signup" && (
-          <label className="block space-y-1">
-            <span className="text-sm font-medium">Name</span>
-            <Input
-              name="name"
-              autoComplete="name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Ada Lovelace"
-            />
-          </label>
-        )}
-
-        <label className="block space-y-1">
-          <span className="text-sm font-medium">Email</span>
-          <Input
-            name="email"
-            type="email"
-            required
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-          />
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-sm font-medium">Password</span>
-          <Input
-            name="password"
-            type="password"
-            required
-            minLength={8}
-            autoComplete={
-              mode === "signin" ? "current-password" : "new-password"
-            }
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="at least 8 characters"
-          />
-        </label>
-
-        <ErrorText>{error}</ErrorText>
-
-        <Button type="submit" disabled={busy} className="w-full">
-          {busy ? "Working…" : mode === "signin" ? "Sign in" : "Create account"}
-        </Button>
-      </form>
-
-      {googleEnabled ? (
-        <>
-          <div className="my-4 flex items-center gap-3 text-xs text-[var(--color-muted)]">
-            <span className="h-px flex-1 bg-[var(--color-border)]" />
-            or
-            <span className="h-px flex-1 bg-[var(--color-border)]" />
-          </div>
-          <Button
-            variant="secondary"
-            onClick={google}
-            disabled={busy}
-            className="w-full"
+      <CardContent className="space-y-4">
+        <Form {...form}>
+          <form
+            ref={formRef}
+            onSubmit={form.handleSubmit(submit)}
+            noValidate
+            className="space-y-4"
           >
-            Continue with Google
-          </Button>
-        </>
-      ) : (
-        <Hint className="mt-4 text-xs">
-          Google sign-in is hidden because GOOGLE_CLIENT_ID /
-          GOOGLE_CLIENT_SECRET are unset. See .env.example for the two-minute
-          setup.
-        </Hint>
-      )}
+            {mode === "signup" && (
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Name</FormLabel>
+                    <FormControl>
+                      <Input
+                        autoComplete="name"
+                        placeholder="Ada Lovelace"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
-      <Link
-        href={mode === "signin" ? "/login?mode=signup" : "/login"}
-        className="mt-5 inline-block text-sm text-[var(--color-accent)] underline-offset-4 hover:underline"
-      >
-        {mode === "signin"
-          ? "No account? Create one"
-          : "Already have an account? Sign in"}
-      </Link>
+            <FormField
+              control={form.control}
+              name="email"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Email</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="email"
+                      autoComplete="email"
+                      placeholder="you@example.com"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="password"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Password</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="password"
+                      autoComplete={
+                        mode === "signin" ? "current-password" : "new-password"
+                      }
+                      placeholder="at least 8 characters"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FieldError>{error}</FieldError>
+
+            <Button type="submit" disabled={busy} className="w-full">
+              {busy
+                ? "Working…"
+                : mode === "signin"
+                  ? "Sign in"
+                  : "Create account"}
+            </Button>
+          </form>
+        </Form>
+
+        {googleEnabled ? (
+          <>
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <Separator className="flex-1" />
+              or
+              <Separator className="flex-1" />
+            </div>
+            <Button
+              variant="outline"
+              onClick={google}
+              disabled={busy}
+              className="w-full"
+            >
+              Continue with Google
+            </Button>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Google sign-in is hidden because GOOGLE_CLIENT_ID /
+            GOOGLE_CLIENT_SECRET are unset. See .env.example for the two-minute
+            setup.
+          </p>
+        )}
+      </CardContent>
+
+      <CardFooter>
+        <Link
+          href={mode === "signin" ? "/login?mode=signup" : "/login"}
+          className={linkClass}
+        >
+          {mode === "signin"
+            ? "No account? Create one"
+            : "Already have an account? Sign in"}
+        </Link>
+      </CardFooter>
     </Card>
   );
 }
