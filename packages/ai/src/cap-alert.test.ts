@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const notifyOperator = vi.fn(async () => ({}));
+const notifyOperator = vi.fn(async () => ({ status: "sent" }));
 vi.mock("@repo/notify", () => ({ notifyOperator }));
 
 const { createLlm, LlmBudgetExceededError } = await import("./index");
@@ -25,6 +25,7 @@ const llm = createLlm({
   },
   warn: () => undefined,
 });
+const flush = () => new Promise((r) => setTimeout(r, 0));
 const ask = (organizationId: string) =>
   llm.ask({
     purpose: "test.cap-alert",
@@ -42,6 +43,7 @@ describe("cap alert", () => {
   it("alerts once per org per day, however many calls are refused", async () => {
     for (const org of ["org_a", "org_a", "org_a", "org_b"]) {
       await expect(ask(org)).rejects.toBeInstanceOf(LlmBudgetExceededError);
+      await flush();
     }
     expect(notifyOperator).toHaveBeenCalledTimes(2);
     expect(notifyOperator).toHaveBeenCalledWith(
@@ -52,5 +54,36 @@ describe("cap alert", () => {
         dedupeWindowMinutes: 1440,
       }),
     );
+  });
+
+  it("concurrent refusals send one alert while it is in flight", async () => {
+    notifyOperator.mockClear();
+    await Promise.allSettled([ask("org_c"), ask("org_c"), ask("org_c")]);
+    await flush();
+    expect(notifyOperator).toHaveBeenCalledTimes(1);
+  });
+
+  it("memoises only once notify reports the alert recorded: a failed one is retried", async () => {
+    notifyOperator.mockClear();
+    notifyOperator
+      .mockResolvedValueOnce({ status: "failed" })
+      .mockResolvedValueOnce({ status: "blocked" })
+      .mockResolvedValueOnce({ status: "held" });
+    for (let i = 0; i < 5; i++) {
+      await expect(ask("org_d")).rejects.toBeInstanceOf(LlmBudgetExceededError);
+      await flush();
+    }
+    // failed → retry, blocked → retry, held → recorded; then silence.
+    expect(notifyOperator).toHaveBeenCalledTimes(3);
+  });
+
+  it("a rejected notify (should not happen) also clears the memo", async () => {
+    notifyOperator.mockClear();
+    notifyOperator.mockRejectedValueOnce(new Error("boom"));
+    for (let i = 0; i < 2; i++) {
+      await expect(ask("org_e")).rejects.toBeInstanceOf(LlmBudgetExceededError);
+      await flush();
+    }
+    expect(notifyOperator).toHaveBeenCalledTimes(2);
   });
 });

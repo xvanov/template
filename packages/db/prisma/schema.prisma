@@ -363,6 +363,9 @@ model Notification {
   /// The digest notification that carried this held one.
   digestId          String?
   outboundMessageId String?
+  /// When a sender last took it to send ("pending" since then). A pending row
+  /// claimed longer ago than the in-flight window is abandoned (crash).
+  claimedAt         DateTime?
   sentAt            DateTime?
 
   @@index([dedupeKey, createdAt])

@@ -187,9 +187,17 @@ export interface CapHit {
 /**
  * Tenants already reported today, in this process. notify's dedupe key makes
  * it once per org per day across processes; this memo stops every refused
- * call from writing a "deduped" row on the way.
+ * call from writing a "deduped" row on the way. "pending" while the alert is
+ * in flight (so concurrent refusals do not each send); it becomes "done" only
+ * once notify says the alert was recorded for the operator. Any other outcome
+ * (failed, blocked) clears it, so the next refused call tries again.
  */
-const capReported = { day: "", orgs: new Set<string>() };
+const capReported = {
+  day: "",
+  orgs: new Map<string, "pending" | "done">(),
+};
+/** sent/held/logged: the operator has it. deduped: another process sent it. */
+const CAP_ALERT_RECORDED = new Set(["sent", "held", "logged", "deduped"]);
 
 /** The operator hears about a tenant's cap once per tenant per UTC day. */
 function notifyCapHit(info: CapHit): void {
@@ -198,8 +206,12 @@ function notifyCapHit(info: CapHit): void {
     capReported.day = day;
     capReported.orgs.clear();
   }
-  if (capReported.orgs.has(info.organizationId)) return;
-  capReported.orgs.add(info.organizationId);
+  const org = info.organizationId;
+  if (capReported.orgs.has(org)) return;
+  capReported.orgs.set(org, "pending");
+  const forget = () => {
+    if (capReported.day === day) capReported.orgs.delete(org);
+  };
   void notifyOperator({
     title: `A tenant reached the daily AI cap ($${info.capUsd})`,
     body: [
@@ -214,7 +226,10 @@ function notifyCapHit(info: CapHit): void {
     dedupeWindowMinutes: 24 * 60,
     organizationId: info.organizationId,
     tags: ["money_with_wings"],
-  });
+  }).then((r) => {
+    if (!CAP_ALERT_RECORDED.has(r.status)) forget();
+    else if (capReported.day === day) capReported.orgs.set(org, "done");
+  }, forget);
 }
 
 const dispatch: ProviderCall = (req) => {

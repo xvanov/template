@@ -214,25 +214,73 @@ describe("notifyOperator", () => {
     ).toBe("deduped");
   });
 
-  it("a stale pending row (process died mid-send) does not mute the key", async () => {
-    const dedupeKey = `stale-${hex()}`;
+  it("a pending row mutes its key only while in flight: claimed < 2 min ago yes, older no", async () => {
     const now = new Date("2030-09-01T12:00:00Z");
-    await db.notification.create({
-      data: {
-        priority: "high",
-        title: "x",
-        body: "",
-        channel: "push",
-        status: "pending",
-        dedupeKey,
-        createdAt: new Date(now.getTime() - 5 * 60_000),
-      },
-    });
+    const pendingRow = async (dedupeKey: string, claimedMsAgo: number) =>
+      db.notification.create({
+        data: {
+          priority: "normal",
+          title: "x",
+          body: "",
+          channel: "push",
+          status: "pending",
+          dedupeKey,
+          createdAt: new Date(now.getTime() - 60 * 60_000),
+          claimedAt: new Date(now.getTime() - claimedMsAgo),
+        },
+      });
     const ntfy = fakeNtfy();
+    const live = `live-${hex()}`;
+    await pendingRow(live, 30_000);
     expect(
-      (await notifyOperator(note({ dedupeKey }), { fetch: ntfy.fetch, now }))
-        .status,
+      (
+        await notifyOperator(note({ dedupeKey: live }), {
+          fetch: ntfy.fetch,
+          now,
+        })
+      ).status,
+    ).toBe("deduped");
+    const dead = `dead-${hex()}`;
+    await pendingRow(dead, 5 * 60_000);
+    expect(
+      (
+        await notifyOperator(note({ dedupeKey: dead }), {
+          fetch: ntfy.fetch,
+          now,
+        })
+      ).status,
     ).toBe("sent");
+  });
+
+  it("a high/urgent row whose sender crashed mid-send is retried, not stranded", async () => {
+    const now = new Date("2045-01-01T12:00:00Z");
+    const row = (claimedMsAgo: number) =>
+      db.notification.create({
+        data: {
+          priority: "urgent",
+          title: `crashed ${hex()}`,
+          body: "",
+          channel: "push",
+          status: "pending",
+          createdAt: new Date(now.getTime() - 10 * 60_000),
+          claimedAt: new Date(now.getTime() - claimedMsAgo),
+        },
+        select: { id: true },
+      });
+    const abandoned = await row(5 * 60_000);
+    const inFlight = await row(30_000);
+    const ntfy = fakeNtfy();
+    await retryCapHeld({ fetch: ntfy.fetch, now });
+    expect(await rowOf(abandoned.id)).toMatchObject({
+      status: "sent",
+      claimedAt: now,
+    });
+    expect(await rowOf(inFlight.id)).toMatchObject({ status: "pending" });
+    // Claimed again just now: a second tick leaves it alone.
+    await retryCapHeld({ fetch: ntfy.fetch, now });
+    expect(
+      ntfy.sent.filter((m) => String(m.title).includes("crashed")),
+    ).toHaveLength(1);
   });
 
   it("urgent does not stop at the per-recipient cap: the operator's topic is exempt", async () => {

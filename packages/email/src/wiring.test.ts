@@ -60,13 +60,17 @@ describe("no way around the outbound guard", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("only @repo/email's guarded entry point imports the transport", () => {
+  it("only @repo/email's guarded entry point (and the transport's test) imports the transport", () => {
     const importers = files
       .filter((f) =>
         /from\s+["'][^"']*\/transport["']/.test(readFileSync(f, "utf8")),
       )
       .map((f) => relative(ROOT, f));
-    expect(importers).toEqual(["packages/email/src/index.ts"]);
+    // ...and the transport's own test, which mocks nodemailer.
+    expect(importers.sort()).toEqual([
+      "packages/email/src/index.ts",
+      "packages/email/src/transport.test.ts",
+    ]);
   });
 
   it("the package exports nothing but the guarded entry point", () => {

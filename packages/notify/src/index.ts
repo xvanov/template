@@ -108,9 +108,11 @@ const MINUTE = 60_000;
 /** Rows that mean "the operator has (or will get) this one". */
 const REACHED: Status[] = ["sent", "logged", "held", "digested"];
 /**
- * A pending row suppresses a repeat only while it can still be in flight
- * (the ntfy timeout is 10s): without this, five simultaneous calls would all
- * send; with no limit, a process that died mid-send would mute the key.
+ * A pending row counts as in flight only this long after it was CLAIMED
+ * (`claimedAt`; ntfy times out at 10s, SMTP at 30s). Within it, it suppresses
+ * a repeat, or five simultaneous calls would all send. Past it, it is
+ * abandoned (the sender crashed): it suppresses nothing, and a high/urgent one
+ * is picked up again by retryCapHeld rather than stranded.
  */
 const IN_FLIGHT_MS = 2 * MINUTE;
 /** Why a send was held by the volume cap; the tick retries high/urgent ones. */
@@ -154,7 +156,7 @@ export async function notifyOperator(
               },
               {
                 status: "pending",
-                createdAt: { gte: new Date(now.getTime() - IN_FLIGHT_MS) },
+                claimedAt: { gte: new Date(now.getTime() - IN_FLIGHT_MS) },
               },
             ],
           },
@@ -176,6 +178,7 @@ export async function notifyOperator(
         data: {
           ...data,
           status: hold ? "held" : "pending",
+          claimedAt: hold ? null : now,
           error: hold ? "low priority waits for the digest" : null,
         },
         select: { id: true, status: true },
@@ -306,21 +309,33 @@ function log(
 
 /**
  * Re-send high/urgent notifications the volume cap held, instead of letting
- * them wait for a digest that may be a day away. Each row is claimed
- * (held → pending) before it is sent, so two workers cannot both send it.
+ * them wait for a digest that may be a day away, and high/urgent ones whose
+ * sender crashed mid-send (pending, claimed longer ago than IN_FLIGHT_MS).
+ * Each row is claimed with a compare-and-set on (status, claimedAt) before it
+ * is sent, so two workers cannot both send it. A crash after the provider
+ * accepted means the operator may get that alert twice: for high/urgent, a
+ * duplicate beats a lost alert.
  */
 export async function retryCapHeld(deps: NotifyDeps = {}): Promise<number> {
   const channel = operatorChannel();
+  const now = deps.now ?? new Date();
+  const abandoned = new Date(now.getTime() - IN_FLIGHT_MS);
   const rows = await db.notification.findMany({
     where: {
-      status: "held",
       priority: { in: ["high", "urgent"] },
-      error: { startsWith: CAP_HELD },
+      OR: [
+        { status: "held", error: { startsWith: CAP_HELD } },
+        { status: "pending", claimedAt: { lt: abandoned } },
+        // Pending since before claimedAt existed.
+        { status: "pending", claimedAt: null, createdAt: { lt: abandoned } },
+      ],
     },
     orderBy: { createdAt: "asc" },
     take: 50,
     select: {
       id: true,
+      status: true,
+      claimedAt: true,
       priority: true,
       title: true,
       body: true,
@@ -331,8 +346,8 @@ export async function retryCapHeld(deps: NotifyDeps = {}): Promise<number> {
   let retried = 0;
   for (const r of rows) {
     const claim = await db.notification.updateMany({
-      where: { id: r.id, status: "held" },
-      data: { status: "pending", channel },
+      where: { id: r.id, status: r.status, claimedAt: r.claimedAt },
+      data: { status: "pending", channel, claimedAt: now },
     });
     if (!claim.count) continue;
     retried++;
@@ -413,6 +428,7 @@ export async function runDigest(
         dedupeKey: `digest:${slot}`,
         channel,
         status: "pending",
+        claimedAt: now,
         createdAt: now,
       },
       select: { id: true },
