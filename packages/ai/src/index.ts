@@ -24,11 +24,13 @@
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { db } from "@repo/db";
 import { env } from "@repo/env";
+import { notifyOperator } from "@repo/notify";
 import { z } from "zod";
 
 import {
   dbLedger,
   decide,
+  startOfUtcDay,
   type Decision,
   type Ledger,
   type LlmCallRow,
@@ -169,6 +171,37 @@ export interface LlmDeps {
   ) => Promise<{ embeddings: number[][]; tokens: number }>;
   ledger: Ledger;
   warn: (message: string, data: Record<string, unknown>) => void;
+  /** A tenant reached its daily cap. Default: tell the operator, once per org per day. */
+  capHit: (info: CapHit) => void;
+}
+
+export interface CapHit {
+  organizationId: string;
+  spentUsd: number;
+  capUsd: number;
+  purpose: string;
+  /** True when a discretionary call was refused; false when an essential one ran over. */
+  refused: boolean;
+}
+
+/** The operator hears about a tenant's cap once per tenant per UTC day. */
+function notifyCapHit(info: CapHit): void {
+  const day = startOfUtcDay().toISOString().slice(0, 10);
+  void notifyOperator({
+    title: `A tenant reached the daily AI cap ($${info.capUsd})`,
+    body: [
+      `Organization ${info.organizationId} has spent $${info.spentUsd.toFixed(2)} of its $${info.capUsd} cap today (UTC).`,
+      info.refused
+        ? "Discretionary AI calls are refused until 00:00 UTC; essential ones still run."
+        : "An essential call ran over it (essential calls are never refused).",
+      `Triggered by: ${info.purpose}. Raise LLM_DAILY_CAP_USD if this is expected.`,
+    ].join("\n"),
+    priority: "normal",
+    dedupeKey: `ai-cap:${info.organizationId}:${day}`,
+    dedupeWindowMinutes: 24 * 60,
+    organizationId: info.organizationId,
+    tags: ["money_with_wings"],
+  });
 }
 
 const dispatch: ProviderCall = (req) => {
@@ -187,6 +220,7 @@ const defaultDeps: LlmDeps = {
   embed: (route, texts) => embedOpenAiFamily(route, texts),
   ledger: dbLedger,
   warn: (message, data) => console.warn(`[ai] ${message}`, data),
+  capHit: notifyCapHit,
 };
 
 const errText = (err: unknown) =>
@@ -244,6 +278,21 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
           error: errText(err),
         },
       );
+    }
+    // Over the cap by a KNOWN amount (not "spend unknown", not "unpriced").
+    if (
+      capped &&
+      decision.overCap &&
+      spentUsd !== null &&
+      (decision.allowed || decision.reason === "over_cap")
+    ) {
+      deps.capHit({
+        organizationId: capped.organizationId,
+        spentUsd,
+        capUsd: capUsd ?? 0,
+        purpose: opts.purpose,
+        refused: !decision.allowed,
+      });
     }
     if (!decision.allowed) {
       if (decision.reason === "unpriced") throw new LlmUnpricedError(route.id);

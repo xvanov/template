@@ -2,7 +2,7 @@
  * The runtime kill switch, for operators:
  *
  *   npm run outbound:freeze -- on            stop ALL outbound messages now
- *   npm run outbound:freeze -- on email      stop one channel (only email exists today)
+ *   npm run outbound:freeze -- on email      stop one channel (email | push)
  *   npm run outbound:freeze -- off [channel] lift it
  *   npm run outbound:freeze -- status
  *
@@ -15,9 +15,10 @@ import { userInfo } from "node:os";
 import { db } from "@repo/db";
 
 import { isFrozen, setFrozen, type FreezeScope } from "../src/controls";
+import { CHANNELS } from "../src/policy";
 
 const [command, scopeArg = "all"] = process.argv.slice(2);
-const scopes = ["all", "email"];
+const scopes = ["all", ...CHANNELS];
 
 async function main() {
   if (!scopes.includes(scopeArg))
@@ -31,11 +32,13 @@ async function main() {
     );
     console.log(`outbound freeze ${command} (${scope}). state:`, state);
   } else if (command === "status") {
-    for (const ch of ["email"] as const) {
+    for (const ch of CHANNELS) {
       console.log(`${ch}: ${(await isFrozen(ch)) ? "FROZEN" : "open"}`);
     }
   } else {
-    console.log("usage: npm run outbound:freeze -- on|off|status [all|email]");
+    console.log(
+      `usage: npm run outbound:freeze -- on|off|status [${scopes.join("|")}]`,
+    );
     process.exitCode = 1;
   }
 }

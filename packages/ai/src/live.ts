@@ -27,6 +27,7 @@ const llm = createLlm({
     }),
     settle: async () => undefined,
   },
+  capHit: () => undefined,
 });
 
 function claudeInstalled(): boolean {

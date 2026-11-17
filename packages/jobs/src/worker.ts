@@ -11,6 +11,7 @@
  */
 import { Worker, type Job } from "bullmq";
 import { db, Prisma } from "@repo/db";
+import { notifyOperator } from "@repo/notify";
 
 import { handlers, isJobName, type JobName } from "./handlers";
 import { connection, QUEUE_NAME } from "./queue";
@@ -21,6 +22,21 @@ export interface WorkerOptions {
 
 /** The parts of a BullMQ job the worker reads; lets tests skip Redis. */
 export type JobLike = Pick<Job, "id" | "name" | "data" | "attemptsMade">;
+
+/**
+ * Has this failure used up the job's retries? Read in BullMQ's "failed" event,
+ * where `attemptsMade` already counts the attempt that just failed. An
+ * UnrecoverableError is final whatever the count.
+ */
+export function isFinalFailure(
+  job: Pick<Job, "attemptsMade"> & { opts: { attempts?: number } },
+  err: Error,
+): boolean {
+  return (
+    err.name === "UnrecoverableError" ||
+    job.attemptsMade >= (job.opts.attempts ?? 1)
+  );
+}
 
 /** Returned (not thrown) when a tenant's job outlived its tenant. */
 export const SKIPPED_ORG_GONE = { skipped: "organization no longer exists" };
@@ -36,12 +52,34 @@ export function createWorker(opts: WorkerOptions = {}): Worker {
 
   worker.on("failed", (job, err) => {
     console.error(`[worker] ${job?.name} ${job?.id} failed:`, err.message);
+    if (job && isFinalFailure(job, err)) void reportFinalFailure(job, err);
   });
   worker.on("completed", (job) => {
     console.log(`[worker] ${job.name} ${job.id} completed`);
   });
 
   return worker;
+}
+
+/**
+ * Tell the operator a job gave up. One alert per job NAME per dedupe window: a
+ * broken handler failing for every tenant is one problem, not a hundred.
+ * Never throws (notifyOperator does not).
+ */
+export function reportFinalFailure(job: JobLike, err: Error) {
+  const org = (job.data as { organizationId?: unknown } | undefined)
+    ?.organizationId;
+  return notifyOperator({
+    title: `Job ${job.name} failed for good`,
+    body: [
+      `After ${job.attemptsMade} attempt(s): ${err.message.slice(0, 500)}`,
+      `job ${job.id ?? "?"}${typeof org === "string" ? ` · org ${org}` : ""} · details in job_run`,
+    ].join("\n"),
+    priority: "high",
+    dedupeKey: `job-failed:${job.name}`,
+    organizationId: typeof org === "string" ? org : null,
+    tags: ["rotating_light"],
+  });
 }
 
 /** Validate, record, run, record. Exported so tests can drive it without Redis. */

@@ -310,6 +310,8 @@ const serverSchema = z.object({
   OUTBOUND_SAFE_RECIPIENTS: z.string().optional(),
   /** Channel switch. On by default: sign-up needs it. */
   OUTBOUND_EMAIL_ENABLED: bool(true),
+  /** Channel switch for push (ntfy). On by default; nothing pushes until NTFY_TOPIC is set. */
+  OUTBOUND_PUSH_ENABLED: bool(true),
   /** Global kill switch. A runtime switch also exists (`npm run outbound:freeze`). */
   OUTBOUND_FROZEN: bool(false),
   /** Volume caps (fixed windows in Redis). Over the cap = blocked, not queued. */
@@ -325,6 +327,70 @@ const serverSchema = z.object({
     .int()
     .positive()
     .default(2000),
+
+  // ── Operator notifications (packages/notify) ───────────────────────────
+  // Alerts for whoever RUNS the app (a job failed for good, a tenant hit the AI
+  // cap). Push via ntfy when NTFY_TOPIC is set, else email to OPERATOR_EMAIL,
+  // else the console. See CLAUDE.md "Operator notifications".
+
+  /** ntfy server. Self-host it, or use the public one with a long random topic. */
+  NTFY_URL: z.preprocess(
+    blankIsUnset,
+    z.string().url().default("https://ntfy.sh"),
+  ),
+  /**
+   * The topic is the password on a public server: anyone who knows it reads
+   * every message. Make it long and random (`openssl rand -hex 16`).
+   */
+  NTFY_TOPIC: z.preprocess(
+    blankIsUnset,
+    z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,64}$/, "must be 1-64 of A-Z a-z 0-9 _ -")
+      .optional(),
+  ),
+  /** Access token for a protected topic (sent as a Bearer token). */
+  NTFY_TOKEN: z.preprocess(blankIsUnset, z.string().optional()),
+  /** Where operator notifications go by email when no ntfy topic is set. */
+  OPERATOR_EMAIL: z.preprocess(blankIsUnset, z.string().email().optional()),
+  /** The same dedupeKey within this many minutes is recorded, not re-sent. */
+  NOTIFY_DEDUPE_WINDOW_MINUTES: z.coerce.number().int().positive().default(60),
+  /**
+   * When held notifications (low priority, over budget, quiet hours) are sent
+   * as one digest: comma-separated HH:MM in APP_TIMEZONE.
+   */
+  NOTIFY_DIGEST_TIMES: z.preprocess(
+    blankIsUnset,
+    z
+      .string()
+      .default("09:00")
+      .refine(
+        (v) =>
+          v
+            .split(",")
+            .every((t) => /^([01]?\d|2[0-3])(:[0-5]\d)?$/.test(t.trim())),
+        'must be comma-separated HH:MM times, e.g. "09:00,17:00"',
+      ),
+  ),
+  /**
+   * Quiet hours in APP_TIMEZONE, "HH-HH" or "HH:MM-HH:MM" (e.g. 22-07): normal
+   * and high priority wait for the digest; urgent still pushes. Unset = none.
+   */
+  NOTIFY_QUIET_HOURS: z.preprocess(
+    blankIsUnset,
+    z
+      .string()
+      .regex(
+        /^([01]?\d|2[0-4])(:[0-5]\d)?\s*-\s*([01]?\d|2[0-4])(:[0-5]\d)?$/,
+        'must be "HH-HH" or "HH:MM-HH:MM", e.g. 22-07',
+      )
+      .optional(),
+  ),
+  /**
+   * Normal-priority notifications sent per rolling 24 hours before the rest
+   * wait for the digest. High and urgent are not limited by it.
+   */
+  NOTIFY_PUSH_BUDGET: z.coerce.number().int().nonnegative().default(20),
 
   // ── Security helpers (packages/security) ───────────────────────────────
   /** Bearer secret for HTTP cron endpoints. Unset in production = every call refused. */

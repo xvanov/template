@@ -12,8 +12,9 @@
  *   2. kill switch           OUTBOUND_FROZEN, or the runtime switch in app_setting
  *   0. recipient             exactly one plain address, or INVALID_RECIPIENT
  *   3. safe mode             outside production, only OUTBOUND_SAFE_RECIPIENTS
- *                            receive anything (auth mail excepted; a local mail
- *                            catcher allows all; see resolveSafeMode)
+ *                            receive anything (auth mail and the operator's own
+ *                            address/topic excepted; a local mail catcher allows
+ *                            all EMAIL; see resolveSafeMode, effectiveSafeMode)
  *   4. suppression list      bounces, complaints, unsubscribes
  *   5. volume caps           per recipient, per org, global; Redis. Fails CLOSED:
  *                            if the counters cannot be read, nothing is sent.
@@ -23,7 +24,7 @@
  * sent/failed, so a message cannot leave without a record: if the row cannot
  * be written, the provider is never called.
  *
- * Channel packages (packages/email today) call `deliver` with their raw
+ * Channel packages (packages/email; push lives in packages/notify) call `deliver` with their raw
  * transport as the callback and DO NOT export that transport. The callback
  * receives the PARSED recipient and must send to exactly that. See the
  * "Outbound messages" section of CLAUDE.md.
@@ -34,6 +35,7 @@ import { rateLimit, type CounterStore } from "@repo/security";
 
 import { findSuppression, isFrozen } from "./controls";
 import {
+  CHANNELS,
   parseRecipient,
   parseSafeList,
   resolveSafeMode,
@@ -77,7 +79,11 @@ export function configFromEnv(): GuardConfig {
   const config: GuardConfig = {
     safeMode: resolveSafeMode(e),
     safeRecipients: parseSafeList(e.OUTBOUND_SAFE_RECIPIENTS),
-    enabled: { email: e.OUTBOUND_EMAIL_ENABLED },
+    enabled: {
+      email: e.OUTBOUND_EMAIL_ENABLED,
+      push: e.OUTBOUND_PUSH_ENABLED,
+    },
+    operatorRecipients: operatorRecipients(e),
     frozen: e.OUTBOUND_FROZEN,
     caps: {
       recipientPerHour: e.OUTBOUND_CAP_RECIPIENT_PER_HOUR,
@@ -93,6 +99,26 @@ export function configFromEnv(): GuardConfig {
   return config;
 }
 
+function operatorRecipients(e: {
+  OPERATOR_EMAIL?: string;
+  NTFY_TOPIC?: string;
+}): GuardConfig["operatorRecipients"] {
+  const raw = { email: e.OPERATOR_EMAIL, push: e.NTFY_TOPIC };
+  const out: GuardConfig["operatorRecipients"] = {};
+  for (const ch of CHANNELS) {
+    const r = raw[ch] && parseRecipient(ch, raw[ch]);
+    if (r) out[ch] = r;
+  }
+  return out;
+}
+
+/** What a log line may show of a recipient. A push topic is a secret. */
+export function displayRecipient(channel: string, recipient: string): string {
+  return channel === "push"
+    ? `topic ${recipient.slice(0, 3)}…`
+    : JSON.stringify(recipient);
+}
+
 /** One loud line saying what safe mode will do. Printed once per process. */
 export function describeSafeMode(
   config: GuardConfig,
@@ -102,13 +128,13 @@ export function describeSafeMode(
     case "local-catcher":
       return [
         "",
-        "[outbound] SAFE MODE: LOCAL CATCHER (OUTBOUND_SAFE_MODE=local) — EVERY recipient allowed.",
+        "[outbound] SAFE MODE: LOCAL CATCHER (OUTBOUND_SAFE_MODE=local) — EVERY email recipient allowed (push: operator only).",
         `[outbound]   This trusts that SMTP (${smtpHost ?? "unset: console"}) is a catcher like Mailpit that`,
         "[outbound]   delivers nowhere. If it can relay to the internet, real people get this mail.",
         "",
       ].join("\n");
     case "strict":
-      return `[outbound] SAFE MODE: STRICT — only OUTBOUND_SAFE_RECIPIENTS (${config.safeRecipients.length} entries) and auth mail are sent.`;
+      return `[outbound] SAFE MODE: STRICT — only OUTBOUND_SAFE_RECIPIENTS (${config.safeRecipients.length} entries), auth mail and operator notifications are sent.`;
     case "off":
       return "[outbound] safe mode off — messages go to real recipients.";
   }
@@ -160,7 +186,7 @@ export async function deliver(
       finishedAt: new Date(),
     });
     console.warn(
-      `[outbound] BLOCKED ${attempt.channel} to ${JSON.stringify(attempt.recipient)} (${attempt.purpose}): ${b.reason} — ${b.detail}`,
+      `[outbound] BLOCKED ${attempt.channel} to ${displayRecipient(attempt.channel, attempt.recipient)} (${attempt.purpose}): ${b.reason} — ${b.detail}`,
     );
     return { status: "blocked", id, ...b };
   }

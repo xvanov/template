@@ -284,7 +284,7 @@ model AuditEvent {
   @@map("audit_event")
 }
 
-/// Every outbound message ATTEMPT (email today; SMS/push later), sent or not.
+/// Every outbound message ATTEMPT (email, push; SMS later), sent or not.
 /// Written by packages/outbound before the provider is called, so a message
 /// cannot leave without a row; blocked attempts carry the gate that stopped them.
 ///
@@ -335,8 +335,45 @@ model OutboundSuppression {
   @@map("outbound_suppression")
 }
 
+/// Operator notifications (packages/notify): alerts for whoever RUNS the app,
+/// never shown to a tenant. Every call to notifyOperator writes one row, sent
+/// or not; the send itself is also an outbound_message row (outboundMessageId).
+///
+/// organizationId is context ("which tenant hit the AI cap"), deliberately NOT
+/// a foreign key: the operator's history must survive the tenant's deletion.
+model Notification {
+  id                String    @id @default(cuid())
+  createdAt         DateTime  @default(now())
+  /// "low" | "normal" | "high" | "urgent"
+  priority          String
+  title             String
+  body              String
+  url               String?
+  tags              String[]
+  /// Same key within the dedupe window = recorded as "deduped", not sent.
+  dedupeKey         String?
+  /// Where it went (or would go): "push" | "email" | "console".
+  channel           String
+  /// "pending" | "sent" | "logged" (console) | "held" (waiting for the digest)
+  /// | "digested" | "deduped" | "blocked" | "failed"
+  status            String
+  /// Why it was held/blocked, or the send error.
+  error             String?
+  organizationId    String?
+  /// The digest notification that carried this held one.
+  digestId          String?
+  outboundMessageId String?
+  sentAt            DateTime?
+
+  @@index([dedupeKey, createdAt])
+  @@index([status, createdAt])
+  @@index([organizationId, createdAt])
+  @@map("notification")
+}
+
 /// Small runtime switches that must survive a Redis restart and be shared by
-/// every process: the outbound kill switch (`outbound.freeze`) lives here.
+/// every process: the outbound kill switch (`outbound.freeze`) and the last
+/// operator digest slot (`notify.digest.lastSlot`) live here.
 model AppSetting {
   key       String   @id
   value     Json

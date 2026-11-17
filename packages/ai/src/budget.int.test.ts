@@ -34,6 +34,7 @@ const llm = createLlm({
     return reply;
   },
   warn: () => undefined,
+  capHit: () => undefined, // packages/notify's own tests cover the alert
 });
 
 const org = () => `org_${randomBytes(4).toString("hex")}`;

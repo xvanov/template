@@ -7,7 +7,7 @@
 import { defineConfig, globalIgnores } from "eslint/config";
 import tseslint from "typescript-eslint";
 
-import { mailBoundary } from "./eslint.boundaries.mjs";
+import { outboundBoundary } from "./eslint.boundaries.mjs";
 
 export default defineConfig([
   globalIgnores([
@@ -23,5 +23,8 @@ export default defineConfig([
     languageOptions: { parser: tseslint.parser },
     linterOptions: { reportUnusedDisableDirectives: "error" },
   },
-  ...mailBoundary("packages/email/src/transport.ts"),
+  ...outboundBoundary({
+    mail: "packages/email/src/transport.ts",
+    push: "packages/notify/src/ntfy.ts",
+  }),
 ]);

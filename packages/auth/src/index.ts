@@ -23,6 +23,7 @@ import { organization } from "better-auth/plugins";
 import { db, recordAudit } from "@repo/db";
 import { sendAuthMail, verificationEmail } from "@repo/email";
 import { env, googleEnabled } from "@repo/env";
+import { notifyOperator } from "@repo/notify";
 
 import { redisRateLimitStorage } from "./rate-limit-storage";
 
@@ -161,6 +162,15 @@ function build() {
             });
             await db.member.create({
               data: { organizationId: org.id, userId: user.id, role: "owner" },
+            });
+            // Low priority: never interrupts, arrives in the operator's digest.
+            // The domain only, not the address: on ntfy.sh this text sits on
+            // a public server.
+            void notifyOperator({
+              title: `New sign-up (${user.email.split("@")[1] ?? "?"})`,
+              body: `Organization ${org.id}`,
+              priority: "low",
+              organizationId: org.id,
             });
           },
         },

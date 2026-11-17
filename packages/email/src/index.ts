@@ -90,6 +90,28 @@ export function sendAuthMail(
 }
 
 /**
+ * For packages/notify ONLY: mail to the operator (OPERATOR_EMAIL). Exempt from
+ * the safe-mode allowlist only if `to` IS the configured OPERATOR_EMAIL, which
+ * the guard checks itself; see `operator` in @repo/outbound. Never on behalf of
+ * a tenant: no organizationId, so no tenant's activity log shows it.
+ */
+export function sendOperatorMail(
+  mail: Mail,
+  purpose: `operator.${string}`,
+): Promise<SendResult> {
+  return deliver(
+    {
+      channel: "email",
+      recipient: mail.to,
+      subject: mail.subject,
+      purpose,
+      operator: true,
+    },
+    (to) => transmit({ ...mail, to }),
+  );
+}
+
+/**
  * The verification email.
  *
  * Deliberately plain: a text part that stands on its own, and an HTML part with

@@ -21,6 +21,7 @@ packages/jobs  job registry + queue + schedules
 packages/storage  file storage: local disk or any S3-compatible bucket
 packages/email  outbound SMTP (nodemailer), ONLY via the outbound guard. Mailpit locally
 packages/outbound  the outbound guard: every outbound message passes it and is logged
+packages/notify  operator alerts (ntfy push, else email, else console), deduped + digested
 packages/security  rate limiting, cron/webhook auth, AES-GCM sealing of stored secrets
 packages/env   the validated environment — import `env()`, never `process.env`
 ```
@@ -139,12 +140,14 @@ trip (about 20s). `make lint` shellchecks every script.
 7. **Shared packages export TypeScript source**, no build step. Next transpiles
    them (`transpilePackages`); Metro sees them via `watchFolders`.
 8. **Every outbound message goes through the guard** (`deliver` in
-   `packages/outbound`). Send email with `sendMail` from `@repo/email`; never
-   import nodemailer or a provider SDK anywhere else (an ESLint rule in
-   `eslint.boundaries.mjs` fails `make lint`; a test backs it up). A new
-   channel (SMS, push) gets its own package that calls `deliver` and does not
-   export its raw transport, plus a `Channel` value and enable flag added in
-   the same change (not before).
+   `packages/outbound`). Channels today: `email` (`sendMail` from
+   `@repo/email`) and `push` (ntfy, only via `notifyOperator` from
+   `@repo/notify`). Never import nodemailer or a provider SDK anywhere else,
+   and never read `NTFY_URL`/`NTFY_TOKEN` outside `packages/notify/src/ntfy.ts`
+   (ESLint rules in `eslint.boundaries.mjs` fail `make lint`; wiring tests
+   back them up). A new channel (SMS) gets its own package that calls
+   `deliver` and does not export its raw transport, plus a `Channel` value and
+   enable flag added in the same change (not before).
 9. **Mutations write an audit event in the same transaction**:
    `ctx.db.$transaction(async (tx) => { ...; await ctx.audit("item.delete", { targetId }, tx) })`.
    `packages/api/src/routers/items.ts` is the reference.
@@ -202,6 +205,16 @@ recorded as `failed`. If the provider accepted a message but recording "sent"
 fails, it still returns sent (the row stays `pending`) so a retry cannot send
 it twice. Tenants read their own rows via `activity.outbound`.
 
+**Operator messages vs safe mode.** `notifyOperator` sends with
+`operator: true`, which is exempt from the strict allowlist ONLY when the
+recipient is exactly the configured `NTFY_TOPIC` / `OPERATOR_EMAIL` (the guard
+checks it, not the caller); kill switch, suppression and caps still apply, in a
+separate `operator` global pool. They are recorded with `organizationId` null,
+so no tenant sees them (or the topic). `local` safe mode opens email only: a
+push reaches a real phone, so push stays strict. Consequence to know: a staging
+box with production's `NTFY_TOPIC` will alert production's operator; give it
+its own topic.
+
 **Auth mail vs safe mode.** better-auth's verification mail is sent with
 `sendAuthMail`, which is exempt from the strict allowlist and nothing else.
 The recipient just typed that address into the sign-up form, so it cannot be
@@ -209,6 +222,30 @@ The recipient just typed that address into the sign-up form, so it cannot be
 strict box. The kill switch, suppression and caps still apply. Use
 `sendAuthMail` for better-auth callbacks only. `make smoke` forces safe mode
 to `strict` with an empty allowlist, so the gate proves sign-up still works.
+
+## Operator notifications
+
+`notifyOperator({ title, body, priority, dedupeKey?, url?, tags?, organizationId? })`
+from `@repo/notify` tells whoever RUNS the app (not tenants) about something:
+wired today for a job that failed for good (worker, high, one per job name per
+window), a tenant hitting the daily AI cap (packages/ai, once per org per UTC
+day) and new sign-ups (low, digest only). It never throws.
+
+- Every call writes a `notification` row; the send is also an
+  `outbound_message` row. Same `dedupeKey` within
+  `NOTIFY_DEDUPE_WINDOW_MINUTES` (or the call's `dedupeWindowMinutes`) =
+  `deduped`, not sent.
+- Channel: ntfy push if `NTFY_TOPIC`, else email to `OPERATOR_EMAIL`, else
+  the console. The topic is a password on ntfy.sh: no customer PII in titles
+  or bodies.
+- `low` waits for the digest; `normal` sends within `NOTIFY_PUSH_BUDGET` per
+  24h and outside `NOTIFY_QUIET_HOURS`; `high` ignores the budget; `urgent`
+  ignores both. Held rows go out as one digest at `NOTIFY_DIGEST_TIMES`
+  (APP_TIMEZONE), via the `operator.digest` job on a 15-minute tick. A push
+  the volume cap blocks is held for the digest, not lost.
+- No UI: there is no app-wide operator role, and tenant admins must not see
+  them. Read the table directly.
+- `make smoke` forces the console channel and checks sign-up logged one.
 
 ## UI (apps/web)
 

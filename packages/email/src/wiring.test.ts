@@ -42,10 +42,10 @@ describe("no way around the outbound guard", () => {
       resolve(ROOT, "apps/web/eslint.config.mjs"),
       "utf8",
     );
-    expect(root).toContain(
-      '...mailBoundary("packages/email/src/transport.ts")',
-    );
-    expect(web).toContain("...mailBoundary(");
+    expect(root).toContain('mail: "packages/email/src/transport.ts"');
+    expect(root).toContain('push: "packages/notify/src/ntfy.ts"');
+    expect(root).toContain("...outboundBoundary(");
+    expect(web).toContain("...outboundBoundary(");
   });
 
   it("only the email transport imports a mail library", () => {

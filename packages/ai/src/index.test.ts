@@ -82,8 +82,9 @@ function harness(
     return result;
   });
   const mem = memoryLedger(opts.spent ?? 0, opts.failing ?? false);
-  const llm = createLlm({ call, ledger: mem.ledger, warn });
-  return { llm, rows: mem.rows, call, warn };
+  const capHit = vi.fn();
+  const llm = createLlm({ call, ledger: mem.ledger, warn, capHit });
+  return { llm, rows: mem.rows, call, warn, capHit };
 }
 
 const base = {
@@ -195,6 +196,14 @@ describe("the daily cap — reserved before sending", () => {
     );
     expect(h.call).not.toHaveBeenCalled();
     expect(h.rows()).toHaveLength(0);
+    // ...and the operator is told (notify dedupes it to once per org per day).
+    expect(h.capHit).toHaveBeenCalledWith({
+      organizationId: "org_1",
+      spentUsd: 0.99,
+      capUsd: 1,
+      purpose: "test.ask",
+      refused: true,
+    });
   });
 
   it("counts pending reservations: concurrent calls cannot all slip under the cap", async () => {
@@ -216,6 +225,9 @@ describe("the daily cap — reserved before sending", () => {
     expect(h.warn).toHaveBeenCalledWith(
       expect.stringMatching(/over the daily cap/),
       expect.anything(),
+    );
+    expect(h.capHit).toHaveBeenCalledWith(
+      expect.objectContaining({ refused: false, spentUsd: 5 }),
     );
   });
 
@@ -253,6 +265,8 @@ describe("the daily cap — reserved before sending", () => {
   it("fails closed for discretionary work when the ledger is down; essential proceeds unrecorded", async () => {
     const h = harness(reply(), { failing: true });
     await expect(h.llm.ask(base)).rejects.toThrow(/could not be read/);
+    // Spend unknown is not "the cap was hit": no operator alert for it.
+    expect(h.capHit).not.toHaveBeenCalled();
     await expect(
       h.llm.ask({ ...base, priority: "essential" }),
     ).resolves.toBeDefined();
@@ -367,6 +381,7 @@ describe("embed", () => {
     const llm = createLlm({
       embed: async () => ({ embeddings: [[1, 2]], tokens: 1_000_000 }),
       ledger: mem.ledger,
+      capHit: () => undefined,
     });
     const r = await llm.embed({
       texts: ["a"],
@@ -387,7 +402,10 @@ describe("embed", () => {
   });
 
   it("is disabled until LLM_EMBEDDING_MODEL is set, and refuses non-embedding providers", async () => {
-    const llm = createLlm({ ledger: memoryLedger().ledger });
+    const llm = createLlm({
+      ledger: memoryLedger().ledger,
+      capHit: () => undefined,
+    });
     await expect(
       llm.embed({ texts: ["a"], purpose: "p", priority: "essential" }),
     ).rejects.toBeInstanceOf(LlmDisabledError);

@@ -34,6 +34,14 @@ export const SCHEDULES: Schedule[] = [
     pattern: "17 3 * * *",
     data: {},
   },
+  {
+    // A short UTC tick, per the header: the job itself decides whether a
+    // digest time (NOTIFY_DIGEST_TIMES, local to APP_TIMEZONE) has arrived.
+    id: "operator-digest",
+    job: "operator.digest",
+    pattern: "*/15 * * * *",
+    data: {},
+  },
 ];
 
 export async function registerSchedules(): Promise<void> {

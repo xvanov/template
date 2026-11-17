@@ -5,11 +5,13 @@
  */
 
 /**
- * Channels with a transport. Only email today: add "sms" / "push" here, with a
- * recipient parser and an enable flag, in the same change that adds the
- * transport, not before.
+ * Channels with a transport: email (packages/email) and push (ntfy, in
+ * packages/notify). Add "sms" here, with a recipient parser and an enable flag,
+ * in the same change that adds its transport, not before.
  */
-export type Channel = "email";
+export type Channel = "email" | "push";
+
+export const CHANNELS: readonly Channel[] = ["email", "push"];
 
 /** Why a message was not sent. Stored verbatim in outbound_message.blockReason. */
 export type BlockReason =
@@ -33,7 +35,10 @@ export type SafeMode = "strict" | "local-catcher" | "off";
 
 export interface OutboundAttempt {
   channel: Channel;
-  /** Exactly one plain email address. Lists and display names are blocked. */
+  /**
+   * email: exactly one plain address (lists and display names are blocked).
+   * push: one ntfy topic name.
+   */
   recipient: string;
   /** What is sending it, dotted and grep-able: `auth.verify-email`, `items.digest`. */
   purpose: string;
@@ -51,6 +56,15 @@ export interface OutboundAttempt {
    * Never set this for anything else; grep for it in review.
    */
   authMail?: boolean;
+  /**
+   * A message to the person running the app (packages/notify). Exempt from the
+   * safe-mode allowlist ONLY when the recipient is exactly the operator's own
+   * configured address for this channel (GuardConfig.operatorRecipients), which
+   * the guard checks itself: setting the flag on any other recipient exempts
+   * nothing. Kill switch, suppression and caps still apply; the global cap
+   * uses its own "operator" pool.
+   */
+  operator?: boolean;
 }
 
 export interface GuardConfig {
@@ -58,6 +72,11 @@ export interface GuardConfig {
   /** Normalised entries: exact addresses, and `@domain` for whole domains. */
   safeRecipients: string[];
   enabled: Record<Channel, boolean>;
+  /**
+   * The operator's own recipient per channel (OPERATOR_EMAIL, NTFY_TOPIC),
+   * already parsed. Only these can use the `operator` exemption.
+   */
+  operatorRecipients: Partial<Record<Channel, string>>;
   /** OUTBOUND_FROZEN (env). The runtime switch is read separately. */
   frozen: boolean;
   caps: {
@@ -88,7 +107,14 @@ export interface Block {
 const PLAIN_EMAIL =
   /^[a-z0-9.#$&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/;
 
-export function parseRecipient(_channel: Channel, raw: string): string | null {
+/** An ntfy topic: what ntfy itself accepts in a topic name. Case-sensitive. */
+const NTFY_TOPIC = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function parseRecipient(channel: Channel, raw: string): string | null {
+  if (channel === "push") {
+    const t = raw.trim();
+    return NTFY_TOPIC.test(t) ? t : null;
+  }
   const r = raw.trim().toLowerCase();
   return r.length <= 254 && PLAIN_EMAIL.test(r) ? r : null;
 }
@@ -110,6 +136,9 @@ export function isSafeRecipient(
   recipient: string,
   safeList: readonly string[],
 ): boolean {
+  // The allowlist holds addresses; push has no allowlist (only the
+  // operator's own topic is ever sent to, via the `operator` exemption).
+  if (channel !== "email") return false;
   const r = parseRecipient(channel, recipient);
   if (!r) return false;
   const domain = r.slice(r.indexOf("@"));
@@ -173,17 +202,40 @@ export function staticBlock(
     };
   }
   if (
-    config.safeMode === "strict" &&
+    effectiveSafeMode(config.safeMode, attempt.channel) === "strict" &&
     !attempt.authMail &&
+    !isOperatorRecipient(attempt, config) &&
     !isSafeRecipient(attempt.channel, attempt.recipient, config.safeRecipients)
   ) {
     return {
       reason: "SAFE_MODE",
       detail:
-        "Safe mode is on and the recipient is not in OUTBOUND_SAFE_RECIPIENTS.",
+        attempt.channel === "push"
+          ? "Safe mode is on and push goes only to the operator's NTFY_TOPIC."
+          : "Safe mode is on and the recipient is not in OUTBOUND_SAFE_RECIPIENTS.",
     };
   }
   return null;
+}
+
+/**
+ * `local-catcher` asserts that SMTP is a catcher. It says nothing about any
+ * other channel (ntfy has no catcher: a push reaches a real phone), so for
+ * every channel but email it means strict.
+ */
+export function effectiveSafeMode(mode: SafeMode, channel: Channel): SafeMode {
+  return mode === "local-catcher" && channel !== "email" ? "strict" : mode;
+}
+
+/** The `operator` flag AND the recipient is the configured operator's own. */
+export function isOperatorRecipient(
+  attempt: OutboundAttempt,
+  config: GuardConfig,
+): boolean {
+  if (!attempt.operator) return false;
+  const own = config.operatorRecipients[attempt.channel];
+  const r = parseRecipient(attempt.channel, attempt.recipient);
+  return Boolean(own && r && r === own);
 }
 
 /**
@@ -222,13 +274,18 @@ export function volumeBuckets(
   }
   // Auth mail gets its OWN global bucket: anonymous sign-ups are attacker-
   // driven, and must not be able to use up the hourly budget every tenant's
-  // mail shares.
-  const pool = attempt.authMail ? "auth" : "app";
+  // mail shares. Operator messages get theirs too, so an alert storm cannot
+  // starve tenants' mail, nor a busy day of tenant mail silence the alerts.
+  const pool = attempt.authMail
+    ? "auth"
+    : attempt.operator
+      ? "operator"
+      : "app";
   buckets.push({
     key: `outbound:${ch}:global:${pool}:h`,
     limit: config.caps.globalPerHour,
     windowSeconds: HOUR,
-    label: `${config.caps.globalPerHour}/hour across the whole app (${pool} mail)`,
+    label: `${config.caps.globalPerHour}/hour across the whole app (${pool} ${ch})`,
   });
   return buckets;
 }

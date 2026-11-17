@@ -21,7 +21,8 @@ import {
 const config = (over: Partial<GuardConfig> = {}): GuardConfig => ({
   safeMode: "off",
   safeRecipients: parseSafeList("@safe.test"),
-  enabled: { email: true },
+  enabled: { email: true, push: true },
+  operatorRecipients: {},
   frozen: false,
   caps: {
     recipientPerHour: 3,
