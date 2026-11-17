@@ -208,12 +208,15 @@ it twice. Tenants read their own rows via `activity.outbound`.
 **Operator messages vs safe mode.** `notifyOperator` sends with
 `operator: true`, which is exempt from the strict allowlist ONLY when the
 recipient is exactly the configured `NTFY_TOPIC` / `OPERATOR_EMAIL` (the guard
-checks it, not the caller); kill switch, suppression and caps still apply, in a
-separate `operator` global pool. They are recorded with `organizationId` null,
+checks it, not the caller). Kill switch and suppression still apply; the
+verified operator skips the per-recipient cap (an urgent alert must not stop at
+the 11th of the hour) and counts in its own `operator` global pool.
+`sendOperatorMail` takes no `to`: it can only mail `OPERATOR_EMAIL`. They are recorded with `organizationId` null,
 so no tenant sees them (or the topic). `local` safe mode opens email only: a
-push reaches a real phone, so push stays strict. Consequence to know: a staging
-box with production's `NTFY_TOPIC` will alert production's operator; give it
-its own topic.
+push reaches a real phone, so push stays strict. A staging box with
+production's `NTFY_TOPIC` alerts production's operator: every title is
+prefixed with the `APP_URL` host (`[staging.example.com] …`) so the two can be
+told apart, but give staging its own topic.
 
 **Auth mail vs safe mode.** better-auth's verification mail is sent with
 `sendAuthMail`, which is exempt from the strict allowlist and nothing else.
@@ -234,15 +237,19 @@ day) and new sign-ups (low, digest only). It never throws.
 - Every call writes a `notification` row; the send is also an
   `outbound_message` row. Same `dedupeKey` within
   `NOTIFY_DEDUPE_WINDOW_MINUTES` (or the call's `dedupeWindowMinutes`) =
-  `deduped`, not sent.
+  `deduped`, but only when the earlier one reached the operator (sent, logged,
+  held, digested, or in flight for under 2 minutes): a failed alert never
+  silences its repeat.
 - Channel: ntfy push if `NTFY_TOPIC`, else email to `OPERATOR_EMAIL`, else
-  the console. The topic is a password on ntfy.sh: no customer PII in titles
-  or bodies.
-- `low` waits for the digest; `normal` sends within `NOTIFY_PUSH_BUDGET` per
-  24h and outside `NOTIFY_QUIET_HOURS`; `high` ignores the budget; `urgent`
-  ignores both. Held rows go out as one digest at `NOTIFY_DIGEST_TIMES`
-  (APP_TIMEZONE), via the `operator.digest` job on a 15-minute tick. A push
-  the volume cap blocks is held for the digest, not lost.
+  the console. Titles go out prefixed with the `APP_URL` host. **No customer
+  data in titles or bodies**: on ntfy.sh the topic is the only password. Ids,
+  counts, error classes.
+- `low` waits for the digest at `NOTIFY_DIGEST_TIMES` (APP_TIMEZONE); the
+  rest is sent at once (`normal`/`high`/`urgent` only change ntfy's loudness).
+  The `operator.digest` job runs every 15 minutes: it retries high/urgent
+  alerts the volume cap held, then sends the digest if one is due. A digest
+  that is not delivered is marked failed and gives its items back to the next
+  slot. No quiet hours or daily budget (cut: not worth it at this volume).
 - No UI: there is no app-wide operator role, and tenant admins must not see
   them. Read the table directly.
 - `make smoke` forces the console channel and checks sign-up logged one.

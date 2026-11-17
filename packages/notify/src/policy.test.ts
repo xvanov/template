@@ -2,79 +2,19 @@ import { describe, expect, it } from "vitest";
 
 import {
   dueSlot,
-  inQuietHours,
   localParts,
+  ntfyPriority,
   parseDigestTimes,
-  parseQuietHours,
   renderDigest,
-  route,
-  type Priority,
 } from "./policy";
 
 const at = (iso: string) => new Date(iso);
-const base = {
-  sentLast24h: 0,
-  budget: 3,
-  quiet: parseQuietHours("22-07"),
-  timeZone: "UTC",
-};
-const decide = (priority: Priority, now: string, over = {}) =>
-  route({ ...base, priority, now: at(now), ...over });
 
-describe("route", () => {
-  it("low never interrupts; urgent always does, quiet hours included", () => {
-    expect(decide("low", "2026-01-01T12:00:00Z").send).toBe(false);
-    expect(decide("urgent", "2026-01-01T03:00:00Z").send).toBe(true);
-  });
-
-  it("normal and high wait out quiet hours", () => {
-    for (const p of ["normal", "high"] as const) {
-      expect(decide(p, "2026-01-01T23:30:00Z")).toEqual({
-        send: false,
-        reason: "quiet hours",
-      });
-      expect(decide(p, "2026-01-01T07:00:00Z").send).toBe(true);
-    }
-  });
-
-  it("the budget holds normal back once spent, never high", () => {
-    const spent = { sentLast24h: 3 };
-    expect(decide("normal", "2026-01-01T12:00:00Z", spent).send).toBe(false);
+describe("ntfyPriority", () => {
+  it("maps low…urgent to ntfy 2…5", () => {
     expect(
-      decide("normal", "2026-01-01T12:00:00Z", { sentLast24h: 2 }).send,
-    ).toBe(true);
-    expect(decide("high", "2026-01-01T12:00:00Z", spent).send).toBe(true);
-  });
-
-  it("quiet hours are read in the configured timezone", () => {
-    // 12:00 UTC is 21:00 in Tokyo (quiet from 20) but noon in London.
-    const q = { quiet: parseQuietHours("20-07") };
-    expect(
-      decide("normal", "2026-01-01T12:00:00Z", { ...q, timeZone: "Asia/Tokyo" })
-        .send,
-    ).toBe(false);
-    expect(
-      decide("normal", "2026-01-01T12:00:00Z", {
-        ...q,
-        timeZone: "Europe/London",
-      }).send,
-    ).toBe(true);
-  });
-});
-
-describe("quiet hours", () => {
-  it("parses HH-HH and HH:MM-HH:MM; blank, equal or malformed = none", () => {
-    expect(parseQuietHours("22-07")).toEqual({ from: 1320, to: 420 });
-    expect(parseQuietHours("13:30 - 14:15")).toEqual({ from: 810, to: 855 });
-    for (const none of [undefined, "", "8-8", "late", "25-3"]) {
-      expect(parseQuietHours(none)).toBeNull();
-    }
-  });
-
-  it("a window that does not wrap midnight", () => {
-    const q = parseQuietHours("13-14");
-    expect(inQuietHours(q, at("2026-01-01T13:59:00Z"), "UTC")).toBe(true);
-    expect(inQuietHours(q, at("2026-01-01T14:00:00Z"), "UTC")).toBe(false);
+      (["low", "normal", "high", "urgent"] as const).map(ntfyPriority),
+    ).toEqual([2, 3, 4, 5]);
   });
 });
 

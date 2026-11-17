@@ -11,10 +11,15 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@repo/db";
 import { resetEnvCache, serverEnvKeys } from "@repo/env";
 
-import { notifyOperator, runDigest, type OperatorNotification } from "./index";
+import {
+  notifyOperator,
+  retryCapHeld,
+  runDigest,
+  type OperatorNotification,
+} from "./index";
 
 const KEYS = serverEnvKeys.filter((k) =>
-  /^(NTFY_|NOTIFY_|OPERATOR_|OUTBOUND_|SMTP_|APP_TIMEZONE)/.test(k),
+  /^(NTFY_|NOTIFY_|OPERATOR_|OUTBOUND_|SMTP_|APP_TIMEZONE|APP_URL)/.test(k),
 );
 const hex = () => randomBytes(4).toString("hex");
 
@@ -153,50 +158,6 @@ describe("notifyOperator", () => {
     expect((await send(23)).status).toBe("deduped");
   });
 
-  it("budget: normal is held once the 24h budget is spent; high still goes", async () => {
-    setEnv({ NOTIFY_PUSH_BUDGET: "2" });
-    const ntfy = fakeNtfy();
-    const now = new Date("2040-01-01T12:00:00Z");
-    const statuses = [];
-    for (let i = 0; i < 3; i++) {
-      statuses.push(
-        (
-          await notifyOperator(note({ priority: "normal" }), {
-            fetch: ntfy.fetch,
-            now,
-          })
-        ).status,
-      );
-    }
-    expect(statuses).toEqual(["sent", "sent", "held"]);
-    expect(
-      (
-        await notifyOperator(note({ priority: "high" }), {
-          fetch: ntfy.fetch,
-          now,
-        })
-      ).status,
-    ).toBe("sent");
-  });
-
-  it("quiet hours hold normal for the digest; urgent bypasses them", async () => {
-    setEnv({ NOTIFY_QUIET_HOURS: "22-07" });
-    const ntfy = fakeNtfy();
-    const now = new Date("2035-01-01T23:00:00Z");
-    const normal = await notifyOperator(note({ priority: "normal" }), {
-      fetch: ntfy.fetch,
-      now,
-    });
-    expect(normal.status).toBe("held");
-    expect((await rowOf(normal.id)).error).toBe("quiet hours");
-    const urgent = await notifyOperator(note({ priority: "urgent" }), {
-      fetch: ntfy.fetch,
-      now,
-    });
-    expect(urgent.status).toBe("sent");
-    expect(ntfy.sent.at(-1)).toMatchObject({ priority: 5 });
-  });
-
   it("no topic: falls back to email to OPERATOR_EMAIL, through the guard, in strict mode", async () => {
     setEnv({ NTFY_TOPIC: "", OPERATOR_EMAIL: `ops-${hex()}@ops.example` });
     const r = await notifyOperator(note({ organizationId: "org_ctx" }));
@@ -231,6 +192,94 @@ describe("notifyOperator", () => {
     });
     expect(r.status).toBe("failed");
     expect((await rowOf(r.id)).error).toBe("ECONNREFUSED");
+  });
+
+  it("a FAILED alert does not silence its repeat: the operator gets the next one", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const dedupeKey = `down-${hex()}`;
+    const first = await notifyOperator(note({ dedupeKey }), {
+      fetch: (async () => {
+        throw new Error("ECONNREFUSED");
+      }) as unknown as typeof fetch,
+    });
+    expect(first.status).toBe("failed");
+    const ntfy = fakeNtfy();
+    const again = await notifyOperator(note({ dedupeKey }), {
+      fetch: ntfy.fetch,
+    });
+    expect(again.status).toBe("sent");
+    // ...and once one got through, the next IS a duplicate.
+    expect(
+      (await notifyOperator(note({ dedupeKey }), { fetch: ntfy.fetch })).status,
+    ).toBe("deduped");
+  });
+
+  it("a stale pending row (process died mid-send) does not mute the key", async () => {
+    const dedupeKey = `stale-${hex()}`;
+    const now = new Date("2030-09-01T12:00:00Z");
+    await db.notification.create({
+      data: {
+        priority: "high",
+        title: "x",
+        body: "",
+        channel: "push",
+        status: "pending",
+        dedupeKey,
+        createdAt: new Date(now.getTime() - 5 * 60_000),
+      },
+    });
+    const ntfy = fakeNtfy();
+    expect(
+      (await notifyOperator(note({ dedupeKey }), { fetch: ntfy.fetch, now }))
+        .status,
+    ).toBe("sent");
+  });
+
+  it("urgent does not stop at the per-recipient cap: the operator's topic is exempt", async () => {
+    setEnv({ OUTBOUND_CAP_RECIPIENT_PER_HOUR: "3" });
+    const ntfy = fakeNtfy();
+    const statuses = [];
+    for (let i = 0; i < 6; i++) {
+      statuses.push(
+        (
+          await notifyOperator(note({ priority: "urgent" }), {
+            fetch: ntfy.fetch,
+          })
+        ).status,
+      );
+    }
+    expect(statuses).toEqual(Array(6).fill("sent"));
+  });
+
+  it("an urgent alert the (operator pool) cap blocks is held, and the next tick sends it", async () => {
+    setEnv({ OUTBOUND_CAP_GLOBAL_PER_HOUR: "1" });
+    const ntfy = fakeNtfy();
+    const r = await notifyOperator(note({ priority: "urgent" }), {
+      fetch: ntfy.fetch,
+    });
+    expect(r.status).toBe("held");
+    expect((await rowOf(r.id)).error).toMatch(/^VOLUME/);
+    expect(ntfy.sent).toHaveLength(0);
+
+    process.env.OUTBOUND_CAP_GLOBAL_PER_HOUR = "100000";
+    resetEnvCache();
+    expect(await retryCapHeld({ fetch: ntfy.fetch })).toBe(1);
+    expect(await rowOf(r.id)).toMatchObject({ status: "sent", error: null });
+    expect(ntfy.sent).toHaveLength(1);
+    // Nothing left to retry.
+    expect(await retryCapHeld({ fetch: ntfy.fetch })).toBe(0);
+  });
+
+  it("prefixes what it sends with the APP_URL host; stores the bare title", async () => {
+    setEnv({ APP_URL: "https://staging.example.com" });
+    const ntfy = fakeNtfy();
+    const r = await notifyOperator(note({ title: "Disk almost full" }), {
+      fetch: ntfy.fetch,
+    });
+    expect(ntfy.sent[0]).toMatchObject({
+      title: "[staging.example.com] Disk almost full",
+    });
+    expect((await rowOf(r.id)).title).toBe("Disk almost full");
   });
 
   it("the guard's kill switch still applies to operator pushes", async () => {
@@ -276,5 +325,50 @@ describe("runDigest", () => {
     });
     expect(empty).toMatchObject({ slot: "2031-01-01 17:00", count: 0 });
     expect(ntfy.sent).toHaveLength(1);
+  });
+
+  it("a digest that is NOT delivered gives its items back for the next slot", async () => {
+    setEnv({ NOTIFY_DIGEST_TIMES: "09:00,17:00" });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const low = await notifyOperator(note({ priority: "low" }));
+    const failed = await runDigest({
+      now: new Date("2032-01-01T09:30:00Z"),
+      fetch: (async () => {
+        throw new Error("ntfy down");
+      }) as unknown as typeof fetch,
+    });
+    expect(failed).toMatchObject({ status: "failed" });
+    expect(await rowOf(failed!.digestId)).toMatchObject({ status: "failed" });
+    expect(await rowOf(low.id)).toMatchObject({
+      status: "held",
+      digestId: null,
+    });
+
+    const ntfy = fakeNtfy();
+    const ok = await runDigest({
+      now: new Date("2032-01-01T17:30:00Z"),
+      fetch: ntfy.fetch,
+    });
+    expect(ok).toMatchObject({ status: "sent" });
+    expect(await rowOf(low.id)).toMatchObject({
+      status: "digested",
+      digestId: ok!.digestId,
+    });
+  });
+
+  it("a digest the cap blocks is marked failed, never held (it would swallow its items)", async () => {
+    setEnv({ NOTIFY_DIGEST_TIMES: "09:00", OUTBOUND_CAP_GLOBAL_PER_HOUR: "1" });
+    const low = await notifyOperator(note({ priority: "low" }));
+    const ntfy = fakeNtfy();
+    const d = await runDigest({
+      now: new Date("2033-01-01T09:30:00Z"),
+      fetch: ntfy.fetch,
+    });
+    expect(d).toMatchObject({ status: "failed" });
+    const row = await rowOf(d!.digestId);
+    expect(row.status).toBe("failed");
+    expect(row.error).toMatch(/^VOLUME/);
+    expect(await rowOf(low.id)).toMatchObject({ status: "held" });
+    expect(ntfy.sent).toHaveLength(0);
   });
 });

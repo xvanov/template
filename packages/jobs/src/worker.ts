@@ -65,15 +65,22 @@ export function createWorker(opts: WorkerOptions = {}): Worker {
  * Tell the operator a job gave up. One alert per job NAME per dedupe window: a
  * broken handler failing for every tenant is one problem, not a hundred.
  * Never throws (notifyOperator does not).
+ *
+ * NO CUSTOMER DATA in alerts (they may sit on a public ntfy server): the job
+ * name, its id, the attempt count and the error's class and first line,
+ * truncated. The full error is in job_run.
  */
 export function reportFinalFailure(job: JobLike, err: Error) {
   const org = (job.data as { organizationId?: unknown } | undefined)
     ?.organizationId;
+  const firstLine = (err.message.split("\n").find((l) => l.trim()) ?? "")
+    .trim()
+    .slice(0, 120);
   return notifyOperator({
     title: `Job ${job.name} failed for good`,
     body: [
-      `After ${job.attemptsMade} attempt(s): ${err.message.slice(0, 500)}`,
-      `job ${job.id ?? "?"}${typeof org === "string" ? ` · org ${org}` : ""} · details in job_run`,
+      `${err.name}: ${firstLine}`,
+      `job ${job.id ?? "?"} · attempt ${job.attemptsMade}${typeof org === "string" ? ` · org ${org}` : ""} · full error in job_run`,
     ].join("\n"),
     priority: "high",
     dedupeKey: `job-failed:${job.name}`,

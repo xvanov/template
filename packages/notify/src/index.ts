@@ -5,28 +5,33 @@
  *
  *   await notifyOperator({
  *     title: "Job items.summarize failed for good",
- *     body: err.message,
+ *     body: "attempt 3 · ZodError: invalid payload",
  *     priority: "high",
  *     dedupeKey: `job-failed:${job.name}`,
  *   });
  *
  * Every call writes one `notification` row, whatever happens next:
  *   1. dedupe: the same dedupeKey within NOTIFY_DEDUPE_WINDOW_MINUTES (or the
- *      call's own window) is recorded as "deduped" and not sent. Serialised by
- *      an advisory lock per key, so two processes cannot both send it.
- *   2. routing (policy.ts): low priority, quiet hours and an exhausted daily
- *      budget HOLD it for the next digest; the rest is sent now.
+ *      call's own window) is recorded as "deduped" and not sent, but ONLY if
+ *      the earlier one actually reached the operator (or is about to: held for
+ *      the digest, or in flight right now). A failed or blocked alert does not
+ *      silence its repeats. Serialised by an advisory lock per key.
+ *   2. `low` is held for the next digest; everything else is sent now.
  *   3. channel: ntfy push when NTFY_TOPIC is set, else email to OPERATOR_EMAIL,
- *      else the console. Push and email go through the outbound guard
- *      (`deliver`), as the operator: see `operator` in @repo/outbound for how
- *      safe mode treats it. A send the volume cap blocks is held for the
- *      digest rather than lost.
+ *      else the console. Push and email go through the outbound guard as the
+ *      operator (see `operator` in @repo/outbound for how safe mode treats it).
+ *      A send the guard's volume cap blocks is held: high/urgent ones are
+ *      retried on the next 15-minute tick (runOperatorTick), the rest wait for
+ *      the digest.
+ *
+ * Titles are sent prefixed with the APP_URL host ("[app.example.com] …") so
+ * alerts from staging and production can be told apart on one phone.
  *
  * It NEVER throws: an alert path that can take down the code it reports on is
  * worse than none. If even the database is unreachable, the alert is printed.
  *
- * Do not put customers' personal data in a title or body: on ntfy.sh it sits
- * on a public server, readable by anyone who learns the topic.
+ * NO CUSTOMER DATA in a title or body: on ntfy.sh it sits on a public server,
+ * readable by anyone who learns the topic. Ids, counts and error classes only.
  */
 import { db } from "@repo/db";
 import { sendOperatorMail } from "@repo/email";
@@ -37,27 +42,22 @@ import { operatorTopic, transmitPush, type PushMessage } from "./ntfy";
 import {
   dueSlot,
   parseDigestTimes,
-  parseQuietHours,
   renderDigest,
-  route,
   type Priority,
 } from "./policy";
 
 export {
   PRIORITIES,
   dueSlot,
-  inQuietHours,
   parseDigestTimes,
-  parseQuietHours,
   renderDigest,
-  route,
   type Priority,
 } from "./policy";
 
 export interface OperatorNotification {
   /** One line. */
   title: string;
-  /** A few short lines. No customer PII (see the header). */
+  /** A few short lines. No customer data (see the header). */
   body: string;
   priority: Priority;
   /** Same key within the window = recorded, not re-sent. e.g. `ai-cap:<org>:<day>`. */
@@ -74,11 +74,20 @@ export interface OperatorNotification {
 
 export type Channel = "push" | "email" | "console";
 
+export type Status =
+  | "pending"
+  | "sent"
+  | "logged"
+  | "held"
+  | "digested"
+  | "deduped"
+  | "blocked"
+  | "failed";
+
 export interface NotifyResult {
   /** The notification row, or null when even the database was unreachable. */
   id: string | null;
-  status:
-    "sent" | "logged" | "held" | "deduped" | "blocked" | "failed" | "pending";
+  status: Status;
   channel: Channel;
 }
 
@@ -96,6 +105,16 @@ export function operatorChannel(): Channel {
 }
 
 const MINUTE = 60_000;
+/** Rows that mean "the operator has (or will get) this one". */
+const REACHED: Status[] = ["sent", "logged", "held", "digested"];
+/**
+ * A pending row suppresses a repeat only while it can still be in flight
+ * (the ntfy timeout is 10s): without this, five simultaneous calls would all
+ * send; with no limit, a process that died mid-send would mute the key.
+ */
+const IN_FLIGHT_MS = 2 * MINUTE;
+/** Why a send was held by the volume cap; the tick retries high/urgent ones. */
+const CAP_HELD = "VOLUME";
 
 export async function notifyOperator(
   n: OperatorNotification,
@@ -128,8 +147,16 @@ export async function notifyOperator(
         const first = await tx.notification.findFirst({
           where: {
             dedupeKey: n.dedupeKey,
-            status: { not: "deduped" },
-            createdAt: { gte: new Date(now.getTime() - windowMs) },
+            OR: [
+              {
+                status: { in: REACHED },
+                createdAt: { gte: new Date(now.getTime() - windowMs) },
+              },
+              {
+                status: "pending",
+                createdAt: { gte: new Date(now.getTime() - IN_FLIGHT_MS) },
+              },
+            ],
           },
           select: { id: true },
         });
@@ -144,29 +171,12 @@ export async function notifyOperator(
           });
         }
       }
-      const sentLast24h =
-        n.priority === "normal"
-          ? await tx.notification.count({
-              where: {
-                priority: "normal",
-                status: "sent",
-                sentAt: { gte: new Date(now.getTime() - 24 * 60 * MINUTE) },
-              },
-            })
-          : 0;
-      const decision = route({
-        priority: n.priority,
-        sentLast24h,
-        budget: e.NOTIFY_PUSH_BUDGET,
-        quiet: parseQuietHours(e.NOTIFY_QUIET_HOURS),
-        now,
-        timeZone: e.APP_TIMEZONE,
-      });
+      const hold = n.priority === "low";
       return tx.notification.create({
         data: {
           ...data,
-          status: decision.send ? "pending" : "held",
-          error: decision.send ? null : decision.reason,
+          status: hold ? "held" : "pending",
+          error: hold ? "low priority waits for the digest" : null,
         },
         select: { id: true, status: true },
       });
@@ -174,11 +184,7 @@ export async function notifyOperator(
 
     if (row.status !== "pending") {
       log(row.status, n.priority, channel, title);
-      return {
-        id: row.id,
-        status: row.status as NotifyResult["status"],
-        channel,
-      };
+      return { id: row.id, status: row.status as Status, channel };
     }
     const status = await dispatch(
       row.id,
@@ -198,16 +204,26 @@ export async function notifyOperator(
   }
 }
 
+/** "[app.example.com] title": which deployment is talking. */
+function withHost(title: string): string {
+  try {
+    return `[${new URL(env().APP_URL).host}] ${title}`;
+  } catch {
+    return title;
+  }
+}
+
 /** Send one recorded notification and record the outcome. Never throws. */
 async function dispatch(
   id: string,
   channel: Channel,
   msg: PushMessage,
   deps: NotifyDeps,
-): Promise<NotifyResult["status"]> {
-  let status: NotifyResult["status"];
+): Promise<Status> {
+  let status: Status;
   let error: string | null = null;
   let outboundMessageId: string | null = null;
+  const out = { ...msg, title: withHost(msg.title) };
   try {
     let result: DeliveryResult | null = null;
     if (channel === "console") {
@@ -215,7 +231,7 @@ async function dispatch(
         [
           "",
           `[notify] ── operator notification (${msg.priority}) — set NTFY_TOPIC or OPERATOR_EMAIL to receive these`,
-          `[notify] ${msg.title}`,
+          `[notify] ${out.title}`,
           ...msg.body.split("\n").map((l) => `[notify]   ${l}`),
           ...(msg.url ? [`[notify]   ${msg.url}`] : []),
           "",
@@ -226,18 +242,17 @@ async function dispatch(
         {
           channel: "push",
           recipient: operatorTopic() ?? "",
-          subject: msg.title,
+          subject: out.title,
           purpose: "operator.notify",
           operator: true,
         },
         // The guard passes the topic it checked; publish to that one.
-        (topic) => transmitPush(topic, msg, deps.fetch),
+        (topic) => transmitPush(topic, out, deps.fetch),
       );
     } else {
       result = await sendOperatorMail(
         {
-          to: env().OPERATOR_EMAIL ?? "",
-          subject: `[${msg.priority}] ${msg.title}`,
+          subject: `[${msg.priority}] ${out.title}`,
           text: [msg.body, msg.url].filter(Boolean).join("\n\n"),
         },
         "operator.notify",
@@ -248,8 +263,8 @@ async function dispatch(
       outboundMessageId = result.id;
       if (result.status === "sent") status = "sent";
       else {
-        // Over the volume cap: not lost, it waits for the next digest.
-        status = result.reason === "VOLUME" ? "held" : "blocked";
+        // Over the volume cap: not lost; retried by the tick or digested.
+        status = result.reason === CAP_HELD ? "held" : "blocked";
         error = `${result.reason}: ${result.detail}`;
       }
     }
@@ -289,22 +304,71 @@ function log(
   );
 }
 
+/**
+ * Re-send high/urgent notifications the volume cap held, instead of letting
+ * them wait for a digest that may be a day away. Each row is claimed
+ * (held → pending) before it is sent, so two workers cannot both send it.
+ */
+export async function retryCapHeld(deps: NotifyDeps = {}): Promise<number> {
+  const channel = operatorChannel();
+  const rows = await db.notification.findMany({
+    where: {
+      status: "held",
+      priority: { in: ["high", "urgent"] },
+      error: { startsWith: CAP_HELD },
+    },
+    orderBy: { createdAt: "asc" },
+    take: 50,
+    select: {
+      id: true,
+      priority: true,
+      title: true,
+      body: true,
+      url: true,
+      tags: true,
+    },
+  });
+  let retried = 0;
+  for (const r of rows) {
+    const claim = await db.notification.updateMany({
+      where: { id: r.id, status: "held" },
+      data: { status: "pending", channel },
+    });
+    if (!claim.count) continue;
+    retried++;
+    await dispatch(
+      r.id,
+      channel,
+      {
+        title: r.title,
+        body: r.body,
+        priority: r.priority as Priority,
+        tags: r.tags,
+        url: r.url,
+      },
+      deps,
+    );
+  }
+  return retried;
+}
+
 const LAST_SLOT = "notify.digest.lastSlot";
 
 export interface DigestResult {
   slot: string;
-  /** Held notifications carried by this digest (0 = nothing sent). */
+  /** Held notifications the digest carried (0 = nothing to send). */
   count: number;
   digestId: string | null;
-  status: NotifyResult["status"] | null;
+  status: Status | null;
 }
 
 /**
- * Send the due digest, if a slot is due. Called by the worker's
- * `operator.digest` job every 15 minutes; returns null when no slot is due.
- * Claiming the slot and the held rows happens in one transaction under an
- * advisory lock, so two workers cannot send the same digest. An empty slot is
- * recorded and sends nothing.
+ * Send the due digest, if a slot is due; null when none is. Claiming the slot
+ * and the held rows happens in one transaction under an advisory lock, so two
+ * workers cannot send the same digest. An empty slot is recorded and silent.
+ * If the digest is not delivered (failed, blocked, over the cap), its items go
+ * back to "held" for the next slot and the digest row is marked failed: a
+ * digest is never itself held, or it would swallow its items.
  */
 export async function runDigest(
   deps: NotifyDeps = {},
@@ -341,8 +405,6 @@ export async function runDigest(
     });
     if (!held.length) return { slot, digest: null, count: 0 };
     const text = renderDigest(held, slot);
-    // Recorded as "low": it IS the low-priority stream, and so it never
-    // counts against the normal-priority budget.
     const digest = await tx.notification.create({
       data: {
         priority: "low",
@@ -365,8 +427,9 @@ export async function runDigest(
   if (!claimed.digest) {
     return { slot: claimed.slot, count: 0, digestId: null, status: null };
   }
-  const status = await dispatch(
-    claimed.digest.id,
+  const digestId = claimed.digest.id;
+  let status = await dispatch(
+    digestId,
     channel,
     {
       title: claimed.digest.title,
@@ -377,10 +440,35 @@ export async function runDigest(
     },
     deps,
   );
-  return {
-    slot: claimed.slot,
-    count: claimed.count,
-    digestId: claimed.digest.id,
-    status,
-  };
+  if (status !== "sent" && status !== "logged") {
+    status = "failed";
+    await db
+      .$transaction([
+        db.notification.updateMany({
+          where: { digestId, status: "digested" },
+          data: { status: "held", digestId: null },
+        }),
+        db.notification.updateMany({
+          where: { id: digestId },
+          data: { status: "failed" },
+        }),
+      ])
+      .catch((err: unknown) =>
+        console.error(
+          "[notify] digest not delivered AND its items could not be re-held:",
+          err,
+        ),
+      );
+  }
+  return { slot: claimed.slot, count: claimed.count, digestId, status };
+}
+
+/**
+ * The worker's 15-minute tick (`operator.digest` job): retry cap-held urgent
+ * alerts, then send the digest if one is due.
+ */
+export async function runOperatorTick(deps: NotifyDeps = {}) {
+  const retried = await retryCapHeld(deps);
+  const digest = await runDigest(deps);
+  return { retried, digest };
 }

@@ -61,8 +61,8 @@ export interface OutboundAttempt {
    * safe-mode allowlist ONLY when the recipient is exactly the operator's own
    * configured address for this channel (GuardConfig.operatorRecipients), which
    * the guard checks itself: setting the flag on any other recipient exempts
-   * nothing. Kill switch, suppression and caps still apply; the global cap
-   * uses its own "operator" pool.
+   * nothing. Kill switch and suppression still apply; the verified operator
+   * skips the per-recipient cap and counts in its own "operator" global pool.
    */
   operator?: boolean;
 }
@@ -248,14 +248,25 @@ export function volumeBuckets(
 ): { key: string; limit: number; windowSeconds: number; label: string }[] {
   const ch = attempt.channel;
   const HOUR = 3600;
-  const buckets = [
-    {
-      key: `outbound:${ch}:rcpt:${attempt.recipient}:h`,
-      limit: config.caps.recipientPerHour,
-      windowSeconds: HOUR,
-      label: `${config.caps.recipientPerHour}/hour to this recipient`,
-    },
-  ];
+  // The VERIFIED operator (flag + configured recipient) is not capped per
+  // recipient: the cap protects strangers from us, and an urgent alert must
+  // not stop at the 11th of the hour. The operator global pool still applies.
+  const operator = isOperatorRecipient(attempt, config);
+  const buckets: {
+    key: string;
+    limit: number;
+    windowSeconds: number;
+    label: string;
+  }[] = operator
+    ? []
+    : [
+        {
+          key: `outbound:${ch}:rcpt:${attempt.recipient}:h`,
+          limit: config.caps.recipientPerHour,
+          windowSeconds: HOUR,
+          label: `${config.caps.recipientPerHour}/hour to this recipient`,
+        },
+      ];
   if (attempt.organizationId) {
     buckets.push(
       {
@@ -274,13 +285,10 @@ export function volumeBuckets(
   }
   // Auth mail gets its OWN global bucket: anonymous sign-ups are attacker-
   // driven, and must not be able to use up the hourly budget every tenant's
-  // mail shares. Operator messages get theirs too, so an alert storm cannot
-  // starve tenants' mail, nor a busy day of tenant mail silence the alerts.
-  const pool = attempt.authMail
-    ? "auth"
-    : attempt.operator
-      ? "operator"
-      : "app";
+  // mail shares. Verified operator messages get theirs too, so an alert storm
+  // cannot starve tenants' mail, nor a busy day of tenant mail silence the
+  // alerts. The bare flag on any other recipient buys nothing: "app" pool.
+  const pool = attempt.authMail ? "auth" : operator ? "operator" : "app";
   buckets.push({
     key: `outbound:${ch}:global:${pool}:h`,
     limit: config.caps.globalPerHour,

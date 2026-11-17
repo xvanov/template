@@ -356,7 +356,7 @@ const serverSchema = z.object({
   /** The same dedupeKey within this many minutes is recorded, not re-sent. */
   NOTIFY_DEDUPE_WINDOW_MINUTES: z.coerce.number().int().positive().default(60),
   /**
-   * When held notifications (low priority, over budget, quiet hours) are sent
+   * When held notifications (low priority, or held by the volume cap) are sent
    * as one digest: comma-separated HH:MM in APP_TIMEZONE.
    */
   NOTIFY_DIGEST_TIMES: z.preprocess(
@@ -372,25 +372,6 @@ const serverSchema = z.object({
         'must be comma-separated HH:MM times, e.g. "09:00,17:00"',
       ),
   ),
-  /**
-   * Quiet hours in APP_TIMEZONE, "HH-HH" or "HH:MM-HH:MM" (e.g. 22-07): normal
-   * and high priority wait for the digest; urgent still pushes. Unset = none.
-   */
-  NOTIFY_QUIET_HOURS: z.preprocess(
-    blankIsUnset,
-    z
-      .string()
-      .regex(
-        /^([01]?\d|2[0-4])(:[0-5]\d)?\s*-\s*([01]?\d|2[0-4])(:[0-5]\d)?$/,
-        'must be "HH-HH" or "HH:MM-HH:MM", e.g. 22-07',
-      )
-      .optional(),
-  ),
-  /**
-   * Normal-priority notifications sent per rolling 24 hours before the rest
-   * wait for the digest. High and urgent are not limited by it.
-   */
-  NOTIFY_PUSH_BUDGET: z.coerce.number().int().nonnegative().default(20),
 
   // ── Security helpers (packages/security) ───────────────────────────────
   /** Bearer secret for HTTP cron endpoints. Unset in production = every call refused. */

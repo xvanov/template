@@ -1,76 +1,23 @@
 /**
- * The routing rules, pure: no clock, no database, no env. Every rule is a unit
- * test, not a hope.
+ * The rules that need no I/O: priorities, digest slots, the digest's text.
+ * Kept pure so each is a unit test.
  *
- * Ported from the production design (personal-assistant's notify/budget.ts and
- * digest.ts). An alert channel that buzzes for everything gets muted, and then
- * it cannot reach you for the one thing that mattered. So:
+ * Priorities: `low` never interrupts (it waits for the next digest); `normal`,
+ * `high` and `urgent` are sent at once and differ only in how loudly the phone
+ * announces them (ntfy priority 3/4/5). "Never the same thing twice" is the
+ * dedupe key (index.ts).
  *
- *   low     never interrupts: waits for the next digest.
- *   normal  sends while the rolling-24h budget lasts (NOTIFY_PUSH_BUDGET) and
- *           outside quiet hours; otherwise waits for the digest.
- *   high    sends outside quiet hours, budget or not.
- *   urgent  always sends, quiet hours included.
- *
- * "Never the same thing twice" is the dedupe key (index.ts), checked before
- * any of this. The digest goes out at the times you chose (NOTIFY_DIGEST_TIMES)
- * and is not subject to quiet hours or the budget.
+ * Deliberately NOT ported from personal-assistant: quiet hours and a daily
+ * push budget. With a handful of deduped operator alerts they cost three env
+ * vars and their own tests for little; add them back when alert volume does.
  */
 
 export const PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
-/** ntfy's 1 (min) … 5 (max). Low still makes a sound-free entry on the phone. */
+/** ntfy's 1 (min) … 5 (max). */
 export function ntfyPriority(p: Priority): 2 | 3 | 4 | 5 {
   return ({ low: 2, normal: 3, high: 4, urgent: 5 } as const)[p];
-}
-
-export interface Decision {
-  send: boolean;
-  /** Why, for the log and the row's `error` when held. */
-  reason: string;
-}
-
-/** Minutes since local midnight, start inclusive, end exclusive; may wrap. */
-export interface QuietHours {
-  from: number;
-  to: number;
-}
-
-export function route(args: {
-  priority: Priority;
-  /** Normal-priority sends in the last 24 hours (only read for "normal"). */
-  sentLast24h: number;
-  budget: number;
-  quiet: QuietHours | null;
-  now: Date;
-  timeZone: string;
-}): Decision {
-  const { priority } = args;
-  if (priority === "low")
-    return { send: false, reason: "low priority waits for the digest" };
-  if (priority === "urgent") return { send: true, reason: "urgent" };
-  if (inQuietHours(args.quiet, args.now, args.timeZone))
-    return { send: false, reason: "quiet hours" };
-  if (priority === "high") return { send: true, reason: "high" };
-  if (args.sentLast24h >= args.budget)
-    return {
-      send: false,
-      reason: `budget of ${args.budget} sends per 24h spent`,
-    };
-  return { send: true, reason: "within budget" };
-}
-
-/** "22-07", "22:30-7" → minutes; blank → null. Malformed → null (env validates). */
-export function parseQuietHours(spec: string | undefined): QuietHours | null {
-  const m = /^(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?$/.exec(
-    (spec ?? "").trim(),
-  );
-  if (!m) return null;
-  const from = Number(m[1]) * 60 + Number(m[2] ?? 0);
-  const to = Number(m[3]) * 60 + Number(m[4] ?? 0);
-  if (from > 1440 || to > 1440 || from === to) return null;
-  return { from, to };
 }
 
 /** The local calendar date and minute-of-day of `now` in `timeZone`. */
@@ -95,18 +42,6 @@ export function localParts(
     date: `${parts.year}-${parts.month}-${parts.day}`,
     minutes: Number(parts.hour) * 60 + Number(parts.minute),
   };
-}
-
-export function inQuietHours(
-  quiet: QuietHours | null,
-  now: Date,
-  timeZone: string,
-): boolean {
-  if (!quiet) return false;
-  const t = localParts(now, timeZone).minutes;
-  return quiet.from < quiet.to
-    ? t >= quiet.from && t < quiet.to
-    : t >= quiet.from || t < quiet.to;
 }
 
 /** "17:00, 9" → [540, 1020]: sorted, deduplicated minutes. */

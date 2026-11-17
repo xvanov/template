@@ -184,9 +184,22 @@ export interface CapHit {
   refused: boolean;
 }
 
+/**
+ * Tenants already reported today, in this process. notify's dedupe key makes
+ * it once per org per day across processes; this memo stops every refused
+ * call from writing a "deduped" row on the way.
+ */
+const capReported = { day: "", orgs: new Set<string>() };
+
 /** The operator hears about a tenant's cap once per tenant per UTC day. */
 function notifyCapHit(info: CapHit): void {
   const day = startOfUtcDay().toISOString().slice(0, 10);
+  if (capReported.day !== day) {
+    capReported.day = day;
+    capReported.orgs.clear();
+  }
+  if (capReported.orgs.has(info.organizationId)) return;
+  capReported.orgs.add(info.organizationId);
   void notifyOperator({
     title: `A tenant reached the daily AI cap ($${info.capUsd})`,
     body: [

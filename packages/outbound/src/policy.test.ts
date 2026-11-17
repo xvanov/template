@@ -219,10 +219,31 @@ describe("push and operator messages", () => {
     expect(staticBlock(push(), config(), true)?.reason).toBe("FROZEN");
   });
 
-  it("operator messages count in their own global pool", () => {
+  it("the verified operator skips the per-recipient cap and counts in its own global pool", () => {
     expect(volumeBuckets(push(), config()).map((b) => b.key)).toEqual([
-      "outbound:push:rcpt:ops-topic-123:h",
       "outbound:push:global:operator:h",
+    ]);
+    expect(
+      volumeBuckets(
+        mail({
+          recipient: "ops@team.test",
+          operator: true,
+          organizationId: null,
+        }),
+        config(),
+      ).map((b) => b.key),
+    ).toEqual(["outbound:email:global:operator:h"]);
+  });
+
+  it("the operator flag on any other recipient buys no cap exemption and no operator pool", () => {
+    expect(
+      volumeBuckets(
+        mail({ operator: true, organizationId: null }),
+        config(),
+      ).map((b) => b.key),
+    ).toEqual([
+      "outbound:email:rcpt:stranger@real-customer.com:h",
+      "outbound:email:global:app:h",
     ]);
   });
 });

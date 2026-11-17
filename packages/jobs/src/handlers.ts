@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 import { db } from "@repo/db";
-import { runDigest } from "@repo/notify";
+import { runOperatorTick } from "@repo/notify";
 import {
   ask,
   LlmBudgetExceededError,
@@ -33,7 +33,7 @@ const schemas = {
   /** Demo scheduled job: prune soft state and log a heartbeat. */
   "maintenance.nightly": z.object({}),
 
-  /** Send the operator's digest of held notifications, when a slot is due. */
+  /** Operator notifications' 15-minute tick: retry cap-held alerts, send a due digest. */
   "operator.digest": z.object({}),
   /** Demo job: something a webhook or a UI action would fire. */
   "notify.digest": z.object({
@@ -140,8 +140,8 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     scope: "system",
     schema: schemas["operator.digest"],
     // Due-ness is decided inside (NOTIFY_DIGEST_TIMES in APP_TIMEZONE): most
-    // ticks find no slot due and return null.
-    run: () => runDigest(),
+    // ticks retry nothing and find no digest due.
+    run: () => runOperatorTick(),
   },
   "notify.digest": {
     scope: "org",
