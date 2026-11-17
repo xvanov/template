@@ -181,6 +181,52 @@ strict box. The kill switch, suppression and caps still apply. Use
 `sendAuthMail` for better-auth callbacks only. `make smoke` forces safe mode
 to `strict` with an empty allowlist, so the gate proves sign-up still works.
 
+## UI (apps/web)
+
+**Use the kit; do not hand-roll.** Every button, input, modal, menu, table and
+toast comes from `apps/web/src/components/ui/` — shadcn/ui (new-york style,
+neutral base colour, CSS variables), copied into the repo so you own the code.
+See every component rendered at **`/design`** (public, static, noindex; source
+in `src/app/design/styleguide.tsx` doubles as usage examples).
+
+- **Where things live.** `components/ui/*` = the kit (shadcn files plus our
+  `data-table`, `states` (loading/empty/error/`FieldError`), `file-drop`,
+  `confirm-dialog`). `components/app-shell.tsx` = the signed-in sidebar +
+  header (add nav entries to `NAV`). `lib/utils.ts` = `cn()`. Theme tokens =
+  `:root` / `.dark` in `src/app/globals.css` — re-skin there, not per component.
+- **Add a shadcn component:** `cd apps/web && npx shadcn@4.23.0 add <name>`
+  (reads `components.json`). Recent registries import `cn` from a separate
+  `cn` npm package (pre-1.0); this repo keeps `cn` in `@/lib/utils`
+  (clsx + tailwind-merge, like the production apps), so point the import back:
+  `sed -i 's#from "cn"#from "@/lib/utils"#' src/components/ui/<name>.tsx` and
+  `npm uninstall -w web cn` if the CLI added it. Then pin any new dependency
+  exactly in `apps/web/package.json`, run `npx prettier --write src` and
+  `make lint` (the React Compiler lint rules flag a few upstream files — fix
+  them, see `hooks/use-mobile.ts`), and add the component to `/design`.
+- **Dark mode** is next-themes, class-based (`dark:` follows the user's choice).
+  The root layout must keep `<html suppressHydrationWarning>`; that is what lets
+  the inline script set the class before first paint (no flash). `ThemeToggle`
+  is a plain button on purpose.
+- **Forms:** react-hook-form + the kit's `Form*` components. In client code
+  validate with named imports from `zod/mini` (see `login-form.tsx`): classic
+  `zod` adds ~60 kB gzipped to the page. Server code keeps classic zod. Keep
+  labels visible (`FormLabel`).
+- **Every query-backed panel** renders exactly one of `LoadingState` /
+  `ErrorState` / `EmptyState` / data. Mutations report with `toast` (sonner).
+- **Formatting:** never `toLocaleString` ad hoc. `useFormat()` (client, from
+  `components/format-provider.tsx`) or `getFormatter()` (server,
+  `lib/format-server.ts`) — locale, currency, timezone come from `APP_LOCALE`,
+  `APP_CURRENCY`, `APP_TIMEZONE`. Money is integer minor units (cents).
+  `useFormat()` only sees the env config under `/app` (its layout provides it);
+  elsewhere it falls back to en-US · USD · UTC.
+- **Auth guard:** `src/app/app/layout.tsx` redirects every `/app/**` request
+  without a session, once, on the server. Do not re-check per page.
+- **The root layout reads nothing per request** (no `env()`, no cookies) so
+  static pages like `/design` prerender and the Docker build needs no secrets.
+- **Bundle:** watch first-load JS when adding client libraries; Radix menus,
+  popovers and tooltips pull in positioning code — keep them off public pages
+  that do not need them.
+
 ## Things that will bite you (all learned here, the hard way)
 
 - **`output: standalone` does not copy static assets.** Boot it without copying
@@ -301,7 +347,8 @@ to `strict` with an empty allowlist, so the gate proves sign-up still works.
 ## Starting a real app from this template
 
 1. Rename: `expo.scheme` + `APP_SCHEME`, `expo.name`/`slug`, bundle identifiers
-   in `apps/mobile/app.json`, the `<title>` in `apps/web/src/app/layout.tsx`.
+   in `apps/mobile/app.json`, the `<title>` in `apps/web/src/app/layout.tsx`,
+   `apps/web/src/app/manifest.ts` and `icon.svg`.
 2. Replace the `Item` model with your domain — keep its `organizationId` column
    and index shape. `packages/api/src/routers/items.ts` is the reference resolver.
 3. Delete what you do not need. `packages/ai`, `packages/storage` and

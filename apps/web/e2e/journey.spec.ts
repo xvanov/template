@@ -117,7 +117,9 @@ test("sign up, create an item, and see it persist across a reload", async ({
 test("signing out revokes access to the app", async ({ page, baseURL }) => {
   await signUp(page, uniqueEmail("signout"), baseURL!);
 
-  await page.getByRole("button", { name: /sign out/i }).click();
+  // Sign out lives in the account menu (header, top right) on every viewport.
+  await page.getByRole("button", { name: "Account menu" }).click();
+  await page.getByRole("menuitem", { name: /sign out/i }).click();
   await expect(page).toHaveURL(/\/$/, { timeout: 20_000 });
 
   // The guard is server-side, so asking for /app directly must also bounce.

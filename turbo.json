@@ -50,7 +50,10 @@
     "SECRETS_ENCRYPTION_KEY",
     "SECRETS_ENCRYPTION_OLD_KEYS",
     "EXPO_PUBLIC_API_URL",
-    "APP_SCHEME"
+    "APP_SCHEME",
+    "APP_LOCALE",
+    "APP_CURRENCY",
+    "APP_TIMEZONE"
   ],
   "tasks": {
     "build": {
