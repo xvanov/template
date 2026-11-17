@@ -115,6 +115,8 @@ services:
       REDIS_URL: redis://redis:6379
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
+      # .env holds a HOST path (setup.sh pins it); in here it is the volume.
+      STORAGE_LOCAL_DIR: /app/storage
       HOSTNAME: "0.0.0.0"
       PORT: "3000"
     ports:
@@ -139,6 +141,7 @@ services:
       REDIS_URL: redis://redis:6379
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
+      STORAGE_LOCAL_DIR: /app/storage
     depends_on:
       db:
         condition: service_healthy

@@ -10,9 +10,13 @@ import { llmEnabled } from "@repo/ai";
 import { env } from "@repo/env";
 
 import { createTRPCRouter, publicProcedure } from "../trpc";
+import { resolveVersion } from "../version";
 
 export const healthRouter = createTRPCRouter({
-  live: publicProcedure.query(() => ({ ok: true as const })),
+  live: publicProcedure.query(() => ({
+    ok: true as const,
+    version: resolveVersion(),
+  })),
 
   ready: publicProcedure.query(async ({ ctx }) => {
     const checks: Record<string, { ok: boolean; error?: string }> = {};
@@ -33,6 +37,8 @@ export const healthRouter = createTRPCRouter({
 
     return {
       ok: Object.values(checks).every((c) => c.ok),
+      /** APP_VERSION (the deployed git commit), else package.json's version. */
+      version: resolveVersion(),
       checks,
       features: {
         llm: llmEnabled(),

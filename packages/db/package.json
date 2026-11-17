@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./client": "./generated/client.ts",
-    "./testing": "./testing/index.ts"
+    "./testing": "./testing/index.ts",
+    "./enums": "./generated/enums.ts"
   },
   "scripts": {
     "generate": "prisma generate",

@@ -41,6 +41,19 @@ else
   # `|` delimiter: base64 contains slashes.
   sed -i.bak "s|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=${SECRET}|" .env && rm -f .env.bak
   ok "wrote .env with a generated BETTER_AUTH_SECRET"
+  # A relative STORAGE_LOCAL_DIR resolves against each process's cwd, and the
+  # web app (apps/web) and the worker (apps/worker) run from different ones: an
+  # upload would land where the worker never looks. A NEW .env gets one
+  # absolute directory. Quoted for the shell readers; `\ & |` escaped for sed.
+  STORAGE_DIR_SED="$(printf '%s' "${ROOT}/storage" | sed 's/[\\&|]/\\&/g')"
+  sed -i.bak "s|^STORAGE_LOCAL_DIR=.*|STORAGE_LOCAL_DIR=\"${STORAGE_DIR_SED}\"|" .env && rm -f .env.bak
+  ok "STORAGE_LOCAL_DIR → ${ROOT}/storage (shared by web and worker)"
+fi
+
+# An EXISTING .env is never rewritten (its uploads live where it points), but a
+# relative storage path is worth one line of advice.
+if grep -q '^STORAGE_LOCAL_DIR="\{0,1\}[^/"]' .env; then
+  warn "STORAGE_LOCAL_DIR is relative, so web and worker use different folders. To share one: set STORAGE_LOCAL_DIR=\"${ROOT}/storage\" in .env and move apps/web/storage/* there."
 fi
 
 # The phone cannot reach "localhost" — point it at this machine on the LAN.

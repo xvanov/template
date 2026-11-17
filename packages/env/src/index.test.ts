@@ -130,6 +130,65 @@ describe("env", () => {
     expect(() => env()).toThrow(/SECRETS_ENCRYPTION_KEY/);
   });
 
+  it("reads booleans strictly: true/1/false/0, blank = default, anything else fails", () => {
+    setBaseline();
+    expect(env()).toMatchObject({
+      REQUIRE_EMAIL_VERIFICATION: true,
+      SMTP_SECURE: false,
+    });
+    for (const [raw, want] of [
+      ["true", true],
+      ["1", true],
+      [" TRUE ", true],
+      ["false", false],
+      ["0", false],
+      ["", true],
+    ] as const) {
+      resetEnvCache();
+      process.env.REQUIRE_EMAIL_VERIFICATION = raw;
+      expect(env().REQUIRE_EMAIL_VERIFICATION, raw).toBe(want);
+    }
+    // The loose parser this replaced read "yes" as false — switching email
+    // verification OFF. A typo must fail loudly instead.
+    for (const bad of ["yes", "on", "no", "ture"]) {
+      resetEnvCache();
+      process.env.REQUIRE_EMAIL_VERIFICATION = bad;
+      expect(() => env(), bad).toThrow(
+        `REQUIRE_EMAIL_VERIFICATION: must be "true"/"1" or "false"/"0" (got "${bad}")`,
+      );
+    }
+    resetEnvCache();
+    process.env.REQUIRE_EMAIL_VERIFICATION = "true";
+    process.env.OUTBOUND_SAFE_MODE = "yes";
+    expect(() => env()).toThrow(
+      'OUTBOUND_SAFE_MODE: must be "local", "true"/"1" or "false"/"0" (got "yes")',
+    );
+  });
+
+  it("treats a blank optional URL as unset, and still validates a real one", () => {
+    setBaseline();
+    process.env.BETTER_AUTH_URL = "";
+    process.env.DEV_MAIL_INBOX_URL = "";
+    process.env.S3_ENDPOINT = "";
+    expect(env()).toMatchObject({
+      BETTER_AUTH_URL: undefined,
+      DEV_MAIL_INBOX_URL: undefined,
+      S3_ENDPOINT: undefined,
+    });
+    resetEnvCache();
+    process.env.S3_ENDPOINT = "not a url";
+    expect(() => env()).toThrow(/S3_ENDPOINT/);
+  });
+
+  it("treats APP_VERSION as optional, blank = unset", () => {
+    setBaseline();
+    process.env.APP_VERSION = "";
+    expect(env().APP_VERSION).toBeUndefined();
+    resetEnvCache();
+    process.env.APP_VERSION = "abc1234";
+    expect(env().APP_VERSION).toBe("abc1234");
+  });
+
   it("every schema variable is passed through turbo's strict env mode", () => {
     const turbo = JSON.parse(
       readFileSync(resolve(import.meta.dirname, "../../../turbo.json"), "utf8"),
