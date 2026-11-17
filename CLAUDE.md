@@ -117,12 +117,13 @@ trip (about 20s). `make lint` shellchecks every script.
    (`anthropic/…`, `openai/…`, `azure/<deployment>`, `openrouter/…`, `local/…`,
    `cli/…`), picked by tier: app code calls `ask({ tier: "fast", priority, … })`,
    never a model id. Every call declares `priority: "essential" | "discretionary"`
-   — the per-tenant daily cap (`LLM_DAILY_CAP_USD`, per UTC day, blank = none)
+   — the per-tenant daily cap (`LLM_DAILY_CAP_USD`, per UTC day; unset or blank = $2, `off` disables)
    refuses discretionary calls BEFORE sending (over the cap, or on a model with
    no known price) and never refuses essential ones. Each call first RESERVES
    its estimate as a `pending` `llm_call` row under a per-tenant advisory lock,
    so concurrent calls cannot all slip under the cap; the row is then settled
-   with the real cost. Claude goes through the official `@anthropic-ai/sdk`, never an
+   with the real cost. A row left pending by a dead process is marked
+   `abandoned` after ~15 min (`staleAfterMs`) and keeps counting its estimate. Claude goes through the official `@anthropic-ai/sdk`, never an
    OpenAI-compatible shim. Structured output is `askObject`: zod-validated, never
    repaired — a failure is `{ ok: false, reason }` for a human to handle.
 5. **Slow or failable work goes to `packages/jobs`**, not into a request. Every

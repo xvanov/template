@@ -7,6 +7,7 @@ export function hostAllowed(
   interfaces?: NodeJS.Dict<NetworkInterfaceInfo[]>,
   trustHost?: string,
 ): boolean;
+export function validate(body: unknown): string | null;
 export function keyOk(header: unknown, key?: string): boolean;
 export function childEnv(
   source: Record<string, string | undefined>,

@@ -218,7 +218,8 @@ model LlmCall {
   error            String?
   /// "pending" from the moment the cap reserved this call (costUsd = the
   /// estimate) until it settles to "done". Pending rows count against the cap,
-  /// so concurrent calls cannot all slip under it.
+  /// so concurrent calls cannot all slip under it. A pending row older than any
+  /// call can run is marked "abandoned" (and keeps counting its estimate).
   status           String   @default("done")
   createdAt        DateTime @default(now())
 

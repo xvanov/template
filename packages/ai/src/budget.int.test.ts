@@ -8,6 +8,7 @@ import { randomBytes } from "node:crypto";
 import { db } from "@repo/db";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { staleAfterMs, startOfUtcDay } from "./budget";
 import { createLlm, LlmBudgetExceededError } from "./index";
 import type { ProviderResult } from "./providers/types";
 import { setLlmEnv } from "./test-env";
@@ -95,5 +96,43 @@ describe("the cap under concurrency", () => {
       [...Array(6)].flatMap(() => [ask(a), ask(b)]),
     );
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(8);
+  });
+
+  it("marks a reservation that can no longer be in flight 'abandoned', and keeps counting it", async () => {
+    const tenant = org();
+    const old = new Date(Date.now() - staleAfterMs() - 60_000);
+    const stale = await db.llmCall.create({
+      data: {
+        organizationId: tenant,
+        purpose: "crashed",
+        model: "anthropic/claude-opus-5-5",
+        costUsd: 0.9,
+        status: "pending",
+        createdAt: old,
+      },
+    });
+    const fresh = await db.llmCall.create({
+      data: {
+        organizationId: tenant,
+        purpose: "in flight",
+        model: "anthropic/claude-opus-5-5",
+        costUsd: 0.01,
+        status: "pending",
+      },
+    });
+    const result = await ask(tenant).catch((e: unknown) => e);
+    expect(
+      await db.llmCall.findUnique({ where: { id: stale.id } }),
+    ).toMatchObject({
+      status: "abandoned",
+      costKnown: false,
+      costUsd: 0.9, // the estimate stays on the books
+    });
+    expect(
+      (await db.llmCall.findUnique({ where: { id: fresh.id } }))!.status,
+    ).toBe("pending");
+    // Still counted when it falls in today (it may not, just after 00:00 UTC).
+    if (old >= startOfUtcDay())
+      expect(result).toBeInstanceOf(LlmBudgetExceededError);
   });
 });

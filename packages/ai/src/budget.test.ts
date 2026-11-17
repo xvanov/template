@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { decide, startOfUtcDay } from "./budget";
+import { decide, staleAfterMs, startOfUtcDay } from "./budget";
+import { setLlmEnv } from "./test-env";
 
 describe("decide", () => {
   const cap = 2;
@@ -105,5 +106,14 @@ describe("startOfUtcDay", () => {
     expect(startOfUtcDay(new Date("2026-11-16T23:59:59Z")).toISOString()).toBe(
       "2026-11-16T00:00:00.000Z",
     );
+  });
+});
+
+describe("staleAfterMs", () => {
+  it("outlasts the longest possible call: SDK default or the CLI timeout + bridge slack, plus margin", () => {
+    setLlmEnv();
+    expect(staleAfterMs()).toBe(15 * 60_000); // 10 min SDK default + 5 min
+    setLlmEnv({ CLAUDE_CLI_TIMEOUT_SECONDS: "1800" });
+    expect(staleAfterMs()).toBe(1800_000 + 15_000 + 5 * 60_000);
   });
 });

@@ -178,7 +178,7 @@ there is nothing extra to configure for the phone.
   `LLM_BASE_URL` + `LLM_MODEL` (bare, or a slashed id like `openai/gpt-4o-mini`
   on OpenRouter) is read as a model id on that URL whenever the prefix's own
   provider has no key, and the boot log says so; write `local/<id>` to make it
-  explicit. New: `LLM_DAILY_CAP_USD` (blank = no cap) and `LLM_PRICES` — a
+  explicit. New: `LLM_DAILY_CAP_USD` (unset = $2/day as before; `off` to disable) and `LLM_PRICES` — a
   model with no price is refused for optional calls while a cap is set.
 
 - **File uploads.** Content-type allow-list, size cap, tenant-namespaced keys,

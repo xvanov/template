@@ -235,8 +235,15 @@ describe("the daily cap — reserved before sending", () => {
     expect(h.rows()[0]!.costKnown).toBe(false);
   });
 
-  it("with NO cap set, never refuses — unpriced or not", async () => {
-    setLlmEnv({ OPENAI_API_KEY: "k" });
+  it("defaults to a $2 cap when unset; only an explicit `off` removes it", async () => {
+    setLlmEnv({ ANTHROPIC_API_KEY: "k" });
+    await expect(
+      harness(reply(), { spent: 2 }).llm.ask(base),
+    ).rejects.toBeInstanceOf(LlmBudgetExceededError);
+  });
+
+  it("with the cap explicitly off, never refuses — unpriced or not", async () => {
+    setLlmEnv({ OPENAI_API_KEY: "k", LLM_DAILY_CAP_USD: "off" });
     const h = harness(reply(), { spent: 1e9 });
     await expect(
       h.llm.ask({ ...base, model: "openai/gpt-5" }),

@@ -16,6 +16,7 @@ import {
   claudeArgs,
   hostAllowed,
   keyOk,
+  validate,
 } from "../../../../scripts/claude-bridge/server.mjs";
 import { LlmProviderError } from "../errors";
 import { parseModel } from "../models";
@@ -320,6 +321,21 @@ describe("bridge", () => {
     await expect(
       callCli(req("--dangerously-skip-permissions")),
     ).rejects.toThrow(/bridge 400/);
+  });
+
+  it("rejects a timeoutMs that is not a positive number, over HTTP and in validate()", async () => {
+    for (const timeoutMs of ["300", -1, 0, null, Number.NaN]) {
+      expect(validate({ prompt: "p", model: "m", timeoutMs })).toMatch(
+        /timeoutMs/,
+      );
+    }
+    expect(validate({ prompt: "p", model: "m", timeoutMs: 1e12 })).toBeNull(); // clamped, not refused
+    const res = await fetch(`http://127.0.0.1:${PORT}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-bridge-key": KEY },
+      body: JSON.stringify({ prompt: "p", model: "m", timeoutMs: "soon" }),
+    });
+    expect(res.status).toBe(400);
   });
 
   it("kills claude when the client hangs up, and answers 503 when the queue is full", async () => {

@@ -104,8 +104,8 @@ describe("env", () => {
       LLM_ENABLED: true,
       LLM_EFFORT: "medium",
     });
-    // Unset or blank = no cap (not $0).
-    expect(env().LLM_DAILY_CAP_USD).toBeUndefined();
+    // Unset = $2, so an upgraded env file without the line keeps its limit.
+    expect(env().LLM_DAILY_CAP_USD).toBe(2);
     expect(env().LLM_MODEL).toBeUndefined();
 
     resetEnvCache();
@@ -113,7 +113,19 @@ describe("env", () => {
     process.env.LLM_MODEL = "";
     process.env.LLM_DAILY_CAP_USD = "";
     expect(env().LLM_ENABLED).toBe(false);
+    expect(env().LLM_DAILY_CAP_USD).toBe(2); // blank is NOT "off"
+
+    resetEnvCache();
+    process.env.LLM_DAILY_CAP_USD = "off";
     expect(env().LLM_DAILY_CAP_USD).toBeUndefined();
+    resetEnvCache();
+    process.env.LLM_DAILY_CAP_USD = "0";
+    expect(env().LLM_DAILY_CAP_USD).toBe(0);
+    resetEnvCache();
+    process.env.LLM_DAILY_CAP_USD = "none";
+    expect(() => env()).toThrow(/LLM_DAILY_CAP_USD/);
+    resetEnvCache();
+    process.env.LLM_DAILY_CAP_USD = "5";
     expect(env().LLM_MODEL).toBeUndefined();
 
     resetEnvCache();

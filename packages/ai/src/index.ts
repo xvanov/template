@@ -617,7 +617,7 @@ export function llmConfigReport(): { summary: string; warnings: string[] } {
   }
   const cap =
     e.LLM_DAILY_CAP_USD === undefined
-      ? "no daily cap"
+      ? "NO daily cap (LLM_DAILY_CAP_USD=off)"
       : `cap $${e.LLM_DAILY_CAP_USD}/tenant/UTC day`;
   return {
     summary: `[ai] LLM: ${[...new Set(parts)].join(" · ")} · ${cap}`,

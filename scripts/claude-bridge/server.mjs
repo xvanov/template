@@ -215,7 +215,7 @@ function send(res, status, body, type = "application/json") {
   res.end(typeof body === "string" ? body : JSON.stringify(body));
 }
 
-function validate(body) {
+export function validate(body) {
   const { prompt, model, system, effort, jsonSchema } = body ?? {};
   if (typeof prompt !== "string" || !prompt) return "prompt required";
   if (typeof model !== "string" || !/^[a-z0-9][a-z0-9.\-[\]]*$/i.test(model))
@@ -228,6 +228,15 @@ function validate(body) {
     (typeof jsonSchema !== "object" || jsonSchema === null)
   )
     return "jsonSchema must be an object";
+  if (
+    body.timeoutMs !== undefined &&
+    !(
+      typeof body.timeoutMs === "number" &&
+      Number.isFinite(body.timeoutMs) &&
+      body.timeoutMs > 0
+    )
+  )
+    return "timeoutMs must be a positive number of milliseconds";
   return null;
 }
 
@@ -267,6 +276,7 @@ const server = createServer((req, res) => {
     }
     const problem = validate(body);
     if (problem) return send(res, 400, { error: problem });
+    // Validated positive above; never longer than this bridge allows.
     const timeoutMs = Math.min(
       body.timeoutMs ?? MAX_TIMEOUT_MS,
       MAX_TIMEOUT_MS,

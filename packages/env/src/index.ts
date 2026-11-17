@@ -202,12 +202,28 @@ const serverSchema = z.object({
    * Per-tenant daily spend cap in USD, per UTC day (resets at 00:00 UTC).
    * Discretionary calls that would cross it — or that use a model with no known
    * price — are refused BEFORE sending; essential calls always run (logged).
-   * Unset or blank = NO cap. 0 = no discretionary AI at all.
+   * Unset or blank = $2 (the old built-in limit, so upgrading an env file that
+   * lacks the line keeps it). `off` = no cap, and must be said explicitly.
+   * 0 = no discretionary AI at all. Parsed value: a number, or undefined = off.
    */
-  LLM_DAILY_CAP_USD: z.preprocess(
-    blankIsUnset,
-    z.coerce.number().nonnegative().optional(),
-  ),
+  LLM_DAILY_CAP_USD: z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((v, ctx): number | undefined => {
+      if (v === undefined) return 2;
+      const s = String(v).trim().toLowerCase();
+      if (s === "") return 2;
+      if (s === "off") return undefined;
+      const n = Number(s);
+      if (!Number.isFinite(n) || n < 0) {
+        ctx.addIssue({
+          code: "custom",
+          message: `must be a dollar amount (e.g. 2), 0, or "off" (got ${JSON.stringify(v)})`,
+        });
+        return z.NEVER;
+      }
+      return n;
+    }),
   /**
    * Price overrides, USD per 1M tokens: `model=in:out[:cacheRead[:cacheWrite]]`,
    * comma-separated, e.g. `openai/gpt-4.1-mini=0.4:1.6,azure/gpt-5=1.25:10`.

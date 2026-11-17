@@ -25,11 +25,17 @@
  * a fixed boundary that is easy to reason about mid-incident. Unset = no cap.
  * Calls with no organizationId (system jobs) are not capped.
  *
+ * A reservation whose process died never settles. Once a pending row is older
+ * than any call could run (staleAfterMs), the next reservation for that tenant
+ * marks it `abandoned` — and it KEEPS counting its estimate: the call may well
+ * have been billed, so forgetting it would let the tenant overspend.
+ *
  * When the ledger cannot be reached (database down), discretionary work is
  * refused while a cap is set — not knowing what was spent is not a licence to
  * spend more — and essential work proceeds, unrecorded, with a warning.
  */
 import { db } from "@repo/db";
+import { env } from "@repo/env";
 
 import type { Priority } from "./models";
 import type { TokenUsage } from "./pricing";
@@ -71,6 +77,16 @@ export function startOfUtcDay(now: Date = new Date()): Date {
   );
 }
 
+/**
+ * How long a reservation may stay pending before it is presumed dead: the
+ * longest a call can run (the Anthropic SDK's 10-minute default, or the CLI
+ * timeout plus the bridge's slack), plus five minutes' margin.
+ */
+export function staleAfterMs(): number {
+  const cliMs = env().CLAUDE_CLI_TIMEOUT_SECONDS * 1000 + 15_000;
+  return Math.max(10 * 60_000, cliMs) + 5 * 60_000;
+}
+
 /** One `llm_call` row, as the engine sees it. */
 export interface LlmCallRow {
   organizationId: string | null;
@@ -87,7 +103,7 @@ export interface LlmCallRow {
   latencyMs: number;
   ok: boolean;
   error: string | null;
-  status: "pending" | "done";
+  status: "pending" | "done" | "abandoned";
 }
 
 export interface Reservation {
@@ -153,6 +169,20 @@ export const dbLedger: Ledger = {
       // Serialises reservations for ONE tenant; released at commit. Other
       // tenants, and the provider calls themselves, never wait on it.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`llm_cap:${capped.organizationId}`}, 0))`;
+      // Reservations that can no longer be in flight: say so on the row. They
+      // still count below (status is not filtered) — see the header.
+      await tx.llmCall.updateMany({
+        where: {
+          organizationId: capped.organizationId,
+          status: "pending",
+          createdAt: { lt: new Date(Date.now() - staleAfterMs()) },
+        },
+        data: {
+          status: "abandoned",
+          costKnown: false,
+          error: "abandoned: the call never settled (process died?)",
+        },
+      });
       const agg = await tx.llmCall.aggregate({
         where: {
           organizationId: capped.organizationId,
