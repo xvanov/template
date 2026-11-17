@@ -48,6 +48,11 @@ make test         # unit + integration tests (vitest). Needs Postgres: `make up`
 make smoke        # THE GATE: production build, booted, driven in a real browser
 ```
 
+`next build` does NOT type-check (`typescript.ignoreBuildErrors` in
+`apps/web/next.config.ts`): `make typecheck` is the type gate, and checking
+twice cost ~7s on every smoke run and Docker build. So a green smoke alone does
+not mean the types are clean — run both.
+
 `make test` runs two kinds of test. `*.test.ts` are unit tests: no database,
 run anywhere. `*.int.test.ts` hit real Postgres: once per run,
 `packages/db/testing/global-setup.ts` creates a throwaway schema `vt_<ts>_<hex>`
@@ -219,10 +224,17 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   `APP_CURRENCY`, `APP_TIMEZONE`. Money is integer minor units (cents).
   `useFormat()` only sees the env config under `/app` (its layout provides it);
   elsewhere it falls back to en-US · USD · UTC.
-- **Auth guard:** `src/app/app/layout.tsx` redirects every `/app/**` request
-  without a session, once, on the server. Do not re-check per page.
+- **Auth guard, two layers:** `src/app/app/layout.tsx` redirects without a
+  session, AND every `/app` page (and any server-side data access) calls
+  `requireSession()` from `lib/session.ts`. The layout alone is not enough:
+  Next renders layouts and pages in parallel and can skip a layout on client
+  navigation. The lookup is `cache()`d per request, so repeating it is free.
 - **The root layout reads nothing per request** (no `env()`, no cookies) so
   static pages like `/design` prerender and the Docker build needs no secrets.
+  It also mounts no `<Toaster>`: the `/app` layout and `/design` do, so sonner
+  stays off the public pages. A new page tree that toasts mounts its own.
+- **Deleting `/design`?** Delete `e2e/design.spec.ts` with it; nothing else in
+  the gate depends on it.
 - **Bundle:** watch first-load JS when adding client libraries; Radix menus,
   popovers and tooltips pull in positioning code — keep them off public pages
   that do not need them.

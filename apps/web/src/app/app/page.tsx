@@ -1,6 +1,8 @@
 import { Dashboard } from "@/components/dashboard";
+import { requireSession } from "@/lib/session";
 
-/** Auth is enforced by ./layout.tsx for every /app route. */
-export default function AppPage() {
+export default async function AppPage() {
+  // Every /app page checks for itself; see app/app/layout.tsx for why.
+  await requireSession();
   return <Dashboard />;
 }

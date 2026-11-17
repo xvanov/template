@@ -910,7 +910,7 @@ function Toasts() {
   return (
     <Section
       title="Toasts"
-      description="sonner. Call toast() from anywhere on the client; the Toaster lives in the root layout."
+      description="sonner. Call toast() from anywhere on the client; mount <Toaster /> once per page tree that toasts (the /app layout does; so does this page)."
     >
       <Row>
         <Button variant="outline" onClick={() => toast("Event created")}>

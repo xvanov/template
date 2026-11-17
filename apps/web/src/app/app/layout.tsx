@@ -1,16 +1,18 @@
 import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
 import { FormatProvider } from "@/components/format-provider";
+import { Toaster } from "@/components/ui/sonner";
 import { formatConfig } from "@/lib/format-server";
-import { getServerSession } from "@/lib/session";
+import { requireSession } from "@/lib/session";
 
 /**
- * The ONE auth guard for everything under /app. Server-side, so it is a control
- * rather than a suggestion: no /app page renders, and no /app data is fetched,
- * without a session. Pages below must not repeat the check — if a page needs
- * the user, call getServerSession() again (it is cheap) or read it from here.
+ * Auth for /app, layer one: no /app chrome renders without a session.
+ *
+ * This is NOT sufficient on its own. Next renders layouts and pages in
+ * parallel and can skip a layout on client navigation, so every /app page (and
+ * any server-side data access) also calls requireSession() — cached per
+ * request, so the repeat costs nothing.
  *
  * Per-user, so rendered per request and never cached.
  */
@@ -21,8 +23,7 @@ export default async function AppLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await getServerSession();
-  if (!session?.user) redirect("/login");
+  const session = await requireSession();
 
   // The sidebar remembers open/collapsed in a cookie; read it here so the
   // first paint already has the right width (no layout jump).
@@ -36,6 +37,7 @@ export default async function AppLayout({
       >
         {children}
       </AppShell>
+      <Toaster richColors closeButton />
     </FormatProvider>
   );
 }

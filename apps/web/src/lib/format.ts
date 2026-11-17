@@ -8,7 +8,8 @@
  *   - Server components: `getFormatter()` from `@/lib/format-server` (reads
  *     APP_LOCALE / APP_CURRENCY / APP_TIMEZONE through env()).
  *   - Client components: `useFormat()` from `@/components/format-provider`
- *     (the root layout passes the same server config down).
+ *     (the /app layout passes the same server config down; outside /app it
+ *     falls back to DEFAULT_FORMAT, because the root layout is static).
  *
  * Conventions:
  *   - Money is integer MINOR units (cents for USD, yen for JPY — the currency's

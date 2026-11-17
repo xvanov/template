@@ -110,7 +110,19 @@ test("sign up, create an item, and see it persist across a reload", async ({
   await toggle.click();
   await expect(toggle).toBeChecked();
 
-  await page.getByRole("button", { name: `Delete "${title}"` }).click();
+  // Delete goes through a confirm dialog. Escape must cancel it and hand focus
+  // back to the trigger (keyboard users would otherwise be lost on the page).
+  const deleteButton = page.getByRole("button", { name: `Delete "${title}"` });
+  const confirm = page.getByRole("alertdialog", { name: "Delete this item?" });
+  await deleteButton.click();
+  await expect(confirm).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(confirm).toBeHidden();
+  await expect(deleteButton).toBeFocused();
+  await expect(page.getByText(title)).toBeVisible();
+
+  await deleteButton.click();
+  await confirm.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(page.getByText(title)).toHaveCount(0);
 });
 

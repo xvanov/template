@@ -110,7 +110,7 @@ const serverSchema = z.object({
 
   // ── Display formatting (apps/web/src/lib/format.ts) ────────────────────
   // How money, dates and numbers are shown to users. Server-side defaults for
-  // the whole app; the root layout hands them to the client.
+  // the whole app; the /app layout hands them to client components.
   /** BCP 47 locale, e.g. en-US, en-GB, de-DE. */
   APP_LOCALE: z.preprocess(
     blankIsUnset,

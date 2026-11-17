@@ -22,6 +22,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import { FileDrop } from "@/components/ui/file-drop";
 import { Input } from "@/components/ui/input";
@@ -47,9 +48,18 @@ export function Dashboard() {
 
   const invalidateItems = () => void items.refetch();
 
-  const create = trpc.items.create.useMutation({ onSuccess: invalidateItems });
+  // Mutations report through toasts. Never put user text (the item title) in
+  // a toast: it would duplicate text the list already shows.
+  const create = trpc.items.create.useMutation({
+    onSuccess: () => {
+      invalidateItems();
+      toast.success("Item added");
+    },
+    onError: (err) => toast.error(err.message),
+  });
   const setDone = trpc.items.setDone.useMutation({
     onSuccess: invalidateItems,
+    onError: (err) => toast.error(err.message),
   });
   const remove = trpc.items.remove.useMutation({
     onSuccess: () => {
@@ -59,6 +69,7 @@ export function Dashboard() {
     onError: (err) => toast.error(err.message),
   });
   const queueSummary = trpc.items.queueSummary.useMutation({
+    onError: (err) => toast.error(err.message),
     onSuccess: () => {
       toast.info("Job queued — the worker will pick it up.");
       // The worker writes the outcome asynchronously; poll once after a beat.
@@ -135,14 +146,22 @@ export function Dashboard() {
       align: "right",
       className: "w-12",
       cell: (item) => (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`Delete "${item.title}"`}
-          onClick={() => remove.mutate({ id: item.id })}
-        >
-          <Trash2 className="text-destructive" />
-        </Button>
+        <ConfirmDialog
+          trigger={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Delete "${item.title}"`}
+            >
+              <Trash2 className="text-destructive" />
+            </Button>
+          }
+          title="Delete this item?"
+          description="It is removed for everyone in the workspace. This cannot be undone."
+          confirmLabel="Delete"
+          destructive
+          onConfirm={() => remove.mutate({ id: item.id })}
+        />
       ),
     },
   ];
@@ -187,7 +206,6 @@ export function Dashboard() {
               Add
             </Button>
           </form>
-          <FieldError>{create.error?.message}</FieldError>
 
           {items.isPending ? (
             <LoadingState label="Loading items…" />
@@ -340,7 +358,6 @@ export function Dashboard() {
               Refresh
             </Button>
           </div>
-          <FieldError>{queueSummary.error?.message}</FieldError>
           <ul className="space-y-1 font-mono text-xs text-muted-foreground">
             {jobs.data?.length === 0 && <li>No job runs yet.</li>}
             {jobs.data?.map((run) => (

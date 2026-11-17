@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 
+import { Toaster } from "@/components/ui/sonner";
+
 import { Styleguide } from "./styleguide";
 
 /**
@@ -15,5 +17,10 @@ export const metadata: Metadata = {
 };
 
 export default function DesignPage() {
-  return <Styleguide />;
+  return (
+    <>
+      <Styleguide />
+      <Toaster richColors closeButton />
+    </>
+  );
 }

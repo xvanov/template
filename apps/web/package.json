@@ -6,7 +6,7 @@
     "dev": "node scripts/with-root-env.mjs next dev --port 3200",
     "build": "next build",
     "start": "node scripts/with-root-env.mjs next start --port 3200",
-    "lint": "eslint .",
+    "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:e2e": "playwright test"

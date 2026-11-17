@@ -11,25 +11,8 @@
 import { FileUp } from "lucide-react";
 import { useId, useState, type DragEvent, type ReactNode } from "react";
 
+import { matchesAccept } from "@/lib/file-accept";
 import { cn } from "@/lib/utils";
-
-export function matchesAccept(
-  file: { name: string; type: string },
-  accept: string | undefined,
-): boolean {
-  if (!accept) return true;
-  const name = file.name.toLowerCase();
-  const type = file.type.toLowerCase();
-  return accept
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean)
-    .some((rule) => {
-      if (rule.startsWith(".")) return name.endsWith(rule);
-      if (rule.endsWith("/*")) return type.startsWith(rule.slice(0, -1));
-      return type === rule;
-    });
-}
 
 export function FileDrop({
   accept,

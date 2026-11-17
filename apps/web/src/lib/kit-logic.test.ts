@@ -1,13 +1,13 @@
-/** Unit tests for the kit's pure logic (sorting, file-type matching). */
+/** Unit tests for the UI kit's pure logic (plain .ts: no React/Radix loaded). */
 import { describe, expect, it } from "vitest";
 
+import { errorMessage } from "./error-message";
+import { matchesAccept } from "./file-accept";
 import {
   compareSortValues,
   sortRows,
   type DataTableColumn,
-} from "./data-table";
-import { matchesAccept } from "./file-drop";
-import { errorMessage } from "./states";
+} from "./table-sort";
 
 type Row = { name: string; size: number | null };
 const columns: DataTableColumn<Row>[] = [

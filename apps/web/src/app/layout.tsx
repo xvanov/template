@@ -3,7 +3,6 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 import { ThemeProvider } from "@/components/theme-provider";
-import { Toaster } from "@/components/ui/sonner";
 import { TRPCProvider } from "@/lib/trpc-provider";
 
 export const metadata: Metadata = {
@@ -26,6 +25,9 @@ export const viewport: Viewport = {
  * such as /design must prerender at build time, and the Docker build has no
  * runtime secrets. Per-user setup lives in app/app/layout.tsx.
  *
+ * Only what every page needs goes here. The toast <Toaster> is mounted by the
+ * pages that toast (/app layout, /design), keeping sonner off / and /login.
+ *
  * `suppressHydrationWarning` is required by next-themes: its inline script sets
  * the theme class on <html> before React hydrates.
  */
@@ -39,7 +41,6 @@ export default function RootLayout({
       <body className="min-h-dvh">
         <ThemeProvider>
           <TRPCProvider>{children}</TRPCProvider>
-          <Toaster richColors closeButton />
         </ThemeProvider>
       </body>
     </html>

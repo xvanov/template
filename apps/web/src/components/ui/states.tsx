@@ -11,7 +11,10 @@ import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { errorMessage } from "@/lib/error-message";
 import { cn } from "@/lib/utils";
+
+export { errorMessage };
 
 export function EmptyState({
   title,
@@ -43,17 +46,6 @@ export function EmptyState({
       {action ? <div className="mt-3">{action}</div> : null}
     </div>
   );
-}
-
-/** Best-effort human message from whatever was thrown (Error, tRPC error, string). */
-export function errorMessage(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  if (error && typeof error === "object" && "message" in error) {
-    const m = (error as { message: unknown }).message;
-    if (typeof m === "string") return m;
-  }
-  return "Something went wrong.";
 }
 
 export function ErrorState({
