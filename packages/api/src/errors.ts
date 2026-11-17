@@ -8,6 +8,16 @@
  *   ConflictError       → CONFLICT      (already exists / changed underneath)
  *   ForbiddenError      → FORBIDDEN
  *
+ * And from @repo/ai (same name-matching, so @repo/api need not import it):
+ *   LlmBudgetExceededError → TOO_MANY_REQUESTS   (daily AI cap reached)
+ *   LlmDisabledError       → PRECONDITION_FAILED (no provider configured)
+ *   LlmUnpricedError       → PRECONDITION_FAILED (capped, model has no price)
+ *   LlmConfigError         → PRECONDITION_FAILED (a model string that does not route)
+ *   LlmRefusalError        → BAD_REQUEST         (the model declined)
+ *
+ * LlmProviderError is deliberately NOT mapped: its message carries the
+ * upstream response, which stays out of what users see.
+ *
  * The message is SHOWN TO THE USER, so write it for them and keep internals
  * (ids of other tenants, SQL, upstream responses) out of it.
  *
@@ -39,6 +49,11 @@ export const DOMAIN_ERROR_CODES = {
   DomainRuleError: "BAD_REQUEST",
   ConflictError: "CONFLICT",
   ForbiddenError: "FORBIDDEN",
+  LlmBudgetExceededError: "TOO_MANY_REQUESTS",
+  LlmDisabledError: "PRECONDITION_FAILED",
+  LlmUnpricedError: "PRECONDITION_FAILED",
+  LlmConfigError: "PRECONDITION_FAILED",
+  LlmRefusalError: "BAD_REQUEST",
 } as const;
 
 /** The tRPC code for a domain error, or null for anything else. */

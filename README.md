@@ -166,9 +166,21 @@ there is nothing extra to configure for the phone.
   uses cookies, the Expo client keeps its session in the OS keychain.
 - **Background work.** Redis-backed queue, cron schedules, and a durable
   `job_run` record — so a job that silently vanished is still visible.
-- **LLM calls that are auditable.** Provider-agnostic (OpenAI, Azure, DeepSeek,
-  OpenRouter, Groq, Ollama — it is a URL), with tokens, latency and USD cost
-  written to `llm_call` per tenant and per feature, plus a daily spend ceiling.
+- **LLM calls that are auditable.** One API over Anthropic (official SDK),
+  OpenAI, Azure, OpenRouter, DeepSeek, any OpenAI-compatible server (Ollama,
+  vLLM) and Claude Code (`claude -p`, optionally via a host bridge for Docker),
+  chosen per tier by a `provider/model` string in .env. Tokens (incl. cache),
+  latency and USD cost go to `llm_call` per tenant and feature; a per-tenant
+  daily cap refuses optional calls before they are sent. Structured output is
+  zod-validated and never silently repaired.
+
+  _Upgrading an existing `.env`:_ the old single-endpoint config keeps working.
+  `LLM_BASE_URL` + `LLM_MODEL` (bare, or a slashed id like `openai/gpt-4o-mini`
+  on OpenRouter) is read as a model id on that URL whenever the prefix's own
+  provider has no key, and the boot log says so; write `local/<id>` to make it
+  explicit. New: `LLM_DAILY_CAP_USD` (unset = $2/day as before; `off` to disable) and `LLM_PRICES` — a
+  model with no price is refused for optional calls while a cap is set.
+
 - **File uploads.** Content-type allow-list, size cap, tenant-namespaced keys,
   authenticated download. Local disk by default; S3/R2/MinIO by changing one
   variable.

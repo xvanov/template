@@ -14,7 +14,13 @@
  */
 import { z } from "zod";
 import { db } from "@repo/db";
-import { ask, llmEnabled } from "@repo/ai";
+import {
+  ask,
+  LlmBudgetExceededError,
+  LlmDisabledError,
+  llmEnabled,
+  LlmUnpricedError,
+} from "@repo/ai";
 
 const schemas = {
   /** Demo job: summarise a tenant's open items with the LLM. */
@@ -70,18 +76,36 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
         select: { title: true, notes: true },
       });
       if (items.length === 0) return { summary: "Nothing open." };
-      if (!llmEnabled())
-        return { summary: `${items.length} open items (LLM disabled).` };
-
-      const result = await ask({
-        purpose: "items.summarize",
-        organizationId,
-        userId,
-        system: "You summarise task lists in two sentences. Be concrete.",
-        prompt: items
-          .map((i) => `- ${i.title}${i.notes ? `: ${i.notes}` : ""}`)
-          .join("\n"),
+      const fallback = (why: string) => ({
+        summary: `${items.length} open items (${why}).`,
       });
+      if (!llmEnabled("fast")) return fallback("LLM disabled");
+
+      let result;
+      try {
+        result = await ask({
+          purpose: "items.summarize",
+          tier: "fast",
+          // A summary is nice to have: it stops at the tenant's daily cap.
+          priority: "discretionary",
+          organizationId,
+          userId,
+          maxOutputTokens: 2048,
+          effort: "low",
+          system: "You summarise task lists in two sentences. Be concrete.",
+          prompt: items
+            .map((i) => `- ${i.title}${i.notes ? `: ${i.notes}` : ""}`)
+            .join("\n"),
+        });
+      } catch (err) {
+        // Expected states, not failures: the job still produces a summary.
+        if (err instanceof LlmBudgetExceededError)
+          return fallback("daily AI budget reached");
+        if (err instanceof LlmUnpricedError)
+          return fallback("AI model has no price configured");
+        if (err instanceof LlmDisabledError) return fallback("LLM disabled");
+        throw err;
+      }
       return { summary: result.text, costUsd: result.costUsd };
     },
   },

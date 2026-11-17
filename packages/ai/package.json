@@ -9,19 +9,24 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "live": "tsx src/live.ts"
   },
   "dependencies": {
-    "@ai-sdk/openai-compatible": "^3.0.16",
+    "@ai-sdk/azure": "^4.0.126",
+    "@ai-sdk/openai": "^4.0.118",
+    "@ai-sdk/openai-compatible": "^3.0.92",
+    "@anthropic-ai/sdk": "1.8.0",
     "@repo/db": "*",
     "@repo/env": "*",
-    "ai": "^7.0.41",
+    "ai": "^7.0.173",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "eslint": "^9.39.5",
     "typescript": "~6.0.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "tsx": "^4.20.0"
   }
 }

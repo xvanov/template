@@ -16,7 +16,7 @@ apps/worker    BullMQ worker + cron schedules (separate process on purpose)
 packages/api   tRPC routers — the ONLY API surface, shared by web and mobile
 packages/db    Prisma schema + client (Postgres)
 packages/auth  better-auth: email+password, Google OAuth, organizations
-packages/ai    LLM calls against any OpenAI-compatible endpoint, priced per call
+packages/ai    LLM calls routed by `provider/model` (Anthropic, OpenAI, Azure, local, Claude Code), priced + capped
 packages/jobs  job registry + queue + schedules
 packages/storage  file storage: local disk or any S3-compatible bucket
 packages/email  outbound SMTP (nodemailer), ONLY via the outbound guard. Mailpit locally
@@ -113,8 +113,19 @@ trip (about 20s). `make lint` shellchecks every script.
    the `where`, never `update`-by-id plus a separate ownership check.
 3. **`env()` from `@repo/env`, never `process.env`.** It validates once and fails
    with a readable message. Node entrypoints start with `import "@repo/env/load"`.
-4. **The model is config.** Any OpenAI-compatible endpoint works via
-   `LLM_BASE_URL`/`LLM_MODEL`. Every call is priced into the `llm_call` table.
+4. **The model is config.** Models are `provider/model` strings in .env
+   (`anthropic/…`, `openai/…`, `azure/<deployment>`, `openrouter/…`, `local/…`,
+   `cli/…`), picked by tier: app code calls `ask({ tier: "fast", priority, … })`,
+   never a model id. Every call declares `priority: "essential" | "discretionary"`
+   — the per-tenant daily cap (`LLM_DAILY_CAP_USD`, per UTC day; unset or blank = $2, `off` disables)
+   refuses discretionary calls BEFORE sending (over the cap, or on a model with
+   no known price) and never refuses essential ones. Each call first RESERVES
+   its estimate as a `pending` `llm_call` row under a per-tenant advisory lock,
+   so concurrent calls cannot all slip under the cap; the row is then settled
+   with the real cost. A row left pending by a dead process is marked
+   `abandoned` after ~15 min (`staleAfterMs`) and keeps counting its estimate. Claude goes through the official `@anthropic-ai/sdk`, never an
+   OpenAI-compatible shim. Structured output is `askObject`: zod-validated, never
+   repaired — a failure is `{ ok: false, reason }` for a human to handle.
 5. **Slow or failable work goes to `packages/jobs`**, not into a request. Every
    run is recorded in `job_run` — Redis is ephemeral, that table is not. Each
    registry entry declares `scope: "org" | "system"`, and the compiler holds it
@@ -284,7 +295,7 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   waits for the `[worker] up` line; keep that log line if you touch
   `apps/worker/src/index.ts`. The journey clicks "Summarise items in the
   worker" and waits for `✓ items.summarize`, so a job that fails or is never
-  picked up is red too. The gate forces `LLM_API_KEY=""` (free, deterministic)
+  picked up is red too. The gate forces `LLM_ENABLED=false` (free, deterministic)
   and puts logs and `STORAGE_LOCAL_DIR` in a fresh `mktemp -d` dir, kept and
   printed on failure.
 - **The Dockerfiles build from `turbo prune <app> --docker`**, so each image
@@ -323,6 +334,34 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   existing `.env` is never rewritten; it prints a hint). The path is absolute,
   so **moving or re-cloning the repo leaves it pointing at the old place** —
   update it. The compose files override it with the container volume path.
+- **Current Claude models 400 on `temperature`/`top_p`/`top_k`, on disabled
+  thinking, and on forced `tool_choice`.** `packages/ai/src/providers/anthropic.ts`
+  sends none of them; depth is `output_config.effort` (set explicitly — Opus 5.5
+  defaults to medium). Do not "add temperature for determinism".
+- **Azure/OpenAI reasoning models reject `max_tokens`.** They go through
+  `@ai-sdk/azure`/`@ai-sdk/openai`, which send `max_completion_tokens`; the
+  generic OpenAI-compatible provider is only for `local/`, OpenRouter, DeepSeek.
+  Name Azure deployments after the model (`gpt-5`), or detection by name fails.
+- **A model string with an unknown prefix is an error, not a bare name** — in
+  CODE. From .env, with a custom `LLM_BASE_URL`, a prefix whose provider has no
+  key (or no provider at all) is read as a whole model id on that URL (legacy
+  mode, warned at boot). `local/meta-llama/…` says it explicitly.
+- **Only Claude Opus/Sonnet/Haiku 5.5 are priced built in.** Everything else
+  needs `LLM_PRICES`; with a cap set, discretionary calls on an unpriced model
+  are refused (`LlmUnpricedError`). The boot log lists every unpriced tier.
+- **A failed call whose cost is unknown** (timeout, dropped stream, killed CLI)
+  is recorded `costKnown=false` with its estimate still counted against the cap.
+  An HTTP error status from the provider is recorded as $0.
+- **`cli/` runs `claude -p` one call at a time** from an empty temp dir, tools
+  off, a neutral system prompt, and an allowlisted environment: an
+  `ANTHROPIC_API_KEY` in the app's env would otherwise silently switch it from
+  the subscription login to the paid key, and the app's secrets would leak to
+  it. The timeout includes the queue wait. In Docker there is no `claude`: use
+  `scripts/claude-bridge` on the host (`ops/systemd/claude-bridge.service`),
+  bound to loopback or this host's tailscale address only; it caps its queue
+  (503) and kills a run whose client hung up.
+- **`npm run ai:live` spends real money** on every configured provider. It is
+  never part of `make test` or CI; unit tests use fakes and stay offline.
 - **tailwindcss v4 (web) and v3 (mobile, for NativeWind) coexist** deliberately.
   If PostCSS throws `Cannot read properties of undefined (reading 'All')`, the
   wrong major got hoisted — run a full `npm install`.

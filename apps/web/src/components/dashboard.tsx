@@ -237,8 +237,10 @@ export function Dashboard() {
             <h2>Ask the model</h2>
           </CardTitle>
           <CardDescription>
-            Any OpenAI-compatible endpoint. Every call is priced and recorded in
-            the <code className="font-mono">llm_call</code> table.
+            Anthropic, OpenAI, Azure, OpenRouter, a local model or Claude Code —
+            picked in .env. Every call is capped per workspace per day, priced,
+            and recorded in the <code className="font-mono">llm_call</code>{" "}
+            table.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -259,13 +261,20 @@ export function Dashboard() {
                 </Button>
                 {askAi.data && (
                   <p className="text-xs text-muted-foreground">
-                    {askAi.data.inputTokens}→{askAi.data.outputTokens} tokens ·{" "}
-                    {format.number(askAi.data.costUsd, {
-                      style: "currency",
-                      currency: "USD",
-                      maximumFractionDigits: 6,
-                    })}{" "}
-                    · {askAi.data.latencyMs}ms
+                    {askAi.data.servedBy ?? "model"}
+                    {askAi.data.outputTokens !== null &&
+                      ` · ${askAi.data.inputTokens}→${askAi.data.outputTokens} tokens`}
+                    {" · "}
+                    {askAi.data.costKnown
+                      ? format.number(askAi.data.costUsd, {
+                          style: "currency",
+                          currency: "USD",
+                          maximumFractionDigits: 6,
+                        })
+                      : "unpriced"}
+                    {askAi.data.latencyMs !== null &&
+                      ` · ${askAi.data.latencyMs}ms`}
+                    {askAi.data.truncated && " · cut off at the token limit"}
                   </p>
                 )}
               </div>
@@ -278,8 +287,8 @@ export function Dashboard() {
             </>
           ) : (
             <p className="text-sm text-muted-foreground">
-              Set <code className="font-mono">LLM_API_KEY</code> in .env to
-              enable this.
+              Set <code className="font-mono">LLM_MODEL</code> and its
+              provider&apos;s key in .env to enable this.
             </p>
           )}
         </CardContent>

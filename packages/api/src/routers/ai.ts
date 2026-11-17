@@ -1,21 +1,32 @@
 /**
- * AI features.
+ * AI features — the demo box on the dashboard.
  *
- * Every call is priced and attributed to the tenant by `@repo/ai`, and gated by
- * a per-tenant daily USD ceiling. An LLM endpoint with no spend ceiling is an
- * open invitation to run up someone else's bill.
+ * Everything that matters lives in `@repo/ai`: routing (`provider/model` from
+ * .env by tier), the per-tenant daily cap checked BEFORE sending, and pricing
+ * into `llm_call`. Its typed errors map to tRPC codes by name (../errors):
+ * over the cap → TOO_MANY_REQUESTS, not configured / unpriced / bad model
+ * string → PRECONDITION_FAILED, refused → BAD_REQUEST. Never a bare 500.
  */
-import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { ask, llmEnabled, spendByPurpose } from "@repo/ai";
+import {
+  ask,
+  describeLlm,
+  llmEnabled,
+  LlmTruncatedError,
+  spendByPurpose,
+} from "@repo/ai";
 
 import { createTRPCRouter, orgProcedure, publicProcedure } from "../trpc";
 
-/** Raise deliberately, per environment — not by deleting the check. */
-const DAILY_USD_CEILING = 2;
-
 export const aiRouter = createTRPCRouter({
+  /** Public: a boolean only. Which model runs is not for anonymous visitors. */
   enabled: publicProcedure.query(() => ({ enabled: llmEnabled() })),
+
+  /** Signed in: which model each tier routes to, and the cap. Never a key. */
+  info: orgProcedure.query(() => {
+    const d = describeLlm();
+    return { enabled: d.enabled, tiers: d.tiers, dailyCapUsd: d.dailyCapUsd };
+  }),
 
   ask: orgProcedure
     .input(
@@ -25,43 +36,47 @@ export const aiRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      if (!llmEnabled()) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "AI is not configured. Set LLM_API_KEY in .env.",
-        });
-      }
-
-      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const spent = await ctx.db.llmCall.aggregate({
-        where: {
+      try {
+        const r = await ask({
+          purpose: "ai.ask",
+          // A demo box is the definition of optional: it stops at the cap.
+          priority: "discretionary",
           organizationId: ctx.organizationId,
-          createdAt: { gte: since },
-        },
-        _sum: { costUsd: true },
-      });
-      if ((spent._sum.costUsd ?? 0) >= DAILY_USD_CEILING) {
-        throw new TRPCError({
-          code: "TOO_MANY_REQUESTS",
-          message: `Daily AI budget of $${DAILY_USD_CEILING} reached for this workspace.`,
+          userId: ctx.user.id,
+          system: input.system,
+          prompt: input.prompt,
+          maxOutputTokens: 4096,
+          effort: "low",
         });
+        return {
+          text: r.text,
+          truncated: false,
+          servedBy: r.servedBy,
+          costUsd: r.costUsd,
+          costKnown: r.costKnown,
+          inputTokens:
+            r.usage.inputTokens +
+            r.usage.cacheReadTokens +
+            r.usage.cacheWriteTokens,
+          outputTokens: r.usage.outputTokens,
+          latencyMs: r.latencyMs,
+        };
+      } catch (err) {
+        // A cut-off reply is still worth showing — labelled, never as complete.
+        if (err instanceof LlmTruncatedError) {
+          return {
+            text: err.partialText,
+            truncated: true,
+            servedBy: null,
+            costUsd: err.costUsd,
+            costKnown: true,
+            inputTokens: null,
+            outputTokens: null,
+            latencyMs: null,
+          };
+        }
+        throw err;
       }
-
-      const result = await ask({
-        purpose: "ai.ask",
-        organizationId: ctx.organizationId,
-        userId: ctx.user.id,
-        system: input.system,
-        prompt: input.prompt,
-      });
-
-      return {
-        text: result.text,
-        costUsd: result.costUsd,
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
-        latencyMs: result.latencyMs,
-      };
     }),
 
   spend: orgProcedure

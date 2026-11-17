@@ -179,12 +179,105 @@ const serverSchema = z.object({
    */
   APP_VERSION: z.preprocess(blankIsUnset, z.string().optional()),
 
-  // LLM — any OpenAI-compatible endpoint. Absent key = feature disabled.
+  // ── LLM (packages/ai) ───────────────────────────────────────────────────
+  // A model is a `provider/model` string: anthropic/…, openai/…, azure/<deployment>,
+  // openrouter/…, deepseek/…, local/… (LLM_BASE_URL), cli/… (Claude Code).
+  // A bare name (`gpt-4.1-mini`) means local/ — the pre-router behaviour.
+
+  /** Master switch. The smoke gate sets it false so it never spends money. */
+  LLM_ENABLED: bool(true),
+  /** Default model. Unset = anthropic/claude-opus-5-5 with ANTHROPIC_API_KEY, else local/gpt-4.1-mini. */
+  LLM_MODEL: z.preprocess(blankIsUnset, z.string().optional()),
+  /** Named tiers: app code says `tier: "fast"`, never a model id. Unset = LLM_MODEL. */
+  LLM_MODEL_FAST: z.preprocess(blankIsUnset, z.string().optional()),
+  LLM_MODEL_SMART: z.preprocess(blankIsUnset, z.string().optional()),
+  /** Model for embed(). Unset = embeddings disabled. e.g. openai/text-embedding-3-small */
+  LLM_EMBEDDING_MODEL: z.preprocess(blankIsUnset, z.string().optional()),
+  /** Default reasoning effort (Anthropic output_config.effort; `--effort` for cli/). */
+  LLM_EFFORT: z.preprocess(
+    blankIsUnset,
+    z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
+  ),
+  /**
+   * Per-tenant daily spend cap in USD, per UTC day (resets at 00:00 UTC).
+   * Discretionary calls that would cross it — or that use a model with no known
+   * price — are refused BEFORE sending; essential calls always run (logged).
+   * Unset or blank = $2 (the old built-in limit, so upgrading an env file that
+   * lacks the line keeps it). `off` = no cap, and must be said explicitly.
+   * 0 = no discretionary AI at all. Parsed value: a number, or undefined = off.
+   */
+  LLM_DAILY_CAP_USD: z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((v, ctx): number | undefined => {
+      if (v === undefined) return 2;
+      const s = String(v).trim().toLowerCase();
+      if (s === "") return 2;
+      if (s === "off") return undefined;
+      const n = Number(s);
+      if (!Number.isFinite(n) || n < 0) {
+        ctx.addIssue({
+          code: "custom",
+          message: `must be a dollar amount (e.g. 2), 0, or "off" (got ${JSON.stringify(v)})`,
+        });
+        return z.NEVER;
+      }
+      return n;
+    }),
+  /**
+   * Price overrides, USD per 1M tokens: `model=in:out[:cacheRead[:cacheWrite]]`,
+   * comma-separated, e.g. `openai/gpt-4.1-mini=0.4:1.6,azure/gpt-5=1.25:10`.
+   * Anthropic models are priced built-in; anything unpriced is recorded with
+   * costKnown=false rather than guessed.
+   */
+  LLM_PRICES: z.string().optional(),
+
+  // local/ (and bare names): any OpenAI-compatible server — Ollama, vLLM, LM Studio…
   LLM_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
   LLM_API_KEY: z.string().optional(),
-  LLM_MODEL: z.string().default("gpt-4.1-mini"),
-  LLM_INPUT_COST_PER_MTOK: z.coerce.number().nonnegative().default(0),
-  LLM_OUTPUT_COST_PER_MTOK: z.coerce.number().nonnegative().default(0),
+  /**
+   * local/ prices (USD per 1M tokens), kept from before the router. Both unset
+   * or both 0 = price UNKNOWN (a free local model is declared explicitly with
+   * LLM_PRICES=local/<model>=0:0).
+   */
+  LLM_INPUT_COST_PER_MTOK: z.preprocess(
+    blankIsUnset,
+    z.coerce.number().nonnegative().optional(),
+  ),
+  LLM_OUTPUT_COST_PER_MTOK: z.preprocess(
+    blankIsUnset,
+    z.coerce.number().nonnegative().optional(),
+  ),
+
+  ANTHROPIC_API_KEY: z.preprocess(blankIsUnset, z.string().optional()),
+  ANTHROPIC_BASE_URL: optionalUrl,
+  OPENAI_API_KEY: z.preprocess(blankIsUnset, z.string().optional()),
+  OPENAI_BASE_URL: optionalUrl,
+  /** Azure OpenAI / Foundry: https://<resource>.openai.azure.com (no path). */
+  AZURE_OPENAI_ENDPOINT: optionalUrl,
+  AZURE_OPENAI_API_KEY: z.preprocess(blankIsUnset, z.string().optional()),
+  /** Unset = the v1 API. A dated version (2025-04-01-preview) = deployment URLs. */
+  AZURE_OPENAI_API_VERSION: z.preprocess(blankIsUnset, z.string().optional()),
+  OPENROUTER_API_KEY: z.preprocess(blankIsUnset, z.string().optional()),
+  DEEPSEEK_API_KEY: z.preprocess(blankIsUnset, z.string().optional()),
+
+  // cli/: a headless `claude -p` on the operator's Claude Code login.
+  CLAUDE_BIN: z.preprocess(blankIsUnset, z.string().default("claude")),
+  CLAUDE_CLI_TIMEOUT_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(3600)
+    .default(300),
+  /** Set both to reach `claude` through scripts/claude-bridge (apps in Docker). */
+  CLAUDE_BRIDGE_URL: optionalUrl,
+  CLAUDE_BRIDGE_KEY: z.preprocess(
+    blankIsUnset,
+    z
+      .string()
+      .min(32, "must be at least 32 chars (openssl rand -hex 32)")
+      .optional(),
+  ),
 
   // ── Outbound messages (packages/outbound) ──────────────────────────────
   // Every email/SMS/push passes ONE guard. See CLAUDE.md "Outbound messages".
@@ -296,11 +389,6 @@ export function env(): ServerEnv {
 
   cached = parsed.data;
   return cached;
-}
-
-/** True when the LLM features should be offered at all. */
-export function llmEnabled(): boolean {
-  return Boolean(env().LLM_API_KEY);
 }
 
 /** True when the "Continue with Google" button should be rendered. */

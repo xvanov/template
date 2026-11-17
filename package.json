@@ -38,6 +38,7 @@
     "db:reset": "npm run reset -w @repo/db",
     "auth:schema": "npm run schema -w @repo/auth",
     "outbound:freeze": "npm run freeze -w @repo/outbound --",
+    "ai:live": "npm run live -w @repo/ai --",
     "postinstall": "npm run db:generate",
     "inbox": "echo 'Local mail inbox: http://localhost:8035'"
   },

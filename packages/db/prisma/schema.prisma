@@ -189,18 +189,39 @@ model MediaAsset {
 /// Every LLM call, priced. This is the seam that makes spend auditable per
 /// org and per feature instead of a single opaque provider invoice.
 model LlmCall {
-  id             String   @id @default(cuid())
-  organizationId String?
-  userId         String?
-  purpose        String
-  model          String
-  inputTokens    Int      @default(0)
-  outputTokens   Int      @default(0)
-  costUsd        Float    @default(0)
-  latencyMs      Int      @default(0)
-  ok             Boolean  @default(true)
-  error          String?
-  createdAt      DateTime @default(now())
+  id               String   @id @default(cuid())
+  organizationId   String?
+  userId           String?
+  purpose          String
+  /// The model string as routed: `anthropic/claude-opus-5-5`, `local/gpt-4.1-mini`.
+  model            String
+  /// anthropic | openai | azure | openrouter | deepseek | local | cli
+  provider         String?
+  /// The named tier the caller asked for (fast | default | smart), if any.
+  tier             String?
+  /// essential | discretionary — what the daily cap does with it.
+  priority         String?
+  /// "chat" or "embed".
+  kind             String   @default("chat")
+  inputTokens      Int      @default(0)
+  outputTokens     Int      @default(0)
+  cacheReadTokens  Int      @default(0)
+  cacheWriteTokens Int      @default(0)
+  costUsd          Float    @default(0)
+  /// False when the real cost is not known: no price is configured, or the
+  /// call died mid-flight (timeout, dropped stream). costUsd then holds the
+  /// pre-send estimate (0 for an unpriced model), so it still counts against
+  /// the cap — and the day's total is a floor, not a fact.
+  costKnown        Boolean  @default(true)
+  latencyMs        Int      @default(0)
+  ok               Boolean  @default(true)
+  error            String?
+  /// "pending" from the moment the cap reserved this call (costUsd = the
+  /// estimate) until it settles to "done". Pending rows count against the cap,
+  /// so concurrent calls cannot all slip under it. A pending row older than any
+  /// call can run is marked "abandoned" (and keeps counting its estimate).
+  status           String   @default("done")
+  createdAt        DateTime @default(now())
 
   @@index([organizationId, createdAt])
   @@index([purpose, createdAt])
