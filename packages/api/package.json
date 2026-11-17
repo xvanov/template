@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./client": "./src/client.ts"
+    "./client": "./src/client.ts",
+    "./mcp": "./src/mcp.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -14,6 +15,8 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@repo/agent": "*",
     "@repo/ai": "*",
     "@repo/auth": "*",
     "@repo/db": "*",

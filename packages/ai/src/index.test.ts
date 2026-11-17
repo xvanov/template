@@ -444,3 +444,55 @@ describe("introspection", () => {
     );
   });
 });
+
+describe("converse (one agent turn)", () => {
+  const turn = {
+    purpose: "agent.run",
+    priority: "discretionary" as const,
+    organizationId: "org_1",
+    transcript: [{ role: "user" as const, text: "tidy up" }],
+    tools: [
+      {
+        name: "items_search",
+        description: "Search",
+        inputSchema: { type: "object" },
+      },
+    ],
+    maxOutputTokens: 1000,
+  };
+
+  it("is capped and recorded like ask, and hands a refusal back as a stop instead of throwing", async () => {
+    const mem = memoryLedger();
+    const converse = vi.fn<LlmDeps["converse"]>(async () => ({
+      ...reply({ text: "" }),
+      stop: "refusal" as const,
+      refusal: { category: "cyber", explanation: null },
+      toolCalls: [],
+      assistant: { role: "assistant" as const, text: "", toolCalls: [] },
+    }));
+    const llm = createLlm({ converse, ledger: mem.ledger, warn: vi.fn() });
+    const r = await llm.converse({ ...turn, tier: "fast" });
+    expect(r.stop).toBe("refusal");
+    expect(converse.mock.calls[0]![0]).toMatchObject({
+      route: { model: "claude-haiku-5-5" },
+      tools: turn.tools,
+    });
+    expect(mem.rows()).toEqual([
+      expect.objectContaining({
+        purpose: "agent.run",
+        ok: false,
+        error: "refusal (cyber)",
+      }),
+    ]);
+  });
+
+  it("refuses cli/ models clearly: they cannot call our tools", async () => {
+    setLlmEnv({ LLM_DAILY_CAP_USD: "off" });
+    const mem = memoryLedger();
+    const llm = createLlm({ ledger: mem.ledger, warn: vi.fn() });
+    await expect(
+      llm.converse({ ...turn, model: "cli/claude-haiku-5-5" }),
+    ).rejects.toThrow(/do not support tool use/);
+    expect(mem.rows()[0]).toMatchObject({ ok: false, status: "done" });
+  });
+});

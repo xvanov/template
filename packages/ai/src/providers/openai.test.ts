@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LlmProviderError } from "../errors";
 import { parseModel } from "../models";
 import { setLlmEnv } from "../test-env";
-import { callOpenAiFamily, embedOpenAiFamily } from "./openai";
+import { callOpenAiFamily, callOpenAiTools, embedOpenAiFamily } from "./openai";
 
 interface Sent {
   url: string;
@@ -170,5 +170,88 @@ describe("embeddings", () => {
     );
     expect(sent[0]!.url).toBe("https://api.openai.com/v1/embeddings");
     expect(r).toEqual({ embeddings: [[0.1, 0.2]], tokens: 3 });
+  });
+});
+
+describe("tool use", () => {
+  const tools = [
+    {
+      name: "items_search",
+      description: "Search items",
+      inputSchema: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+  ];
+
+  it("declares the tools, returns the model's calls without running anything, and replays them next turn", async () => {
+    const sent = stubFetch({
+      ...completion(""),
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: {
+                  name: "items_search",
+                  arguments: JSON.stringify({ query: "milk" }),
+                },
+              },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+    });
+    const first = await callOpenAiTools({
+      route: parseModel("openai/gpt-4.1"),
+      transcript: [{ role: "user", text: "find milk" }],
+      tools,
+      maxOutputTokens: 500,
+      effort: "low",
+    });
+    expect(sent[0]!.body.tools).toEqual([
+      expect.objectContaining({
+        type: "function",
+        function: expect.objectContaining({ name: "items_search" }),
+      }),
+    ]);
+    expect(first).toMatchObject({
+      stop: "tool_use",
+      toolCalls: [
+        { id: "call_1", name: "items_search", input: { query: "milk" } },
+      ],
+    });
+
+    const sent2 = stubFetch(completion("Found none."));
+    const second = await callOpenAiTools({
+      route: parseModel("openai/gpt-4.1"),
+      transcript: [
+        { role: "user", text: "find milk" },
+        first.assistant,
+        {
+          role: "tool",
+          results: [{ id: "call_1", name: "items_search", content: "[]" }],
+        },
+      ],
+      tools,
+      maxOutputTokens: 500,
+      effort: "low",
+    });
+    expect(second).toMatchObject({ stop: "end", text: "Found none." });
+    const messages = sent2[0]!.body.messages as { role: string }[];
+    expect(messages.map((m) => m.role)).toEqual(["user", "assistant", "tool"]);
+    expect(messages[2]).toMatchObject({
+      tool_call_id: "call_1",
+      content: "[]",
+    });
   });
 });

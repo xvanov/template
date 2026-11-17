@@ -13,6 +13,7 @@
  *             `organizationId`, and the worker rejects payloads that carry one.
  */
 import { z } from "zod";
+import { abandonStaleRuns, executeRun } from "@repo/agent";
 import { db } from "@repo/db";
 import { runOperatorTick } from "@repo/notify";
 import {
@@ -28,6 +29,12 @@ const schemas = {
   "items.summarize": z.object({
     organizationId: z.string().min(1),
     userId: z.string().optional(),
+  }),
+
+  /** Execute one agent run (packages/agent). Started by `agent.start`. */
+  "agent.run": z.object({
+    organizationId: z.string().min(1),
+    runId: z.string().min(1),
   }),
 
   /** Demo scheduled job: prune soft state and log a heartbeat. */
@@ -113,6 +120,14 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     },
   },
 
+  "agent.run": {
+    scope: "org",
+    schema: schemas["agent.run"],
+    // Never throws for a run that went wrong (that is recorded on agent_run),
+    // and a redelivered job finds the run already claimed: no double runs.
+    run: (payload) => executeRun(payload),
+  },
+
   "maintenance.nightly": {
     scope: "system",
     schema: schemas["maintenance.nightly"],
@@ -132,7 +147,13 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
           status: { not: "held" },
         },
       });
-      return { prunedJobRuns: count, prunedNotifications: notifications.count };
+      // Agent runs a dead worker left "running" (nobody else will settle them).
+      const abandonedAgentRuns = await abandonStaleRuns(db);
+      return {
+        prunedJobRuns: count,
+        prunedNotifications: notifications.count,
+        abandonedAgentRuns,
+      };
     },
   },
 

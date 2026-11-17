@@ -106,8 +106,9 @@ trip (about 20s). `make lint` shellchecks every script.
    handler. Route handlers exist only for things tRPC cannot carry: auth
    (`/api/auth/[...all]`), file bytes (`/api/media/*`), health (`/api/health`),
    and machine callers authenticated by a secret instead of a session: cron
-   triggers (`/api/cron/[schedule]`, `requireCronAuth`) and inbound webhooks
-   (`/api/webhooks/*`, `verifyHmac` over the raw body). Copy those two.
+   triggers (`/api/cron/[schedule]`, `requireCronAuth`), inbound webhooks
+   (`/api/webhooks/*`, `verifyHmac` over the raw body) and the MCP endpoint
+   (`/api/mcp`, an org API key; its tools call tRPC procedures). Copy those.
 2. **Tenant isolation lives in `orgProcedure`, not in resolvers.** Any query on
    an org-scoped table goes through `orgProcedure` and filters on
    `ctx.organizationId`. Mutations use `updateMany`/`deleteMany` with the org in
@@ -253,6 +254,50 @@ day) and new sign-ups (low, digest only). It never throws.
 - No UI: there is no app-wide operator role, and tenant admins must not see
   them. Read the table directly.
 - `make smoke` forces the console channel and checks sign-up logged one.
+
+## Agents, proposals and MCP
+
+**An agent run** (`packages/agent`) is a bounded tool-use loop over
+`converse()` in `packages/ai`: Anthropic's native tool use through the official
+SDK for `anthropic/`, the AI SDK's tool calling for the OpenAI family; `cli/`
+cannot call tools and fails with a clear error. `agent.start` (tRPC) writes an
+`agent_run` row and enqueues the org job `agent.run`; the WORKER runs it, so a
+request never waits on a model. Bounds: `AGENT_MAX_STEPS` turns,
+`AGENT_MAX_COST_USD` per run, and the tenant's daily cap (calls are
+`discretionary`). Cancel is checked before every turn and aborts the call in
+flight. Every step lands in `agent_step` (the trace). Only an unexpected
+failure notifies the operator (low priority, once per tenant per day); "AI is
+off" or "over the cap" is the run's recorded outcome, not an alert.
+
+**Write tools never act inside a run.** A call becomes an `agent_proposal`
+(pending). A member approves (optionally editing the input, re-validated
+against the tool's zod schema) or rejects it at `/app/agent`. Approve claims
+the row with `updateMany ... status: "pending"` and runs the tool's `apply`
+with the reviewer as actor, in ONE transaction with the audit events, so a
+proposal is decided once and never says "applied" for a change that rolled
+back. If `apply` throws (the item is gone), the proposal becomes `failed`
+with the message.
+
+**Add a tool:** `defineReadTool` / `defineWriteTool` in
+`packages/agent/src/tools/` (`items.ts` is the reference), list it in
+`registry.ts`. Name it `[a-zA-Z0-9_-]` (no dots: both providers reject them).
+Take the tenant from the context, never from the input; writes go through
+`ctx.tx` with an audit event. `apply` is for database writes; for a side
+effect outside the database, enqueue a job from it. The unit test in
+`loop.test.ts` checks names and schemas of every registered tool.
+
+**MCP** is streamable HTTP at `/api/mcp`, stateless (a server per request,
+JSON responses), authenticated by a per-org API key (`Authorization: Bearer
+tk_...`; only its SHA-256 is stored; created and revoked by owners/admins via
+`apiKeys.*`, audited). A key acts as the member who made it, in the key's org
+only: if they leave, the key stops working (orgProcedure refuses an API key
+whose org it would otherwise fall back from). Each MCP tool calls the SAME
+tRPC procedure as the web app through a server-side caller
+(`packages/api/src/mcp.ts`): no business logic of its own. Read tools answer
+directly; write tools call `agent.propose` unless the key was created with
+"can write". Rate limited per key (`MCP_RATE_LIMIT_PER_MINUTE`) and per IP on
+failed auth. Connect Claude Code:
+`claude mcp add --transport http app <APP_URL>/api/mcp --header "Authorization: Bearer tk_..."`.
 
 ## UI (apps/web)
 

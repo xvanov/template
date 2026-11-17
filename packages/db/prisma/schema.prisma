@@ -37,6 +37,9 @@ model User {
   invitations Invitation[]
   items       Item[]
   mediaAssets MediaAsset[]
+  agentRuns   AgentRun[]
+  apiKeys     ApiKey[]
+  reviewed    AgentProposal[] @relation("ProposalReviewer")
 
   @@map("user")
 }
@@ -112,6 +115,10 @@ model Organization {
   auditEvents AuditEvent[]
   outbound    OutboundMessage[]
   suppressed  OutboundSuppression[]
+  agentRuns   AgentRun[]
+  agentSteps  AgentStep[]
+  proposals   AgentProposal[]
+  apiKeys     ApiKey[]
 
   @@map("organization")
 }
@@ -384,4 +391,125 @@ model AppSetting {
   updatedAt DateTime @updatedAt
 
   @@map("app_setting")
+}
+
+// ─────────────────────── AGENTS, PROPOSALS, API KEYS ─────────────────────
+
+/// One agent run (packages/agent): a goal, worked on by a model with tools,
+/// in the worker. The trace is its `steps`; anything it wanted to CHANGE is an
+/// AgentProposal waiting for a human.
+model AgentRun {
+  id                String       @id @default(cuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Who started it (null once that user is deleted).
+  createdById       String?
+  createdBy         User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  goal              String
+  /// "queued" | "running" | "completed" | "failed" | "cancelled"
+  status            String       @default("queued")
+  /// Why it stopped: "done" | "max_steps" | "max_cost" | "cancelled" |
+  /// "refusal" | "truncated" | "disabled" | "over_budget" | "error"
+  stopReason        String?
+  /// `provider/model` that ran it.
+  model             String?
+  /// The model's final answer (completed runs).
+  result            String?
+  /// One line for a human (failed runs).
+  error             String?
+  /// Model turns taken, and their summed cost (also in llm_call, purpose agent.run).
+  turns             Int          @default(0)
+  costUsd           Float        @default(0)
+  cancelRequestedAt DateTime?
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  createdAt         DateTime     @default(now())
+
+  steps     AgentStep[]
+  proposals AgentProposal[]
+
+  @@index([organizationId, createdAt])
+  @@index([status, createdAt])
+  @@map("agent_run")
+}
+
+/// The trace: one row per thing that happened in a run, in order.
+model AgentStep {
+  id             String       @id @default(cuid())
+  runId          String
+  run            AgentRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  /// Denormalised from the run so every read can pin the tenant in its `where`.
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  index          Int
+  /// "model" | "tool_call" | "tool_result" | "proposal"
+  kind           String
+  /// What the step was: the model's text and tool calls, a tool's input or output.
+  payload        Json
+  inputTokens    Int          @default(0)
+  outputTokens   Int          @default(0)
+  costUsd        Float        @default(0)
+  createdAt      DateTime     @default(now())
+
+  @@unique([runId, index])
+  @@index([organizationId, createdAt])
+  @@map("agent_step")
+}
+
+/// A change an agent (or an MCP client without write access) wants to make,
+/// waiting for a human: pending → applied | failed (approved), or rejected.
+/// Decided ONCE: every transition is an updateMany with the status in the where.
+model AgentProposal {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Null for a proposal that came from MCP rather than a run.
+  runId          String?
+  run            AgentRun?    @relation(fields: [runId], references: [id], onDelete: SetNull)
+  /// "agent" | "mcp"
+  source         String       @default("agent")
+  /// The write tool's name, e.g. `items_create`.
+  tool           String
+  /// The input as proposed (validated against the tool's schema).
+  input          Json
+  /// The input as the reviewer edited it, re-validated; what was applied.
+  editedInput    Json?
+  /// One line for the queue: what applying it would do.
+  summary        String
+  /// "pending" | "applied" | "failed" | "rejected"
+  status         String       @default("pending")
+  reviewerId     String?
+  reviewer       User?        @relation("ProposalReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  decidedAt      DateTime?
+  /// What apply returned (applied), or why it could not (failed).
+  result         Json?
+  error          String?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, status, createdAt])
+  @@index([runId])
+  @@map("agent_proposal")
+}
+
+/// A per-organization API key for machine callers (the MCP endpoint). Only the
+/// SHA-256 of the secret is stored; the secret is shown once, at creation.
+model ApiKey {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// The key acts as this member: if they leave the org, the key stops working.
+  createdById    String
+  createdBy      User         @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  name           String
+  /// The first characters of the secret, to tell keys apart in a list.
+  prefix         String
+  hash           String       @unique
+  /// False: write tools queue a proposal. True: they act directly.
+  canWrite       Boolean      @default(false)
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, createdAt])
+  @@map("api_key")
 }

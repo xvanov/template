@@ -13,6 +13,7 @@ packages/api     tRPC routers — the single API surface, shared by both apps
 packages/db      Prisma + Postgres
 packages/auth    better-auth — email+password, Google OAuth, organizations
 packages/ai      any OpenAI-compatible model, every call priced
+packages/agent   agent runs with a human approval queue; MCP at /api/mcp
 packages/jobs    job registry, queue, schedules
 packages/storage local disk or any S3-compatible bucket
 packages/env     the validated environment

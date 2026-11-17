@@ -11,3 +11,10 @@ export {
   ForbiddenError,
   NotFoundError,
 } from "./errors";
+export {
+  authenticateApiKey,
+  bearerApiKey,
+  generateApiKey,
+  hashApiKey,
+  type ApiKeyPrincipal,
+} from "./api-keys";
