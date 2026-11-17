@@ -23,7 +23,10 @@ import superjson from "superjson";
 import { ZodError } from "zod";
 import { auth } from "@repo/auth";
 import { db, recordAudit, type AuditWriter, type Prisma } from "@repo/db";
+import { env } from "@repo/env";
 import { clientIp, rateLimit } from "@repo/security";
+
+import { domainErrorCode } from "./errors";
 
 export interface CreateContextOptions {
   headers: Headers;
@@ -39,10 +42,18 @@ export type TRPCContext = Awaited<ReturnType<typeof createTRPCContext>>;
 const t = initTRPC.context<TRPCContext>().create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
+    // An INTERNAL_SERVER_ERROR is something we did not anticipate: its message
+    // may be a SQL fragment, a file path or an upstream response. In
+    // production the client gets a fixed sentence and no stack; the real error
+    // is logged by the route handler's onError. Expected failures are thrown
+    // as typed errors (./errors) and keep their message.
+    const opaque = error.code === "INTERNAL_SERVER_ERROR" && isProduction();
+    const { stack: _stack, ...data } = shape.data;
     return {
       ...shape,
+      message: opaque ? "Something went wrong on our side." : shape.message,
       data: {
-        ...shape.data,
+        ...(isProduction() ? data : shape.data),
         // Surface field-level validation errors to the client instead of a
         // generic 500 the UI cannot act on.
         zod: error.cause instanceof ZodError ? error.cause.flatten() : null,
@@ -63,7 +74,32 @@ const timing = t.middleware(async ({ next, path }) => {
   return result;
 });
 
-export const publicProcedure = t.procedure.use(timing);
+/** Read lazily: importing this module must not validate the environment. */
+function isProduction(): boolean {
+  try {
+    return env().NODE_ENV === "production";
+  } catch {
+    return true; // cannot tell: fail closed, i.e. reveal nothing
+  }
+}
+
+/**
+ * Typed domain errors (./errors) become their tRPC code with their message.
+ * Anything else stays an opaque INTERNAL_SERVER_ERROR (see errorFormatter).
+ */
+const domainErrors = t.middleware(async ({ next }) => {
+  const result = await next();
+  if (!result.ok) {
+    const cause = result.error.cause;
+    const code = domainErrorCode(cause);
+    if (code && cause instanceof Error) {
+      throw new TRPCError({ code, message: cause.message, cause });
+    }
+  }
+  return result;
+});
+
+export const publicProcedure = t.procedure.use(timing).use(domainErrors);
 
 export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
   if (!ctx.session?.user) {
@@ -75,10 +111,32 @@ export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
 });
 
 export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
-  const active = ctx.session.session.activeOrganizationId;
-  if (active) {
-    return next({ ctx: withAudit(ctx, active) });
+  const organizationId = await resolveOrganizationId(ctx.db, ctx.session);
+  if (!organizationId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "No organization for this user.",
+    });
   }
+  return next({ ctx: withAudit(ctx, organizationId) });
+});
+
+type Session = NonNullable<TRPCContext["session"]>;
+
+/**
+ * The tenant a signed-in session acts in: its active organization, else the
+ * user's first membership. Null = the user belongs to no organization.
+ *
+ * Shared by `orgProcedure` and the plain route handlers (`requireTenant` in
+ * apps/web), so the two cannot disagree about who the tenant is. The tenant
+ * always comes from the session, never from the request.
+ */
+export async function resolveOrganizationId(
+  client: typeof db,
+  session: Session,
+): Promise<string | null> {
+  const active = session.session.activeOrganizationId;
+  if (active) return active;
 
   // A session with no active tenant is recoverable: fall back to the user's
   // first membership rather than failing the request.
@@ -87,32 +145,26 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   // our `user.create.after` hook has created the org + membership, so a brand
   // new account's very first session is always unstamped. (Sign-IN sessions get
   // stamped correctly by the `session.create.before` hook.)
-  const membership = await ctx.db.member.findFirst({
-    where: { userId: ctx.user.id },
+  const membership = await client.member.findFirst({
+    where: { userId: session.user.id },
     orderBy: { createdAt: "asc" },
     select: { organizationId: true },
   });
-  if (!membership) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "No organization for this user.",
-    });
-  }
+  if (!membership) return null;
 
   // Self-heal, so this lookup is paid once per session rather than on every
   // request for the lifetime of the account. `updateMany` + catch: warming a
   // cache must never be the reason a request fails.
   try {
-    await ctx.db.session.updateMany({
-      where: { id: ctx.session.session.id },
+    await client.session.updateMany({
+      where: { id: session.session.id },
       data: { activeOrganizationId: membership.organizationId },
     });
   } catch (err) {
     console.warn("[trpc] could not stamp session with active org:", err);
   }
-
-  return next({ ctx: withAudit(ctx, membership.organizationId) });
-});
+  return membership.organizationId;
+}
 
 export interface AuditOptions {
   /** Defaults to the action's prefix: `item.delete` → `item`. */

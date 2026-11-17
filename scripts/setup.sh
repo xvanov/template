@@ -43,6 +43,15 @@ else
   ok "wrote .env with a generated BETTER_AUTH_SECRET"
 fi
 
+# A relative STORAGE_LOCAL_DIR resolves against each process's cwd, and the web
+# app (apps/web) and the worker (apps/worker) run from different ones: an upload
+# would land where the worker never looks. Pin the example default to one
+# absolute directory. A value someone chose deliberately is left alone.
+if grep -q '^STORAGE_LOCAL_DIR=\./storage$' .env; then
+  sed -i.bak "s|^STORAGE_LOCAL_DIR=\./storage$|STORAGE_LOCAL_DIR=${ROOT}/storage|" .env && rm -f .env.bak
+  ok "STORAGE_LOCAL_DIR → ${ROOT}/storage (shared by web and worker)"
+fi
+
 # The phone cannot reach "localhost" — point it at this machine on the LAN.
 LAN_IP="$( (hostname -I 2>/dev/null || ipconfig getifaddr en0 2>/dev/null || true) | awk '{print $1}')"
 if [ -n "${LAN_IP:-}" ]; then

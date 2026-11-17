@@ -11,10 +11,10 @@
  * (`ctx.audit(..., tx)`), so the trail cannot claim a change that rolled back
  * or miss one that committed.
  */
-import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { enqueue } from "@repo/jobs";
 
+import { NotFoundError } from "../errors";
 import { createTRPCRouter, orgProcedure, rateLimited } from "../trpc";
 
 export const itemsRouter = createTRPCRouter({
@@ -149,5 +149,6 @@ export const itemsRouter = createTRPCRouter({
 function notFound() {
   // Same error whether the row is absent or owned by another tenant — never
   // let a 404-vs-403 difference confirm that someone else's id exists.
-  return new TRPCError({ code: "NOT_FOUND", message: "Item not found." });
+  // A typed error, not a TRPCError: the API layer maps it to NOT_FOUND.
+  return new NotFoundError("Item not found.");
 }

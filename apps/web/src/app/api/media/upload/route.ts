@@ -3,7 +3,6 @@
  * a plain route — but the same rules apply: authenticated, tenant-scoped, and
  * validated against a content-type allow-list before a byte is written.
  */
-import { auth } from "@repo/auth";
 import { db } from "@repo/db";
 import {
   MAX_UPLOAD_BYTES,
@@ -12,30 +11,16 @@ import {
   storage,
 } from "@repo/storage";
 
+import { requireTenant } from "@/lib/route-auth";
+
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  const session = await auth.api.getSession({ headers: req.headers });
-  if (!session?.user) {
+  const tenant = await requireTenant(req);
+  if (!tenant) {
     return Response.json({ error: "Sign in required." }, { status: 401 });
   }
-
-  const organizationId =
-    session.session.activeOrganizationId ??
-    (
-      await db.member.findFirst({
-        where: { userId: session.user.id },
-        orderBy: { createdAt: "asc" },
-        select: { organizationId: true },
-      })
-    )?.organizationId;
-
-  if (!organizationId) {
-    return Response.json(
-      { error: "No organization for this user." },
-      { status: 403 },
-    );
-  }
+  const { organizationId, userId } = tenant;
 
   // Reject oversized bodies from the header before reading them into memory.
   const declared = Number(req.headers.get("content-length") ?? 0);
@@ -79,7 +64,7 @@ export async function POST(req: Request) {
       filename: file.name.slice(0, 200),
       contentType,
       sizeBytes: bytes.byteLength,
-      uploadedById: session.user.id,
+      uploadedById: userId,
     },
     select: {
       id: true,

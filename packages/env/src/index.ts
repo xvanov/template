@@ -10,13 +10,35 @@
  */
 import { z } from "zod";
 
-/** "true"/"1" → true, anything else → false; a real boolean passes through. */
-const boolish = z
-  .union([z.boolean(), z.string()])
-  .transform((v) => v === true || v === "true" || v === "1");
+/**
+ * A boolean env var: "true"/"1" or "false"/"0" (any case); blank or absent =
+ * `fallback`. Anything else FAILS rather than quietly meaning false: with a
+ * loose parser `REQUIRE_EMAIL_VERIFICATION=yes` would switch verification OFF.
+ */
+function bool(fallback: boolean) {
+  return z.preprocess(
+    (v) => (typeof v === "string" ? v.trim().toLowerCase() : v),
+    z
+      .union([
+        z.boolean(),
+        z.enum(["true", "1", "false", "0", ""], {
+          error: 'must be "true"/"1" or "false"/"0"',
+        }),
+      ])
+      .optional()
+      .transform((v) =>
+        v === undefined || v === ""
+          ? fallback
+          : v === true || v === "true" || v === "1",
+      ),
+  );
+}
 
 /** `VAR=` in a .env file means "unset", not "the empty string". */
 const blankIsUnset = (v: unknown) => (v === "" ? undefined : v);
+
+/** An optional URL where `VAR=` (blank) means unset instead of "invalid URL". */
+const optionalUrl = z.preprocess(blankIsUnset, z.string().url().optional());
 
 /** A base64 string that decodes to exactly 32 bytes (an AES-256 key). */
 const base64Key = z
@@ -45,7 +67,7 @@ const serverSchema = z.object({
       32,
       "BETTER_AUTH_SECRET must be at least 32 chars (openssl rand -base64 32)",
     ),
-  BETTER_AUTH_URL: z.string().url().optional(),
+  BETTER_AUTH_URL: optionalUrl,
 
   /**
    * Extra origins allowed to complete an auth round trip, comma-separated.
@@ -61,20 +83,14 @@ const serverSchema = z.object({
    * ON by default: it is the only thing stopping someone from signing up as
    * somebody else's address. Turn it off only for a throwaway environment.
    */
-  REQUIRE_EMAIL_VERIFICATION: z
-    .union([z.boolean(), z.string()])
-    .default(true)
-    .transform((v) => v === true || v === "true" || v === "1"),
+  REQUIRE_EMAIL_VERIFICATION: bool(true),
 
   // SMTP. Unset SMTP_HOST = mail is logged to the console instead of sent, so a
   // fresh clone runs with no mail infrastructure. `docker compose up -d mailpit`
   // gives you a real local SMTP server and inbox.
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().int().positive().default(1035),
-  SMTP_SECURE: z
-    .union([z.boolean(), z.string()])
-    .default(false)
-    .transform((v) => v === true || v === "true" || v === "1"),
+  SMTP_SECURE: bool(false),
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().default("App Template <no-reply@localhost>"),
@@ -88,7 +104,7 @@ const serverSchema = z.object({
    * real inbox, sees nothing, and concludes the feature is broken. Leave it
    * unset in production — the link would be meaningless and the hint misleading.
    */
-  DEV_MAIL_INBOX_URL: z.string().optional(),
+  DEV_MAIL_INBOX_URL: optionalUrl,
 
   // Auth rate limiting, per IP. Kept ON in every environment — brute-forcing a
   // password endpoint is the cheapest attack there is. The knobs exist because
@@ -149,6 +165,12 @@ const serverSchema = z.object({
       }, "must be an IANA timezone such as Europe/London"),
   ),
 
+  /**
+   * What is running: shown by /api/health and `deploy.sh status`. Deploys set
+   * it to the git commit; unset = the root package.json version.
+   */
+  APP_VERSION: z.preprocess(blankIsUnset, z.string().optional()),
+
   // LLM — any OpenAI-compatible endpoint. Absent key = feature disabled.
   LLM_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
   LLM_API_KEY: z.string().optional(),
@@ -168,14 +190,14 @@ const serverSchema = z.object({
    */
   OUTBOUND_SAFE_MODE: z.preprocess(
     blankIsUnset,
-    z.union([z.literal("local"), boolish]).optional(),
+    z.union([z.literal("local"), bool(false)]).optional(),
   ),
   /** Comma-separated: exact addresses/numbers, or `@domain` for a whole domain. */
   OUTBOUND_SAFE_RECIPIENTS: z.string().optional(),
   /** Channel switch. On by default: sign-up needs it. */
-  OUTBOUND_EMAIL_ENABLED: boolish.default(true),
+  OUTBOUND_EMAIL_ENABLED: bool(true),
   /** Global kill switch. A runtime switch also exists (`npm run outbound:freeze`). */
-  OUTBOUND_FROZEN: boolish.default(false),
+  OUTBOUND_FROZEN: bool(false),
   /** Volume caps (fixed windows in Redis). Over the cap = blocked, not queued. */
   OUTBOUND_CAP_RECIPIENT_PER_HOUR: z.coerce
     .number()
@@ -208,7 +230,7 @@ const serverSchema = z.object({
   STORAGE_LOCAL_DIR: z.string().default("./storage"),
   S3_BUCKET: z.string().optional(),
   S3_REGION: z.string().default("auto"),
-  S3_ENDPOINT: z.string().optional(),
+  S3_ENDPOINT: optionalUrl,
   S3_ACCESS_KEY_ID: z.string().optional(),
   S3_SECRET_ACCESS_KEY: z.string().optional(),
 });

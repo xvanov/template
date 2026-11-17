@@ -137,6 +137,13 @@ trip (about 20s). `make lint` shellchecks every script.
 9. **Mutations write an audit event in the same transaction**:
    `ctx.db.$transaction(async (tx) => { ...; await ctx.audit("item.delete", { targetId }, tx) })`.
    `packages/api/src/routers/items.ts` is the reference.
+10. **Expected failures throw typed errors** from `packages/api/src/errors.ts`
+    (`NotFoundError`, `DomainRuleError`, `ConflictError`, `ForbiddenError`);
+    the API maps them to NOT_FOUND / BAD_REQUEST / CONFLICT / FORBIDDEN with
+    their message, which the user sees. Anything else is a 500 whose message
+    and stack are hidden in production. Plain route handlers get the tenant
+    from `requireTenant(req)` (`apps/web/src/lib/route-auth.ts`), which shares
+    `orgProcedure`'s resolution.
 
 ## Outbound messages and safe mode
 
@@ -216,6 +223,9 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   validate with named imports from `zod/mini` (see `login-form.tsx`): classic
   `zod` adds ~60 kB gzipped to the page. Server code keeps classic zod. Keep
   labels visible (`FormLabel`).
+- **Prisma enums in client code:** `import { X } from "@repo/db/enums"` —
+  plain objects, no Prisma client in the bundle (verified against a real
+  build). Never import `@repo/db` from a `"use client"` file.
 - **Every query-backed panel** renders exactly one of `LoadingState` /
   `ErrorState` / `EmptyState` / data. Mutations report with `toast` (sonner).
 - **Formatting:** never `toLocaleString` ad hoc. `useFormat()` (client, from
@@ -302,7 +312,9 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   `allowedDevOrigins` in `next.config.ts` is derived from the hostnames in
   `APP_URL` + `TRUSTED_ORIGINS` — add the origin there and restart `make dev`.
 - **`STORAGE_LOCAL_DIR` is relative to each process's cwd**, which differs per
-  entrypoint. The resolved root is logged at startup. Use an absolute path to pin it.
+  entrypoint. The resolved root is logged at startup. `setup.sh` rewrites the
+  example's `./storage` to an absolute `<repo>/storage` so web and worker share
+  it; the compose files override it with the container volume path.
 - **tailwindcss v4 (web) and v3 (mobile, for NativeWind) coexist** deliberately.
   If PostCSS throws `Cannot read properties of undefined (reading 'All')`, the
   wrong major got hoisted — run a full `npm install`.

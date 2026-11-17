@@ -288,8 +288,11 @@ cmd_status() {
   echo
   compose ps --format 'table {{.Service}}\t{{.Image}}\t{{.Status}}'
   echo
-  local url="http://127.0.0.1:${PROD_WEB_PORT:-3280}/api/health"
-  echo "GET $url → $(curl -s --max-time 5 "$url" || echo unreachable)"
+  local url="http://127.0.0.1:${PROD_WEB_PORT:-3280}/api/health" health
+  health="$(curl -s --max-time 5 "$url" || echo unreachable)"
+  # What the web container itself says it is (APP_VERSION = the deployed tag).
+  echo "running:  $(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' <<<"$health")"
+  echo "GET $url → $health"
 }
 
 # ── main ─────────────────────────────────────────────────────────────────
