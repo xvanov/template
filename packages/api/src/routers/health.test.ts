@@ -3,7 +3,6 @@ import { db } from "@repo/db";
 import { resetEnvCache } from "@repo/env";
 
 import { createCallerFactory } from "../trpc";
-import { resetVersionCache } from "../version";
 import { healthRouter } from "./health";
 
 const caller = () =>
@@ -16,7 +15,6 @@ const caller = () =>
 afterEach(() => {
   delete process.env.APP_VERSION;
   resetEnvCache();
-  resetVersionCache();
 });
 
 describe("health.live", () => {

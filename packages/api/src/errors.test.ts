@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { TRPCError } from "@trpc/server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { db } from "@repo/db";
+import { db, Prisma } from "@repo/db";
 import { resetEnvCache } from "@repo/env";
 
 import {
@@ -31,6 +32,20 @@ const router = createTRPCRouter({
     const e = new Error("Gone.");
     e.name = "NotFoundError";
     throw e;
+  }),
+  // A resolver that chose its own code keeps it, whatever the cause.
+  deliberate: publicProcedure.query(() => {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Chosen on purpose.",
+      cause: new NotFoundError("Item not found."),
+    });
+  }),
+  duplicate: publicProcedure.query(() => {
+    throw new Prisma.PrismaClientKnownRequestError(
+      "Unique constraint failed on the fields: (`secret_column`)",
+      { code: "P2002", clientVersion: "test" },
+    );
   }),
   crash: publicProcedure.query(() => {
     throw new Leaky('relation "secret_table" does not exist at /srv/app.ts');
@@ -73,6 +88,26 @@ describe("domain errors → tRPC codes", () => {
     asProduction(); // typed errors keep their message even in production
     const r = await call(path);
     expect(r).toMatchObject({ status, message, data: { code } });
+  });
+
+  it("a deliberately thrown TRPCError is not remapped from its cause", async () => {
+    const r = await call("deliberate");
+    expect(r).toMatchObject({
+      status: 500,
+      message: "Chosen on purpose.",
+      data: { code: "INTERNAL_SERVER_ERROR" },
+    });
+  });
+
+  it("a unique-constraint violation is a 409 with a generic message", async () => {
+    asProduction();
+    const r = await call("duplicate");
+    expect(r).toMatchObject({
+      status: 409,
+      message: "That already exists.",
+      data: { code: "CONFLICT" },
+    });
+    expect(JSON.stringify(r)).not.toMatch(/secret_column/);
   });
 
   it("an unknown error is an opaque 500 in production: no message, no stack", async () => {

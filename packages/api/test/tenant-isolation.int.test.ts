@@ -173,4 +173,16 @@ describe("tenant isolation", () => {
     });
     await expect(callerFor(a).activity.audit()).resolves.toEqual([]);
   });
+
+  it("a member removed by an admin loses the org, though the session still names it", async () => {
+    const a = await createTenant("removed");
+    await callerFor(a).items.create({ title: "before removal" });
+    await db.member.deleteMany({
+      where: { userId: a.userId, organizationId: a.organizationId },
+    });
+    // callerFor still passes the stale activeOrganizationId.
+    await expect(callerFor(a).items.list()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
 });

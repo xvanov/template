@@ -17,8 +17,16 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   const tenant = await requireTenant(req);
-  if (!tenant) {
-    return Response.json({ error: "Sign in required." }, { status: 401 });
+  if (!tenant.ok) {
+    return Response.json(
+      {
+        error:
+          tenant.status === 401
+            ? "Sign in required."
+            : "No organization for this user.",
+      },
+      { status: tenant.status },
+    );
   }
   const { organizationId, userId } = tenant;
 

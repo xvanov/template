@@ -13,8 +13,10 @@
  *
  * Matching is by `error.name`, not `instanceof`, so a package that cannot
  * depend on @repo/api (jobs, a service layer) can declare its own class with
- * the same name and get the same mapping. Anything else thrown — a Prisma
- * error, a TypeError — stays an opaque INTERNAL_SERVER_ERROR.
+ * the same name and get the same mapping. A Prisma unique violation (P2002)
+ * becomes CONFLICT with a generic message. Anything else thrown — another
+ * Prisma error, a TypeError — stays an opaque INTERNAL_SERVER_ERROR. A
+ * TRPCError thrown on purpose is never remapped.
  */
 export class NotFoundError extends Error {
   override name = "NotFoundError";

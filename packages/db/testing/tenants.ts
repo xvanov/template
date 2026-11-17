@@ -12,6 +12,8 @@ export interface TestTenant {
   userId: string;
   organizationId: string;
   sessionId: string;
+  /** The session's token, for building a real signed session cookie. */
+  sessionToken: string;
   email: string;
   name: string;
 }
@@ -34,10 +36,11 @@ export async function createTenant(label = "tenant"): Promise<TestTenant> {
     select: { id: true, members: { select: { organizationId: true } } },
   });
   const organizationId = user.members[0]!.organizationId;
+  const sessionToken = randomBytes(16).toString("hex");
   const session = await db.session.create({
     data: {
       userId: user.id,
-      token: randomBytes(16).toString("hex"),
+      token: sessionToken,
       expiresAt: new Date(Date.now() + 3_600_000),
       activeOrganizationId: organizationId,
     },
@@ -47,6 +50,7 @@ export async function createTenant(label = "tenant"): Promise<TestTenant> {
     userId: user.id,
     organizationId,
     sessionId: session.id,
+    sessionToken,
     email,
     name: tag,
   };

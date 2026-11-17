@@ -153,12 +153,16 @@ describe("env", () => {
     for (const bad of ["yes", "on", "no", "ture"]) {
       resetEnvCache();
       process.env.REQUIRE_EMAIL_VERIFICATION = bad;
-      expect(() => env(), bad).toThrow(/REQUIRE_EMAIL_VERIFICATION/);
+      expect(() => env(), bad).toThrow(
+        `REQUIRE_EMAIL_VERIFICATION: must be "true"/"1" or "false"/"0" (got "${bad}")`,
+      );
     }
     resetEnvCache();
     process.env.REQUIRE_EMAIL_VERIFICATION = "true";
     process.env.OUTBOUND_SAFE_MODE = "yes";
-    expect(() => env()).toThrow(/OUTBOUND_SAFE_MODE/);
+    expect(() => env()).toThrow(
+      'OUTBOUND_SAFE_MODE: must be "local", "true"/"1" or "false"/"0" (got "yes")',
+    );
   });
 
   it("treats a blank optional URL as unset, and still validates a real one", () => {

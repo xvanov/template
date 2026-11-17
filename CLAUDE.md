@@ -143,7 +143,13 @@ trip (about 20s). `make lint` shellchecks every script.
     their message, which the user sees. Anything else is a 500 whose message
     and stack are hidden in production. Plain route handlers get the tenant
     from `requireTenant(req)` (`apps/web/src/lib/route-auth.ts`), which shares
-    `orgProcedure`'s resolution.
+    `orgProcedure`'s resolution — including the check that the user is STILL
+    a member of the session's active org (better-auth does not clear it when
+    an admin removes someone).
+11. **File access is scoped to the ACTIVE org**, like every other read: the
+    `/api/media` routes serve only the active tenant's files, never "any org
+    the user belongs to". Deliberate; a user in two orgs switches org to see
+    the other's files.
 
 ## Outbound messages and safe mode
 
@@ -312,9 +318,11 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   `allowedDevOrigins` in `next.config.ts` is derived from the hostnames in
   `APP_URL` + `TRUSTED_ORIGINS` — add the origin there and restart `make dev`.
 - **`STORAGE_LOCAL_DIR` is relative to each process's cwd**, which differs per
-  entrypoint. The resolved root is logged at startup. `setup.sh` rewrites the
-  example's `./storage` to an absolute `<repo>/storage` so web and worker share
-  it; the compose files override it with the container volume path.
+  entrypoint. The resolved root is logged at startup. `setup.sh` writes an
+  absolute `<repo>/storage` into a NEW `.env` so web and worker share it (an
+  existing `.env` is never rewritten; it prints a hint). The path is absolute,
+  so **moving or re-cloning the repo leaves it pointing at the old place** —
+  update it. The compose files override it with the container volume path.
 - **tailwindcss v4 (web) and v3 (mobile, for NativeWind) coexist** deliberately.
   If PostCSS throws `Cannot read properties of undefined (reading 'All')`, the
   wrong major got hoisted — run a full `npm install`.

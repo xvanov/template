@@ -16,22 +16,30 @@ import { z } from "zod";
  * loose parser `REQUIRE_EMAIL_VERIFICATION=yes` would switch verification OFF.
  */
 function bool(fallback: boolean) {
-  return z.preprocess(
-    (v) => (typeof v === "string" ? v.trim().toLowerCase() : v),
-    z
-      .union([
-        z.boolean(),
-        z.enum(["true", "1", "false", "0", ""], {
-          error: 'must be "true"/"1" or "false"/"0"',
-        }),
-      ])
-      .optional()
-      .transform((v) =>
-        v === undefined || v === ""
-          ? fallback
-          : v === true || v === "true" || v === "1",
-      ),
-  );
+  return z
+    .union([z.boolean(), z.string()])
+    .optional()
+    .transform((v, ctx) => {
+      const b = v === undefined ? null : parseBool(v);
+      if (b === undefined) {
+        ctx.addIssue({ code: "custom", message: BOOL_HINT(v) });
+        return z.NEVER;
+      }
+      return b ?? fallback;
+    });
+}
+
+const BOOL_HINT = (v: unknown) =>
+  `must be "true"/"1" or "false"/"0" (got ${JSON.stringify(v)})`;
+
+/** true/false; null for blank; undefined for anything unrecognised. */
+function parseBool(v: boolean | string): boolean | null | undefined {
+  if (typeof v === "boolean") return v;
+  const s = v.trim().toLowerCase();
+  if (s === "") return null;
+  if (s === "true" || s === "1") return true;
+  if (s === "false" || s === "0") return false;
+  return undefined;
 }
 
 /** `VAR=` in a .env file means "unset", not "the empty string". */
@@ -188,10 +196,23 @@ const serverSchema = z.object({
    * off in production, strict everywhere else. Resolved by `resolveSafeMode`
    * in packages/outbound.
    */
-  OUTBOUND_SAFE_MODE: z.preprocess(
-    blankIsUnset,
-    z.union([z.literal("local"), bool(false)]).optional(),
-  ),
+  OUTBOUND_SAFE_MODE: z
+    .union([z.boolean(), z.string()])
+    .optional()
+    .transform((v, ctx): boolean | "local" | undefined => {
+      if (v === undefined) return undefined;
+      if (typeof v === "string" && v.trim().toLowerCase() === "local")
+        return "local";
+      const b = parseBool(v);
+      if (b === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: `must be "local", "true"/"1" or "false"/"0" (got ${JSON.stringify(v)})`,
+        });
+        return z.NEVER;
+      }
+      return b ?? undefined;
+    }),
   /** Comma-separated: exact addresses/numbers, or `@domain` for a whole domain. */
   OUTBOUND_SAFE_RECIPIENTS: z.string().optional(),
   /** Channel switch. On by default: sign-up needs it. */

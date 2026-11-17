@@ -84,20 +84,51 @@ function isProduction(): boolean {
 }
 
 /**
- * Typed domain errors (./errors) become their tRPC code with their message.
- * Anything else stays an opaque INTERNAL_SERVER_ERROR (see errorFormatter).
+ * Typed domain errors (./errors) become their tRPC code with their message,
+ * and a unique-constraint violation (Prisma P2002) becomes CONFLICT with a
+ * generic message. Anything else stays an opaque INTERNAL_SERVER_ERROR (see
+ * errorFormatter). A TRPCError a resolver threw on purpose is left alone, even
+ * when its cause is a domain error: the resolver chose that code.
  */
 const domainErrors = t.middleware(async ({ next }) => {
   const result = await next();
-  if (!result.ok) {
+  if (!result.ok && wrappedByTrpc(result.error)) {
     const cause = result.error.cause;
     const code = domainErrorCode(cause);
     if (code && cause instanceof Error) {
       throw new TRPCError({ code, message: cause.message, cause });
     }
+    if (isUniqueViolation(cause)) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "That already exists.",
+        cause,
+      });
+    }
   }
   return result;
 });
+
+/**
+ * True when tRPC wrapped a non-TRPCError the resolver threw (it copies the
+ * cause's stack onto the wrapper), false for a TRPCError thrown on purpose.
+ */
+function wrappedByTrpc(error: TRPCError): boolean {
+  return (
+    error.code === "INTERNAL_SERVER_ERROR" &&
+    error.cause instanceof Error &&
+    error.stack === error.cause.stack
+  );
+}
+
+/** Prisma's unique-constraint error, matched by code (no client import). */
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err as { code?: unknown }).code === "P2002" &&
+    err.name === "PrismaClientKnownRequestError"
+  );
+}
 
 export const publicProcedure = t.procedure.use(timing).use(domainErrors);
 
@@ -124,8 +155,15 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
 type Session = NonNullable<TRPCContext["session"]>;
 
 /**
- * The tenant a signed-in session acts in: its active organization, else the
- * user's first membership. Null = the user belongs to no organization.
+ * The tenant a signed-in session acts in: its active organization IF the user
+ * is still a member of it, else the user's first membership. Null = the user
+ * belongs to no organization.
+ *
+ * The membership check is not optional: better-auth clears
+ * `activeOrganizationId` only when a user removes THEMSELF, so a member an
+ * admin removed keeps a session stamped with the org they just lost. Trusting
+ * the stamp would let them keep reading it. The check is one lookup on the
+ * (organizationId, userId) unique index.
  *
  * Shared by `orgProcedure` and the plain route handlers (`requireTenant` in
  * apps/web), so the two cannot disagree about who the tenant is. The tenant
@@ -136,34 +174,48 @@ export async function resolveOrganizationId(
   session: Session,
 ): Promise<string | null> {
   const active = session.session.activeOrganizationId;
-  if (active) return active;
+  if (active) {
+    const stillMember = await client.member.findUnique({
+      where: {
+        organizationId_userId: {
+          organizationId: active,
+          userId: session.user.id,
+        },
+      },
+      select: { id: true },
+    });
+    if (stillMember) return active;
+  }
 
-  // A session with no active tenant is recoverable: fall back to the user's
-  // first membership rather than failing the request.
+  // No usable active tenant: fall back to the user's first membership rather
+  // than failing the request.
   //
   // This is not a rare path. On sign-up, better-auth creates the session before
   // our `user.create.after` hook has created the org + membership, so a brand
   // new account's very first session is always unstamped. (Sign-IN sessions get
-  // stamped correctly by the `session.create.before` hook.)
+  // stamped correctly by the `session.create.before` hook.) The other way here
+  // is a stamp for an org the user was removed from.
   const membership = await client.member.findFirst({
     where: { userId: session.user.id },
     orderBy: { createdAt: "asc" },
     select: { organizationId: true },
   });
-  if (!membership) return null;
+  const organizationId = membership?.organizationId ?? null;
 
-  // Self-heal, so this lookup is paid once per session rather than on every
-  // request for the lifetime of the account. `updateMany` + catch: warming a
+  // Self-heal (also clears a stale stamp), so this lookup is paid once per
+  // session rather than on every request. `updateMany` + catch: warming a
   // cache must never be the reason a request fails.
-  try {
-    await client.session.updateMany({
-      where: { id: session.session.id },
-      data: { activeOrganizationId: membership.organizationId },
-    });
-  } catch (err) {
-    console.warn("[trpc] could not stamp session with active org:", err);
+  if (organizationId !== active) {
+    try {
+      await client.session.updateMany({
+        where: { id: session.session.id },
+        data: { activeOrganizationId: organizationId },
+      });
+    } catch (err) {
+      console.warn("[trpc] could not stamp session with active org:", err);
+    }
   }
-  return membership.organizationId;
+  return organizationId;
 }
 
 export interface AuditOptions {
