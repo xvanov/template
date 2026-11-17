@@ -119,7 +119,7 @@ SMOKE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/smoke-$(basename "$ROOT").XXXXXX")"
 WEB_LOG="${SMOKE_TMP}/web.log"
 WORKER_LOG="${SMOKE_TMP}/worker.log"
 export STORAGE_DRIVER=local STORAGE_LOCAL_DIR="${SMOKE_TMP}/storage"
-export LLM_API_KEY=""
+export LLM_ENABLED=false LLM_API_KEY=""
 
 # Refuse to run against a server we did not start. Otherwise a stale process
 # left on this port answers the health check and the gate reports on the wrong

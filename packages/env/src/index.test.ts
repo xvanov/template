@@ -3,13 +3,7 @@ import { resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  env,
-  googleEnabled,
-  llmEnabled,
-  resetEnvCache,
-  serverEnvKeys,
-} from "./index";
+import { env, googleEnabled, resetEnvCache, serverEnvKeys } from "./index";
 
 const snapshot = { ...process.env };
 
@@ -104,10 +98,24 @@ describe("env", () => {
     expect(googleEnabled()).toBe(false);
   });
 
-  it("treats an absent LLM key as the feature being off, not an error", () => {
+  it("parses the LLM switch, cap and effort, and rejects a short bridge key", () => {
     setBaseline();
-    expect(llmEnabled()).toBe(false);
-    expect(() => env()).not.toThrow();
+    expect(env()).toMatchObject({
+      LLM_ENABLED: true,
+      LLM_DAILY_CAP_USD: 2,
+      LLM_EFFORT: "medium",
+    });
+    expect(env().LLM_MODEL).toBeUndefined();
+
+    resetEnvCache();
+    process.env.LLM_ENABLED = "false";
+    process.env.LLM_MODEL = "";
+    expect(env().LLM_ENABLED).toBe(false);
+    expect(env().LLM_MODEL).toBeUndefined();
+
+    resetEnvCache();
+    process.env.CLAUDE_BRIDGE_KEY = "short";
+    expect(() => env()).toThrow(/CLAUDE_BRIDGE_KEY/);
   });
 
   it("reads a blank OUTBOUND_SAFE_MODE= as unset (the default), never as false", () => {

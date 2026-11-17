@@ -1,0 +1,35 @@
+# Claude bridge (scripts/claude-bridge/server.mjs): lets cli/ models inside the
+# app's containers use THIS host's Claude Code login. Optional — only needed
+# when LLM_MODEL* names a cli/ model and the app runs in Docker.
+#
+# A systemd --user unit, so `claude` runs as the user who is logged in to
+# Claude Code. Install (replace @APP_DIR@ and @APP_NAME@ as for the other
+# units in this directory, see docs/deploy.md):
+#
+#   openssl rand -hex 32 | sed 's/^/CLAUDE_BRIDGE_KEY=/' > ~/.config/@APP_NAME@-bridge.env
+#   echo CLAUDE_BRIDGE_HOST=$(tailscale ip -4) >> ~/.config/@APP_NAME@-bridge.env
+#   chmod 600 ~/.config/@APP_NAME@-bridge.env
+#   cp ops/systemd/claude-bridge.service ~/.config/systemd/user/@APP_NAME@-claude-bridge.service
+#   systemctl --user daemon-reload && systemctl --user enable --now @APP_NAME@-claude-bridge
+#   loginctl enable-linger "$USER"   # keep it running while logged out
+#
+# Then in the app's .env: CLAUDE_BRIDGE_URL=http://<that tailnet IP>:3017 and
+# the same CLAUDE_BRIDGE_KEY. The server refuses any bind address that is not
+# loopback or Tailscale.
+[Unit]
+Description=@APP_NAME@ Claude bridge (scripts/claude-bridge/server.mjs)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=%h/.config/@APP_NAME@-bridge.env
+# PATH must reach `claude` (~/.local/bin by default); or set CLAUDE_BIN in the env file.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node @APP_DIR@/scripts/claude-bridge/server.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,240 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { beforeEach, describe, expect, it } from "vitest";
+
+import { LlmProviderError } from "../errors";
+import { parseModel } from "../models";
+import { setLlmEnv } from "../test-env";
+import {
+  buildParams,
+  callAnthropic,
+  FALLBACK_BETA,
+  toProviderError,
+  type AnthropicLike,
+} from "./anthropic";
+import type { ProviderRequest } from "./types";
+
+beforeEach(() => setLlmEnv({ ANTHROPIC_API_KEY: "test" }));
+
+const req = (
+  model: string,
+  extra: Partial<ProviderRequest> = {},
+): ProviderRequest => ({
+  route: parseModel(`anthropic/${model}`),
+  prompt: "hi",
+  maxOutputTokens: 1000,
+  effort: "medium",
+  ...extra,
+});
+
+type Msg = Anthropic.Beta.Messages.BetaMessage;
+function message(
+  over: Partial<Omit<Msg, "usage">> & { usage?: Partial<Msg["usage"]> } = {},
+): Msg {
+  return {
+    id: "msg_1",
+    type: "message",
+    role: "assistant",
+    model: "claude-opus-5-5",
+    content: [{ type: "text", text: "Paris", citations: null }],
+    stop_reason: "end_turn",
+    stop_sequence: null,
+    stop_details: null,
+    container: null,
+    context_management: null,
+    ...over,
+    usage: {
+      input_tokens: 1000,
+      output_tokens: 100,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      iterations: null,
+      ...over.usage,
+    },
+  } as Msg;
+}
+
+function fakeClient(msg: Msg | Error) {
+  const calls: unknown[] = [];
+  const client: AnthropicLike = {
+    beta: {
+      messages: {
+        stream(params) {
+          calls.push(params);
+          return {
+            finalMessage: () =>
+              msg instanceof Error ? Promise.reject(msg) : Promise.resolve(msg),
+          };
+        },
+      },
+    },
+  };
+  return { client, calls };
+}
+
+describe("buildParams", () => {
+  it("never sends sampling params or a thinking config; sets effort explicitly; turns on fallbacks", () => {
+    const p = buildParams(
+      req("claude-opus-5-5", { system: "be brief" }),
+    ) as Record<string, unknown>;
+    for (const banned of [
+      "temperature",
+      "top_p",
+      "top_k",
+      "thinking",
+      "tool_choice",
+    ]) {
+      expect(p).not.toHaveProperty(banned);
+    }
+    expect(p).toMatchObject({
+      model: "claude-opus-5-5",
+      max_tokens: 1000,
+      system: "be brief",
+      output_config: { effort: "medium" },
+      betas: [FALLBACK_BETA],
+      fallbacks: "default",
+    });
+  });
+
+  it("sends no fallbacks for Haiku (it has none) and no effort to models that reject it", () => {
+    const haiku = buildParams(req("claude-haiku-5-5")) as Record<
+      string,
+      unknown
+    >;
+    expect(haiku).not.toHaveProperty("fallbacks");
+    expect(haiku).toMatchObject({ output_config: { effort: "medium" } });
+    expect(buildParams(req("claude-haiku-4-5"))).not.toHaveProperty(
+      "output_config",
+    );
+  });
+
+  it("puts a JSON schema in output_config.format (structured output, not forced tool_choice)", () => {
+    const schema = {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    };
+    expect(
+      buildParams(req("claude-sonnet-5-5", { jsonSchema: schema })),
+    ).toMatchObject({
+      output_config: { format: { type: "json_schema", schema } },
+    });
+  });
+});
+
+describe("callAnthropic", () => {
+  it("returns text, usage incl. cache tokens, and the cost at list price", async () => {
+    const { client } = fakeClient(
+      message({
+        usage: {
+          cache_read_input_tokens: 1_000_000,
+          cache_creation_input_tokens: 0,
+        },
+      }),
+    );
+    const r = await callAnthropic(req("claude-opus-5-5"), client);
+    expect(r).toMatchObject({
+      text: "Paris",
+      stop: "end",
+      servedBy: "anthropic/claude-opus-5-5",
+      usage: {
+        inputTokens: 1000,
+        outputTokens: 100,
+        cacheReadTokens: 1_000_000,
+      },
+    });
+    // 1000*4 + 100*20 + 1M*0.2, per million
+    expect(r.costUsd).toBeCloseTo(0.206, 6);
+  });
+
+  it("surfaces a refusal with its stop_details category", async () => {
+    const { client } = fakeClient(
+      message({
+        stop_reason: "refusal",
+        content: [],
+        stop_details: {
+          type: "refusal",
+          category: "cyber",
+          explanation: "nope",
+        } as Msg["stop_details"],
+      }),
+    );
+    const r = await callAnthropic(req("claude-opus-5-5"), client);
+    expect(r.stop).toBe("refusal");
+    expect(r.refusal).toEqual({ category: "cyber", explanation: "nope" });
+  });
+
+  it("surfaces max_tokens as a truncation", async () => {
+    const { client } = fakeClient(message({ stop_reason: "max_tokens" }));
+    expect((await callAnthropic(req("claude-opus-5-5"), client)).stop).toBe(
+      "max_tokens",
+    );
+  });
+
+  it("prices a fallback-served turn per hop, and reports who served it", async () => {
+    const { client } = fakeClient(
+      message({
+        model: "claude-opus-4-8",
+        usage: {
+          iterations: [
+            {
+              type: "message",
+              input_tokens: 1e6,
+              output_tokens: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+            },
+            {
+              type: "fallback_message",
+              model: "claude-opus-4-8",
+              input_tokens: 1e6,
+              output_tokens: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+            },
+          ] as unknown as Msg["usage"]["iterations"],
+        },
+      }),
+    );
+    const r = await callAnthropic(req("claude-opus-5-5"), client);
+    expect(r.servedBy).toBe("anthropic/claude-opus-4-8");
+    expect(r.costUsd).toBe(9); // $4 declined hop + $5 rescue
+  });
+});
+
+describe("toProviderError", () => {
+  const headers = new Headers();
+  it("marks 429/5xx/connection errors retryable and 400/401 not — by class, not message", () => {
+    expect(
+      toProviderError(
+        new Anthropic.RateLimitError(429, {}, "slow down", headers),
+      ).retryable,
+    ).toBe(true);
+    expect(
+      toProviderError(
+        new Anthropic.InternalServerError(529, {}, "overloaded", headers),
+      ).retryable,
+    ).toBe(true);
+    expect(
+      toProviderError(new Anthropic.APIConnectionError({ message: "reset" }))
+        .retryable,
+    ).toBe(true);
+    expect(
+      toProviderError(new Anthropic.BadRequestError(400, {}, "bad", headers))
+        .retryable,
+    ).toBe(false);
+    expect(
+      toProviderError(
+        new Anthropic.AuthenticationError(401, {}, "key", headers),
+      ).retryable,
+    ).toBe(false);
+  });
+
+  it("is what callAnthropic throws", async () => {
+    const { client } = fakeClient(
+      new Anthropic.RateLimitError(429, {}, "slow", new Headers()),
+    );
+    await expect(
+      callAnthropic(req("claude-opus-5-5"), client),
+    ).rejects.toBeInstanceOf(LlmProviderError);
+  });
+});

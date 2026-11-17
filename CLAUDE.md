@@ -16,7 +16,7 @@ apps/worker    BullMQ worker + cron schedules (separate process on purpose)
 packages/api   tRPC routers — the ONLY API surface, shared by web and mobile
 packages/db    Prisma schema + client (Postgres)
 packages/auth  better-auth: email+password, Google OAuth, organizations
-packages/ai    LLM calls against any OpenAI-compatible endpoint, priced per call
+packages/ai    LLM calls routed by `provider/model` (Anthropic, OpenAI, Azure, local, Claude Code), priced + capped
 packages/jobs  job registry + queue + schedules
 packages/storage  file storage: local disk or any S3-compatible bucket
 packages/email  outbound SMTP (nodemailer), ONLY via the outbound guard. Mailpit locally
@@ -113,8 +113,15 @@ trip (about 20s). `make lint` shellchecks every script.
    the `where`, never `update`-by-id plus a separate ownership check.
 3. **`env()` from `@repo/env`, never `process.env`.** It validates once and fails
    with a readable message. Node entrypoints start with `import "@repo/env/load"`.
-4. **The model is config.** Any OpenAI-compatible endpoint works via
-   `LLM_BASE_URL`/`LLM_MODEL`. Every call is priced into the `llm_call` table.
+4. **The model is config.** Models are `provider/model` strings in .env
+   (`anthropic/…`, `openai/…`, `azure/<deployment>`, `openrouter/…`, `local/…`,
+   `cli/…`), picked by tier: app code calls `ask({ tier: "fast", priority, … })`,
+   never a model id. Every call declares `priority: "essential" | "discretionary"`
+   — the per-tenant daily cap (`LLM_DAILY_CAP_USD`) refuses discretionary calls
+   BEFORE sending and never refuses essential ones. Every call is priced into
+   `llm_call`. Claude goes through the official `@anthropic-ai/sdk`, never an
+   OpenAI-compatible shim. Structured output is `askObject`: zod-validated, never
+   repaired — a failure is `{ ok: false, reason }` for a human to handle.
 5. **Slow or failable work goes to `packages/jobs`**, not into a request. Every
    run is recorded in `job_run` — Redis is ephemeral, that table is not. Each
    registry entry declares `scope: "org" | "system"`, and the compiler holds it
@@ -284,7 +291,7 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   waits for the `[worker] up` line; keep that log line if you touch
   `apps/worker/src/index.ts`. The journey clicks "Summarise items in the
   worker" and waits for `✓ items.summarize`, so a job that fails or is never
-  picked up is red too. The gate forces `LLM_API_KEY=""` (free, deterministic)
+  picked up is red too. The gate forces `LLM_ENABLED=false` (free, deterministic)
   and puts logs and `STORAGE_LOCAL_DIR` in a fresh `mktemp -d` dir, kept and
   printed on failure.
 - **The Dockerfiles build from `turbo prune <app> --docker`**, so each image
@@ -323,6 +330,21 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   existing `.env` is never rewritten; it prints a hint). The path is absolute,
   so **moving or re-cloning the repo leaves it pointing at the old place** —
   update it. The compose files override it with the container volume path.
+- **Current Claude models 400 on `temperature`/`top_p`/`top_k`, on disabled
+  thinking, and on forced `tool_choice`.** `packages/ai/src/providers/anthropic.ts`
+  sends none of them; depth is `output_config.effort` (set explicitly — Opus 5.5
+  defaults to medium). Do not "add temperature for determinism".
+- **Azure/OpenAI reasoning models reject `max_tokens`.** They go through
+  `@ai-sdk/azure`/`@ai-sdk/openai`, which send `max_completion_tokens`; the
+  generic OpenAI-compatible provider is only for `local/`, OpenRouter, DeepSeek.
+  Name Azure deployments after the model (`gpt-5`), or detection by name fails.
+- **A model string with an unknown prefix is an error, not a bare name.** A
+  slash-containing id for a local server is `local/meta-llama/…`.
+- **`cli/` runs `claude -p` one call at a time** from an empty temp dir, tools
+  off. In Docker there is no `claude`: use `scripts/claude-bridge` on the host
+  (`ops/systemd/claude-bridge.service`), bound to loopback/tailnet only.
+- **`npm run ai:live` spends real money** on every configured provider. It is
+  never part of `make test` or CI; unit tests use fakes and stay offline.
 - **tailwindcss v4 (web) and v3 (mobile, for NativeWind) coexist** deliberately.
   If PostCSS throws `Cannot read properties of undefined (reading 'All')`, the
   wrong major got hoisted — run a full `npm install`.
