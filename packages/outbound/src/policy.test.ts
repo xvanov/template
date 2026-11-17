@@ -14,7 +14,8 @@ import {
 const config = (over: Partial<GuardConfig> = {}): GuardConfig => ({
   safeMode: "strict",
   safeRecipients: parseSafeList("dev@team.test, @example.com"),
-  enabled: { email: true },
+  enabled: { email: true, push: true },
+  operatorRecipients: { email: "ops@team.test", push: "ops-topic-123" },
   frozen: false,
   caps: {
     recipientPerHour: 10,
@@ -144,10 +145,106 @@ describe("static gates", () => {
     expect(
       staticBlock(
         mail({ authMail: true }),
-        config({ enabled: { email: false } }),
+        config({ enabled: { email: false, push: true } }),
         false,
       )?.reason,
     ).toBe("CHANNEL_DISABLED");
+  });
+});
+
+describe("push and operator messages", () => {
+  const push = (over: Partial<OutboundAttempt> = {}): OutboundAttempt => ({
+    channel: "push",
+    recipient: "ops-topic-123",
+    purpose: "operator.notify",
+    operator: true,
+    ...over,
+  });
+
+  it("a push recipient is one ntfy topic, case kept; anything else is invalid", () => {
+    expect(parseRecipient("push", " Ops-Topic_1 ")).toBe("Ops-Topic_1");
+    for (const bad of ["", "a/b", "a b", "x".repeat(65), "https://ntfy.sh/a"]) {
+      expect(parseRecipient("push", bad)).toBeNull();
+    }
+  });
+
+  it("strict: the operator's own topic and address pass; the flag on any other recipient exempts nothing", () => {
+    expect(staticBlock(push(), config(), false)).toBeNull();
+    expect(
+      staticBlock(
+        mail({ recipient: "ops@team.test", operator: true }),
+        config({ safeRecipients: [] }),
+        false,
+      ),
+    ).toBeNull();
+    expect(
+      staticBlock(push({ recipient: "someone-else" }), config(), false)?.reason,
+    ).toBe("SAFE_MODE");
+    expect(staticBlock(mail({ operator: true }), config(), false)?.reason).toBe(
+      "SAFE_MODE",
+    );
+    // Without the flag even the operator's topic is not exempt.
+    expect(
+      staticBlock(push({ operator: false }), config(), false)?.reason,
+    ).toBe("SAFE_MODE");
+    // No operator configured: nothing is exempt.
+    expect(
+      staticBlock(push(), config({ operatorRecipients: {} }), false)?.reason,
+    ).toBe("SAFE_MODE");
+  });
+
+  it("the email allowlist never admits a push topic", () => {
+    expect(isSafeRecipient("push", "ops-topic-123", ["@example.com"])).toBe(
+      false,
+    );
+  });
+
+  it("local-catcher opens EMAIL only: a push reaches a real phone, so it stays strict", () => {
+    const local = config({ safeMode: "local-catcher" });
+    expect(staticBlock(mail(), local, false)).toBeNull();
+    expect(
+      staticBlock(push({ recipient: "stranger-topic" }), local, false)?.reason,
+    ).toBe("SAFE_MODE");
+    expect(staticBlock(push(), local, false)).toBeNull();
+  });
+
+  it("push has its own channel switch and obeys the kill switch", () => {
+    expect(
+      staticBlock(
+        push(),
+        config({ enabled: { email: true, push: false } }),
+        false,
+      )?.reason,
+    ).toBe("CHANNEL_DISABLED");
+    expect(staticBlock(push(), config(), true)?.reason).toBe("FROZEN");
+  });
+
+  it("the verified operator skips the per-recipient cap and counts in its own global pool", () => {
+    expect(volumeBuckets(push(), config()).map((b) => b.key)).toEqual([
+      "outbound:push:global:operator:h",
+    ]);
+    expect(
+      volumeBuckets(
+        mail({
+          recipient: "ops@team.test",
+          operator: true,
+          organizationId: null,
+        }),
+        config(),
+      ).map((b) => b.key),
+    ).toEqual(["outbound:email:global:operator:h"]);
+  });
+
+  it("the operator flag on any other recipient buys no cap exemption and no operator pool", () => {
+    expect(
+      volumeBuckets(
+        mail({ operator: true, organizationId: null }),
+        config(),
+      ).map((b) => b.key),
+    ).toEqual([
+      "outbound:email:rcpt:stranger@real-customer.com:h",
+      "outbound:email:global:app:h",
+    ]);
   });
 });
 

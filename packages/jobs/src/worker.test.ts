@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import type { JobEntry, ScopeOf } from "./handlers";
-import { ownerOf } from "./worker";
+import { isFinalFailure, ownerOf } from "./worker";
 
 describe("ownerOf", () => {
   it("an org job is owned by the organizationId of its validated payload", () => {
@@ -78,5 +78,30 @@ describe("registry scope is enforced at compile time", () => {
       run,
     };
     expect([a, b, c, neither]).toHaveLength(4);
+  });
+});
+
+describe("isFinalFailure", () => {
+  const err = new Error("boom");
+  const job = (attemptsMade: number, attempts?: number) => ({
+    attemptsMade,
+    opts: { attempts },
+  });
+
+  it("is final once the attempts are used up, not before", () => {
+    expect(isFinalFailure(job(1, 3), err)).toBe(false);
+    expect(isFinalFailure(job(2, 3), err)).toBe(false);
+    expect(isFinalFailure(job(3, 3), err)).toBe(true);
+  });
+
+  it("a job with no retries is final on its first failure", () => {
+    expect(isFinalFailure(job(1), err)).toBe(true);
+  });
+
+  it("an UnrecoverableError is final whatever the count", () => {
+    const fatal = Object.assign(new Error("bad payload"), {
+      name: "UnrecoverableError",
+    });
+    expect(isFinalFailure(job(1, 3), fatal)).toBe(true);
   });
 });

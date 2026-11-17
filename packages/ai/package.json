@@ -19,6 +19,7 @@
     "@anthropic-ai/sdk": "1.8.0",
     "@repo/db": "*",
     "@repo/env": "*",
+    "@repo/notify": "*",
     "ai": "^7.0.173",
     "zod": "^4.4.3"
   },

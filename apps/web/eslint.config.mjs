@@ -2,13 +2,14 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 
-import { mailBoundary } from "../../eslint.boundaries.mjs";
+import { outboundBoundary } from "../../eslint.boundaries.mjs";
 
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
-  // No mail library in the web app: send through @repo/email (CLAUDE.md rule 8).
-  ...mailBoundary("__none__"),
+  // No mail library or ntfy call in the web app: send through @repo/email /
+  // @repo/notify (CLAUDE.md rule 8).
+  ...outboundBoundary({ mail: "__none__", push: "__none__" }),
   // src/components/ui is vendored shadcn/ui: keep it close to upstream so
   // `shadcn add`/diff stay easy. The React Compiler rules (react-hooks v6+)
   // flag upstream patterns there; they stay on for all of OUR code.

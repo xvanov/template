@@ -1,5 +1,5 @@
 /**
- * Outbound messages: the guard every message passes (email today), and its controls.
+ * Outbound messages: the guard every message passes (email, push), and its controls.
  * Channel packages call `deliver`; application code calls the channel package
  * (e.g. `sendMail` from @repo/email), never a provider SDK.
  */
@@ -7,6 +7,7 @@ export {
   configFromEnv,
   deliver,
   describeSafeMode,
+  displayRecipient,
   type DeliveryResult,
   type GuardDeps,
   type ProviderReceipt,
@@ -19,7 +20,10 @@ export {
   type FreezeScope,
 } from "./controls";
 export {
+  CHANNELS,
+  effectiveSafeMode,
   isLoopbackHost,
+  isOperatorRecipient,
   isSafeRecipient,
   parseRecipient,
   parseSafeList,

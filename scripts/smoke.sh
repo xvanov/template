@@ -114,12 +114,15 @@ export BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-smoke-gate-secret-not-for-produ
 # uploaded files go to a fresh temp dir (absolute, so every process agrees on
 # it — see STORAGE_LOCAL_DIR in CLAUDE.md). The LLM is forced OFF whatever the
 # dev .env says: the gate must not spend money or depend on a third party, and
-# the worker's summary job has a deterministic no-LLM path.
+# the worker's summary job has a deterministic no-LLM path. Operator
+# notifications go to the console only: a dev .env with NTFY_TOPIC or
+# OPERATOR_EMAIL must not buzz a real phone every time the gate runs.
 SMOKE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/smoke-$(basename "$ROOT").XXXXXX")"
 WEB_LOG="${SMOKE_TMP}/web.log"
 WORKER_LOG="${SMOKE_TMP}/worker.log"
 export STORAGE_DRIVER=local STORAGE_LOCAL_DIR="${SMOKE_TMP}/storage"
 export LLM_ENABLED=false LLM_API_KEY=""
+export NTFY_TOPIC="" OPERATOR_EMAIL=""
 
 # Refuse to run against a server we did not start. Otherwise a stale process
 # left on this port answers the health check and the gate reports on the wrong
@@ -242,6 +245,14 @@ E2E_CRON_SECRET="$SMOKE_CRON_SECRET" E2E_EMAIL_WEBHOOK_SECRET="$SMOKE_WEBHOOK_SE
   echo "✗ the journey failed (both processes still up)." >&2
   exit 1
 }
+
+# Operator notifications work in the BUILT app: sign-up wrote a low-priority
+# notification row (held for the digest) and said so. Catches a missing
+# migration or a package the standalone bundle failed to trace.
+if ! grep -q '\[notify\] held low via console: "New sign-up' "$WEB_LOG"; then
+  echo "✗ sign-up did not record an operator notification (see web log)." >&2
+  exit 1
+fi
 
 # A worker that died mid-run may still have let the journey pass (e.g. it
 # finished the one job and then crashed). That is a failure too.

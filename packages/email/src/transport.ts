@@ -17,6 +17,12 @@ export interface RawMail {
 
 let transporter: Transporter | undefined;
 
+export const SMTP_TIMEOUTS = {
+  connectionTimeout: 30_000,
+  greetingTimeout: 30_000,
+  socketTimeout: 30_000,
+} as const;
+
 export function smtpConfigured(): boolean {
   return Boolean(env().SMTP_HOST);
 }
@@ -38,6 +44,10 @@ function transport(): Transporter {
     // on 465 needs `secure`. STARTTLS on 587 is negotiated automatically.
     secure: e.SMTP_SECURE,
     auth: e.SMTP_USER ? { user: e.SMTP_USER, pass: e.SMTP_PASS } : undefined,
+    // nodemailer's defaults are 2 min to connect and 10 min of socket
+    // silence: a hung relay would hold a request, a job or an operator alert
+    // for that long. Fail in 30s instead; jobs retry, the guard records it.
+    ...SMTP_TIMEOUTS,
   });
   return transporter;
 }

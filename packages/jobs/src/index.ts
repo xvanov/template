@@ -8,7 +8,9 @@ export {
 } from "./handlers";
 export {
   createWorker,
+  isFinalFailure,
   processJob,
+  reportFinalFailure,
   ownerOf,
   SKIPPED_ORG_GONE,
   type JobLike,

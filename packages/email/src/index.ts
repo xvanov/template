@@ -20,6 +20,7 @@
  * Every message goes through @repo/outbound's guard. The raw transport lives in
  * ./transport.ts and is not exported; do not add another way to reach SMTP.
  */
+import { env } from "@repo/env";
 import { deliver, type DeliveryResult } from "@repo/outbound";
 
 import { smtpConfigured, transmit } from "./transport";
@@ -85,6 +86,30 @@ export function sendAuthMail(
       authMail: true,
     },
     // The guard passes the address it checked; send to that, never mail.to.
+    (to) => transmit({ ...mail, to }),
+  );
+}
+
+/**
+ * For packages/notify ONLY: mail to the operator. There is no `to`: it always
+ * goes to OPERATOR_EMAIL, so this cannot be pointed at anyone else. Exempt
+ * from the safe-mode allowlist and the per-recipient cap because the guard
+ * verifies that recipient (see `operator` in @repo/outbound). Never on behalf
+ * of a tenant: no organizationId, so no tenant's activity log shows it. With
+ * OPERATOR_EMAIL unset it is recorded as blocked (INVALID_RECIPIENT).
+ */
+export function sendOperatorMail(
+  mail: Omit<Mail, "to">,
+  purpose: `operator.${string}`,
+): Promise<SendResult> {
+  return deliver(
+    {
+      channel: "email",
+      recipient: env().OPERATOR_EMAIL ?? "",
+      subject: mail.subject,
+      purpose,
+      operator: true,
+    },
     (to) => transmit({ ...mail, to }),
   );
 }
