@@ -45,10 +45,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
+      # Turbo's local cache, so packages a change cannot affect replay instead
+      # of re-running (typecheck alone grew 16s → 44s as packages were added).
+      # Safe: packages have no build step, but turbo still hashes each
+      # dependency's files into its dependents (verified: editing
+      # packages/env changes the hash of web#typecheck). Measured on 4 cores:
+      # cold 43s, apps/web edit 4s, packages/ai edit 26s. ~200KB per run
+      # (logs only); entries untouched for 14 days are pruned before saving.
+      # A PR restores main's latest cache through the restore-keys prefix.
+      - uses: actions/cache@v4
+        with:
+          path: .turbo/cache
+          key: turbo-static-${{ runner.os }}-${{ github.sha }}
+          restore-keys: turbo-static-${{ runner.os }}-
       - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test
+      - if: always()
+        run: find .turbo/cache -type f -mtime +14 -delete 2>/dev/null || true
 
   # ── production ops scripts ────────────────────────────────────────────
   # shellcheck + the migration guard's unit test + a real backup → restore round trip (scripts/backup.sh and
@@ -112,9 +127,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cp .env.example .env
+      # cleanup: false — removing the builder (and its GBs of state) took
+      # 13–16s in the post step, on a runner that is thrown away anyway.
       - uses: docker/setup-buildx-action@v3
+        with:
+          cleanup: false
       # bake-action (not a bare `run: docker buildx bake`) because it hands the
       # Actions cache token to buildx; `type=gha` cannot authenticate without it.
+      #
+      # In practice the `npm ci` layer misses on almost every PR: it is keyed
+      # on the pruned lockfile, every package.json AND schema.prisma, and
+      # #5 #7 #8 #9 #10 #11 each changed at least one. So each run builds
+      # node_modules and then EXPORTS it (~1GB, mode=max). Measured locally on
+      # 4 cores, #11 built from #10's cache: npm ci 17s, next build 16s, cache
+      # export 47s (gzip). compression=zstd: export 18s, total 84s → 58s, and
+      # ~10% smaller blobs (the repo is over the 10GB Actions cache quota, so
+      # GitHub evicts). ignore-error: a cache-service hiccup must not fail CI.
       - uses: docker/bake-action@v6
         with:
           source: .
@@ -122,6 +150,6 @@ jobs:
           targets: web,worker
           set: |
             web.cache-from=type=gha,scope=web
-            web.cache-to=type=gha,scope=web,mode=max
+            web.cache-to=type=gha,scope=web,mode=max,compression=zstd,ignore-error=true
             worker.cache-from=type=gha,scope=worker
-            worker.cache-to=type=gha,scope=worker,mode=max
+            worker.cache-to=type=gha,scope=worker,mode=max,compression=zstd,ignore-error=true
