@@ -1,6 +1,6 @@
 name: setup
 description: >-
-  Node 22 with node_modules restored from cache. `npm ci` runs only when the
+  Node 22 with node_modules restored from cache. Installs only when the
   lockfile (or Node version) changed; then the Prisma client is generated.
 
 runs:
@@ -24,10 +24,29 @@ runs:
           apps/*/node_modules
           packages/*/node_modules
         key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+        # Nearly every feature PR changes the lockfile, so the exact key missed
+        # on every PR (and again on main after the merge: a PR's cache is not
+        # visible to main). A cold `npm ci` was ~25s of the setup step. Fall
+        # back to the newest node_modules for the same Node version instead.
+        restore-keys: |
+          node-modules-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-
 
+    # Exact hit: nothing to do. Partial hit: `npm install` brings the restored
+    # tree in line with the lockfile, fetching only what changed (`npm ci`
+    # would delete node_modules first). Measured on 4 cores, #10's tree → #11's
+    # lockfile: 2s vs 12s, and the same package set as a clean `npm ci`. The
+    # diff check keeps `npm ci`'s guarantee: a lockfile out of sync with
+    # package.json fails here instead of being silently rewritten.
     - if: steps.nm.outputs.cache-hit != 'true'
       shell: bash
-      run: npm ci --no-audit --fund=false
+      run: |
+        if [ -d node_modules ]; then
+          npm install --no-audit --fund=false
+          git diff --exit-code -- package-lock.json \
+            || { echo "::error::package-lock.json is out of sync with package.json — run npm install and commit it"; exit 1; }
+        else
+          npm ci --no-audit --fund=false
+        fi
 
     # Always: the generated client lives outside node_modules and is gitignored.
     - shell: bash
