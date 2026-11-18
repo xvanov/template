@@ -26,8 +26,8 @@ import {
   setItemDoneInput,
 } from "@repo/domain";
 import { enqueue } from "@repo/jobs";
-import { queueAppPush } from "@repo/jobs"; // @module:push-mobile
 
+import { afterItemCreated } from "../item-events";
 import { createTRPCRouter, orgProcedure, rateLimited } from "../trpc";
 
 export const itemsRouter = createTRPCRouter({
@@ -65,10 +65,7 @@ export const itemsRouter = createTRPCRouter({
       const item = await ctx.db.$transaction((tx) =>
         createItem(tx, actor(ctx), input, (a, o) => ctx.audit(a, o, tx)),
       );
-      // @module:push-mobile
-      // Tell teammates' phones (a no-op while mobile push is off).
-      await queueAppPush(ctx.organizationId, { kind: "item", id: item.id });
-      // @end
+      await afterItemCreated(ctx.organizationId, item.id);
       return item;
     }),
 

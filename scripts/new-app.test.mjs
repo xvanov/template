@@ -16,6 +16,7 @@ test("expressions: and, or, not", () => {
   assert.equal(evalExpr("ai,agent", sel("ai"), "t"), false);
   assert.equal(evalExpr("agent|ai", sel("ai"), "t"), true);
   assert.equal(evalExpr("!ai", sel(), "t"), true);
+  assert.equal(evalExpr("template", sel("ai"), "t"), false);
   assert.throws(() => evalExpr("nope", sel(), "t"), /unknown module/);
 });
 
@@ -38,6 +39,26 @@ test("inline and block markers, any comment style, nested", () => {
   assert.equal(
     applyMarkers(src, sel("ai"), "t").text,
     ["keep", "kept", "in ai", "tail"].join("\n"),
+  );
+});
+
+test("malformed markers are an error", () => {
+  assert.throws(
+    () => applyMarkers("// @module:ai\nx\n// @end:agent", sel(), "t"),
+    /closes @module:ai/,
+  );
+  assert.throws(() => applyMarkers("x // @module:nope", sel(), "t"), /unknown/);
+  assert.throws(
+    () => applyMarkers("a @module:ai b", sel(), "t"),
+    /unrecognised/,
+  );
+  assert.throws(
+    () => applyMarkers("apps/x # @module:ai", sel(), ".dockerignore"),
+    /not a comment/,
+  );
+  assert.throws(
+    () => applyMarkers("A=1 # @module:ai", sel(), ".env.example"),
+    /not a comment/,
   );
 });
 
@@ -69,7 +90,18 @@ test("migrations lose exactly the statements naming removed tables", () => {
   const out = pruneMigration(sql, ["b"], "t");
   assert.match(out, /CREATE TABLE "a"/);
   assert.doesNotMatch(out, /"b"/);
-  assert.throws(() => pruneMigration('$$ "b" $$', ["b"], "t"), /\$\$/);
+  assert.throws(() => pruneMigration('$$ "b" $$', ["b"], "t"), /dollar/);
+  // A ";" in a comment does not end a statement; two statements on a line.
+  const tricky = [
+    '-- drop "b"; then "a"',
+    'CREATE TABLE "a" ("id" TEXT); CREATE TABLE "b" ("id" TEXT); -- both;',
+    '/* ; */ CREATE INDEX "i" ON "a"(\'x;y\');',
+    "",
+  ].join("\n");
+  const kept = pruneMigration(tricky, ["b"], "t");
+  assert.match(kept, /CREATE TABLE "a"/);
+  assert.match(kept, /CREATE INDEX "i" ON "a"\('x;y'\);/);
+  assert.doesNotMatch(kept, /CREATE TABLE "b"/);
 });
 
 test("dependencies come along; --without drops what needs it", () => {

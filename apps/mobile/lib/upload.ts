@@ -1,5 +1,5 @@
 /**
- * File bytes to the server's /api/media/* routes (CLAUDE.md rule 1), with
+ * File bytes to the server's /api/media/* routes (docs/guide.md rule 1), with
  * progress. The session cookie goes along by hand: React Native has no
  * cookie jar (same as the tRPC link in app/_layout.tsx).
  *

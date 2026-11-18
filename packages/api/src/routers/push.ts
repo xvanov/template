@@ -19,7 +19,8 @@ import { z } from "zod";
 import { parseRecipient } from "@repo/outbound";
 import { mobilePushEnabled, sendMobilePush } from "@repo/push-mobile";
 
-import { DomainRuleError, ForbiddenError } from "../errors";
+import { DomainRuleError } from "../errors";
+import { ForbiddenError } from "../errors"; // @module:agent
 import { createTRPCRouter, orgProcedure, rateLimited } from "../trpc";
 
 const tokenInput = z
@@ -65,8 +66,10 @@ export const pushRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // @module:agent
       if (ctx.apiKey)
         throw new ForbiddenError("Devices are registered from the app.");
+      // @end
       const mine = {
         token: input.token,
         organizationId: ctx.organizationId,

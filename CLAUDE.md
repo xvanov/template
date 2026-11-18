@@ -15,5 +15,6 @@ Gates — all must be green before anything is done:
 ```bash
 make typecheck && make lint && make test   # make test needs Postgres: make up
 make smoke                                 # production build, booted, driven in a browser
+scripts/check-profiles.sh                  # every profile still generates (seconds; in CI)
 scripts/test-profiles.sh web               # a generated app still passes its gates (any profile; none = all)
 ```

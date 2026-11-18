@@ -8,6 +8,7 @@
     "scripts/new-app.sh",
     "scripts/new-app.test.mjs",
     "scripts/test-profiles.sh",
+    "scripts/check-profiles.sh",
     ".github/workflows/profiles.yml"
   ],
   "sharedPaths": [
@@ -23,6 +24,13 @@
     "packages/evals/baselines/",
     "packages/rag/test/",
     "packages/api/test/docs.int.test.ts"
+  ],
+  "templateLeftovers": [
+    "scripts/new-app",
+    "test-profiles\\.sh",
+    "check-profiles\\.sh",
+    "template/modules\\.json",
+    "@module:"
   ],
   "modules": {
     "core": {
@@ -153,7 +161,9 @@
         "/api/mcp",
         "/app/agent",
         "trpc\\.agent\\.",
-        "trpc\\.apiKeys\\."
+        "trpc\\.apiKeys\\.",
+        "\\bApiKeyIdentity\\b",
+        "\\.apiKey\\b"
       ]
     },
     "rag": {
@@ -211,7 +221,11 @@
         "/app/inbox",
         "trpc\\.inbox\\.",
         "inbound\\.process",
-        "email-inbound"
+        "email-inbound",
+        "fetchReceivedEmail",
+        "downloadReceivedAttachment",
+        "\\binboundEmail\\b",
+        "\\bReceivedEmail\\b"
       ]
     },
     "sms": {
@@ -252,6 +266,7 @@
         "EXPO_OWNER",
         "EXPO_PUBLIC_DEV_MAIL_INBOX_URL"
       ],
+      "turboTasks": ["mobile#lint"],
       "leftovers": ["apps/mobile", "@better-auth/expo", "make mobile"],
       "npmDeps": {
         "packages/auth/package.json": ["@better-auth/expo"]
@@ -336,7 +351,13 @@
         ".github/workflows/desktop.yml",
         ".github/actions/desktop-setup/"
       ],
-      "leftovers": ["apps/desktop", "make desktop", "desktop\\.feed", "tauri"]
+      "leftovers": [
+        "apps/desktop",
+        "make desktop",
+        "desktop\\.feed",
+        "tauri",
+        "\\bTauri\\b"
+      ]
     },
     "ml": {
       "description": "Python sidecar (uv): training, experiments, vLLM serving; the worker's ml.predict bridge",

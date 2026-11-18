@@ -1,6 +1,6 @@
 /**
  * desktop.feed: what the desktop shell notifies about. A tenant sees only its
- * own events (the CLAUDE.md org-isolation pattern), the first poll replays
+ * own events (the docs/guide.md org-isolation pattern), the first poll replays
  * nothing, and the cursor moves forward.
  */
 import { randomBytes } from "node:crypto";

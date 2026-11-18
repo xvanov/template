@@ -1,5 +1,5 @@
 /**
- * push.*: device registration is per tenant and per user (the CLAUDE.md
+ * push.*: device registration is per tenant and per user (the docs/guide.md
  * org-isolation pattern), idempotent, and a token moves to whoever registers
  * it last (one install, one owner).
  */

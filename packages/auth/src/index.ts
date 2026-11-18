@@ -222,9 +222,11 @@ function build() {
           },
         },
       }),
+      // @module:mobile
       // MUST stay last: the Expo plugin wraps responses so the native client can
       // pull the session cookie out of the deep-link callback.
-      expo(), // @module:mobile
+      expo(),
+      // @end
     ],
   });
 }

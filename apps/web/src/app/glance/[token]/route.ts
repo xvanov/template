@@ -3,7 +3,7 @@
  * Meta Ray-Ban Display glasses (installed there as a Web App; see
  * apps/mobile/modules/glasses/README.md). Also fine in any browser.
  *
- * A route handler, not a page or tRPC (CLAUDE.md rule 1): the caller is
+ * A route handler, not a page or tRPC (docs/guide.md rule 1): the caller is
  * authenticated by a secret in the URL, not a session, because typing a
  * password on the glasses is impractical. The secret is a glance link
  * (packages/api/src/glance.ts): it can read this snapshot and nothing else,

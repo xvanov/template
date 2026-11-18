@@ -2,7 +2,7 @@
  * Speech to text: a multipart `file` (audio) in, `{ text, seconds }` out.
  * Used by the mobile app's dictate button.
  *
- * A route, not tRPC, because the body is file bytes (CLAUDE.md rule 1).
+ * A route, not tRPC, because the body is file bytes (docs/guide.md rule 1).
  * Same rules as an upload: signed in, tenant from the session, an audio
  * allow-list and size cap before a byte goes anywhere. The audio is NOT
  * stored: it goes to the transcription provider (packages/ai transcribe(),

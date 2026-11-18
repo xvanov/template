@@ -8,9 +8,16 @@ of it is copied into a generated app.
 
 - **`template/modules.json`** — every module: what it is, what it `requires`
   (pulled in automatically), the `paths` it owns (deleted with it), its
-  database `tables`, its `env` keys, npm deps and root scripts it adds to
-  shared `package.json` files, and `leftovers`: regexes that must match
-  nothing once it is removed. `profiles` are named module sets.
+  database `tables`, its `env` keys (dropped from `turbo.json` and from the
+  `envJson` files such as `eas.json`), `npmDeps` and root `scripts` it adds
+  to shared `package.json` files, `turboTasks` it adds to `turbo.json`
+  (`mobile#lint`), and `leftovers`: regexes that must match nothing once it
+  is removed (its env keys, and for a module that owns `apps/<x>/` the
+  `"x#` / `-w x` / `--filter=x` forms, are checked too). Top level:
+  `profiles` (named module sets), `templateOnly` (never copied),
+  `sharedPaths` (a path kept while ANY of several modules is: the mobile
+  device screen), `templateLeftovers` (the template's own machinery must not
+  be mentioned in an app) and `leftoverIgnore` (fixture prose).
 - **Markers** — for shared files that a module adds lines to (routers,
   job registry, env schema, nav, `.env.example`, Makefile, CI, docs). Any
   comment style works (`//`, `#`, `--`, `<!-- -->`, `{/* */}`):
@@ -23,8 +30,13 @@ of it is copied into a generated app.
   ```
 
   The expression after `@module:` is a module id, `a,b` (both present), `a|b`
-  (either) or `!a` (only without a). Blocks nest. In the generated app the
-  markers of kept code are stripped, so it carries no trace of them.
+  (either) or `!a` (only without a); `template` marks the template's own
+  machinery (cut from every app: the `check-profiles` step in `ci.yml`).
+  Blocks nest; `@end:<expr>`, if labelled, must match its opener. In ignore
+  files and `.env` files `#` is a comment only at the start of a line, so
+  only block markers are allowed there. Anything malformed (an unknown id,
+  an unclosed block, a stray `@module:`) stops the generator. In the
+  generated app the markers of kept code are stripped.
 
 - **`scripts/new-app.mjs`** — no dependencies, runs before `npm install`.
   It copies the files git would commit, deletes unselected modules' paths,
@@ -68,14 +80,31 @@ can; when a migration mixes modules, list the tables in `tables`. A
 4. Add `leftovers` patterns for the module's names (package, routes,
    tables), then run `scripts/test-profiles.sh` for the profiles without it.
 
+## Ports
+
+`--port-base 3400` moves the web port to 3400 and every other default port
+(Postgres 5442, Redis 6389, the mail catchers 1035/8035/1036/8036, Expo
+8091/8092, the smoke gate's ranges) by the same offset, in every text file,
+so two generated apps (or an app and the template) run side by side. Code
+reads `WEB_PORT` (`next dev`/`next start` through
+`apps/web/scripts/with-root-env.mjs`, docker compose); the new numbers are
+also written into the defaults and docs. `.template.json` records the map.
+
 ## Testing
+
+`scripts/check-profiles.sh` (in `ci.yml`, ~4 s) runs the generator's unit
+tests and generates every profile without install or git, which fails on a
+broken marker or a leftover, and applies `web`'s trimmed migrations to an
+empty database to compare them with its schema.
 
 `scripts/test-profiles.sh [profile ...]` generates each profile into a temp
 dir and runs format, typecheck, lint, unit + integration tests, the
 migration check, and `make smoke` for `web` and `hackathon` (set
 `SMOKE_PROFILES=all` for every one). `.github/workflows/profiles.yml` runs
 it in CI, one job per profile: on demand, weekly, and on changes to
-`template/` or the scripts.
+`template/` or the scripts. The generator copies what git tracks (committed
+or staged): `git add` new files first. An app generated from uncommitted
+changes says `"dirty": true` in its `.template.json`.
 
 ## Design decisions
 

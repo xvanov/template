@@ -8,8 +8,10 @@
 **/test-results
 **/playwright-report
 packages/db/generated
-apps/mobile/android # @module:mobile
-apps/mobile/ios # @module:mobile
+# @module:mobile
+apps/mobile/android
+apps/mobile/ios
+# @end
 storage
 # deploy state + database dumps: never in a build context (or an image)
 .deploy

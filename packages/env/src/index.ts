@@ -383,7 +383,7 @@ const serverSchema = z.object({
   // @end
 
   // ── Outbound messages (packages/outbound) ──────────────────────────────
-  // Every email/SMS/push passes ONE guard. See CLAUDE.md "Outbound messages".
+  // Every email/SMS/push passes ONE guard. See docs/guide.md "Outbound messages".
 
   /**
    * Safe mode: only allowlisted recipients get real messages; everyone else is
@@ -448,7 +448,7 @@ const serverSchema = z.object({
   // ── Operator notifications (packages/notify) ───────────────────────────
   // Alerts for whoever RUNS the app (a job failed for good, a tenant hit the AI
   // cap). Push via ntfy when NTFY_TOPIC is set, else email to OPERATOR_EMAIL,
-  // else the console. See CLAUDE.md "Operator notifications".
+  // else the console. See docs/guide.md "Operator notifications".
 
   /** ntfy server. Self-host it, or use the public one with a long random topic. */
   NTFY_URL: z.preprocess(

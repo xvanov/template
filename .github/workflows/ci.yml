@@ -60,6 +60,13 @@ jobs:
           path: .turbo/cache
           key: turbo-static-${{ runner.os }}-${{ github.sha }}
           restore-keys: turbo-static-${{ runner.os }}-
+      # @module:template
+      # Every profile of scripts/new-app.sh still generates (markers, leftovers,
+      # migration trimming), and web's trimmed migrations match its schema. ~4s.
+      - run: bash scripts/check-profiles.sh
+        env:
+          CHECK_DB_URL: postgresql://postgres:postgres@localhost:5432
+      # @end
       - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck

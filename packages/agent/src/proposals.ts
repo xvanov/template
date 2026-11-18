@@ -122,7 +122,8 @@ export async function createProposal(
 }
 
 export type ApproveResult =
-  { status: "applied"; result: unknown } | { status: "failed"; error: string };
+  | { status: "applied"; tool: string; result: unknown }
+  | { status: "failed"; error: string };
 
 /** Thrown inside the transaction when another decision got there first. */
 class LostRace extends Error {}
@@ -196,7 +197,7 @@ export async function approveProposal(
         },
         tx,
       );
-      return { status: "applied" as const, result };
+      return { status: "applied" as const, tool: tool.name, result };
     });
   } catch (err) {
     if (err instanceof LostRace) {

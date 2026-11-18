@@ -4,14 +4,15 @@
  *
  *   node scripts/new-app.mjs <target-dir> [--profile web] [--with a,b] [--without c]
  *                            [--name "My App"] [--scheme myapp] [--bundle-id com.me.myapp]
- *                            [--no-install] [--no-git]
+ *                            [--port-base 3400] [--no-install] [--no-git]
  *   node scripts/new-app.mjs --list
  *
  * What it does, in order:
  *   1. resolves the module set: the profile, plus --with, minus --without, plus
  *      every dependency of what is left (template/modules.json)
- *   2. copies the template's files as git sees them (tracked + untracked that
- *      are not ignored; no .git, no node_modules) into an EMPTY target dir
+ *   2. copies the files git tracks (committed or staged, as they are on
+ *      disk; no untracked files, no .git, no node_modules) into a temporary
+ *      directory next to the target, which must be empty or absent
  *   3. deletes the paths owned by each module that was not selected
  *   4. cuts every marker block for a missing module out of every text file
  *      (syntax below) and strips the markers of the kept ones
@@ -19,13 +20,18 @@
  *      modules' npm deps and root scripts, their turbo globalEnv keys
  *   6. renames (name, scheme, bundle id, desktop identifier), writes the new
  *      app's CLAUDE.md / README.md / .template.json
- *   7. checks nothing of a removed module is left (its `leftovers` patterns)
- *   8. npm install, prettier, git init + first commit; prints next steps
+ *   7. --port-base: shifts every default port by the same offset
+ *   8. checks nothing of a removed module is left (its `leftovers` patterns)
+ *   9. npm install, prettier, git init + first commit, then moves the
+ *      directory into place (a failure leaves nothing behind)
  *
  * Marker syntax (any comment style: //  #  --  <!-- -->  {/* *\/}  /* *\/):
  *   a line that is ONLY `// @module:sms` opens a block, `// @end` closes it
  *   code followed by `// @module:sms` at the END of the line = that line only
- *   expression: `a,b` = all of them, `a|b` = any, `!a` = only WITHOUT a
+ *   expression: `a,b` = all of them, `a|b` = any, `!a` = only WITHOUT a;
+ *   `template` = the template's own machinery, cut from every app
+ *   `// @end:<expr>` may name its block, and must then match the opener
+ *   in ignore files and .env files only whole-line comments are markers
  *
  * No dependencies: plain Node >= 22, so it runs before `npm install`.
  */
@@ -47,7 +53,7 @@ const BLOCK_START = new RegExp(
   String.raw`^\s*${OPEN}\s*@module:${EXPR}\s*${CLOSE}\s*$`,
 );
 const BLOCK_END = new RegExp(
-  String.raw`^\s*${OPEN}\s*@end(?::[!A-Za-z0-9_,|-]+)?\s*${CLOSE}\s*$`,
+  String.raw`^\s*${OPEN}\s*@end(?::${EXPR})?\s*${CLOSE}\s*$`,
 );
 const INLINE = new RegExp(
   String.raw`\s*${OPEN}\s*@module:${EXPR}\s*${CLOSE}\s*$`,
@@ -60,6 +66,8 @@ export function evalExpr(expr, selected, where) {
     group.split(",").every((term) => {
       const neg = term.startsWith("!");
       const id = neg ? term.slice(1) : term;
+      // `template`: the template's own machinery, cut from every app.
+      if (id === "template") return neg;
       if (!MANIFEST.modules[id])
         throw new Error(`${where}: unknown module "${id}" in @module:${expr}`);
       return neg ? !selected.has(id) : selected.has(id);
@@ -68,41 +76,61 @@ export function evalExpr(expr, selected, where) {
 }
 
 /**
- * Apply markers to one file's text. Returns { text, changed } or throws on an
- * unbalanced block. `keepMarkers` leaves the markers of kept code in place
- * (used by --check on the template itself).
+ * Files where `#` starts a comment only at the beginning of a line: an
+ * end-of-line marker there would become part of the pattern or value.
  */
-export function applyMarkers(
-  text,
-  selected,
-  where,
-  { keepMarkers = false } = {},
-) {
+function lineCommentsOnly(where) {
+  const base = path.basename(where);
+  if (/^\.[a-z]*ignore$/.test(base)) return "ignore";
+  if (/^\.env/.test(base)) return "env";
+  return null;
+}
+
+/**
+ * Apply markers to one file's text. Returns { text, changed } or throws on
+ * anything malformed: an unbalanced block, an `@end:<label>` that does not
+ * match its opener, an unknown module id, a marker the parser does not
+ * recognise, or an end-of-line marker where `#` is not a comment.
+ */
+export function applyMarkers(text, selected, where) {
   if (!ANY_MARKER.test(text)) return { text, changed: false };
   const out = [];
-  const stack = []; // { keep, line }
-  const lines = text.split("\n");
-  lines.forEach((line, i) => {
+  const stack = []; // { keep, line, expr }
+  const kind = lineCommentsOnly(where);
+  text.split("\n").forEach((line, i) => {
     const at = `${where}:${i + 1}`;
     const start = line.match(BLOCK_START);
     if (start) {
       const keep = evalExpr(start[1], selected, at);
-      stack.push({ keep, line: i + 1 });
-      if (keepMarkers && stack.every((s) => s.keep)) out.push(line);
+      stack.push({ keep, line: i + 1, expr: start[1] });
       return;
     }
-    if (BLOCK_END.test(line)) {
+    const end = line.match(BLOCK_END);
+    if (end) {
       if (!stack.length)
         throw new Error(`${at}: @end without an open @module block`);
-      if (keepMarkers && stack.every((s) => s.keep)) out.push(line);
-      stack.pop();
+      const open = stack.pop();
+      if (end[1] && end[1] !== open.expr)
+        throw new Error(
+          `${at}: @end:${end[1]} closes @module:${open.expr} (line ${open.line})`,
+        );
       return;
     }
-    if (!stack.every((s) => s.keep)) return;
     const inline = line.match(INLINE);
-    if (inline && line.slice(0, inline.index).trim()) {
+    const isInline = inline && line.slice(0, inline.index).trim();
+    if (isInline) {
+      if (kind === "ignore" || (kind === "env" && !/^\s*#/.test(line)))
+        throw new Error(
+          `${at}: an end-of-line marker is not a comment in this file; use a block (# @module:<id> … # @end)`,
+        );
+      evalExpr(inline[1], selected, at); // unknown ids fail even in cut blocks
+    } else if (line.includes("@module:")) {
+      throw new Error(`${at}: unrecognised @module marker: ${line.trim()}`);
+    }
+    if (!stack.every((s) => s.keep)) return;
+    if (isInline) {
       if (!evalExpr(inline[1], selected, at)) return;
-      out.push(keepMarkers ? line : line.slice(0, inline.index).trimEnd());
+      out.push(line.slice(0, inline.index).trimEnd());
       return;
     }
     out.push(line);
@@ -118,42 +146,66 @@ export function applyMarkers(
 /**
  * Remove the statements of a Prisma migration that name any of `tables`
  * (CREATE/ALTER TABLE, CREATE INDEX ... ON, a foreign key REFERENCES), with
- * the comment lines directly above each. Statements end with `;` at the end
- * of a line, which is how Prisma writes them; a migration with a `$$` body
- * that touches a removed table is refused rather than guessed at.
+ * the comments and blank lines in front of each. Statements are split at
+ * `;` outside strings, quoted names and comments, so a `;` in a comment or
+ * two statements on one line are handled. A dollar-quoted body (`$$ ... $$`)
+ * in a migration that touches a removed table is refused, not guessed at.
  */
 export function pruneMigration(text, tables, where) {
   if (!tables.length) return text;
-  const named = (stmt) => tables.some((t) => stmt.includes(`"${t}"`));
+  const named = (sql) => tables.some((t) => sql.includes(`"${t}"`));
   if (!named(text)) return text;
-  if (text.includes("$$"))
+  if (/\$[A-Za-z_]*\$/.test(text))
     throw new Error(
-      `${where}: cannot split a $$ body; give the module its own migration`,
+      `${where}: cannot split a dollar-quoted body; give the module its own migration`,
     );
-  const out = [];
-  let pending = []; // comments + the statement being read
-  let inStmt = false;
-  for (const line of text.split("\n")) {
-    pending.push(line);
-    const t = line.trim();
-    if (!inStmt && (t === "" || t.startsWith("--"))) {
-      if (t === "") {
-        out.push(...pending);
-        pending = [];
-      }
+  const chunks = []; // { text, sql }: sql = the chunk without comments
+  let start = 0;
+  let sql = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "-" && text[i + 1] === "-") {
+      const nl = text.indexOf("\n", i);
+      i = (nl < 0 ? text.length : nl) - 1;
       continue;
     }
-    inStmt = true;
-    if (t.endsWith(";")) {
-      const stmt = pending.filter((l) => !l.trim().startsWith("--")).join("\n");
-      if (!named(stmt)) out.push(...pending);
-      else if (out.length && out.at(-1).trim() === "") out.pop(); // its blank separator
-      pending = [];
-      inStmt = false;
+    if (c === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      if (close < 0) throw new Error(`${where}: unclosed /* comment`);
+      i = close + 1;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      let j = i + 1;
+      for (; j < text.length; j++) {
+        if (text[j] === c && text[j + 1] === c) j++;
+        else if (text[j] === c) break;
+      }
+      if (j >= text.length) throw new Error(`${where}: unclosed ${c} quote`);
+      sql += text.slice(i, j + 1);
+      i = j;
+      continue;
+    }
+    sql += c;
+    if (c === ";") {
+      // The rest of the line (spaces, a trailing comment) goes with it.
+      const rest = /^[ \t]*(--[^\n]*)?\n?/.exec(text.slice(i + 1))[0];
+      const end = i + 1 + rest.length;
+      chunks.push({ text: text.slice(start, end), sql });
+      start = end;
+      i = end - 1;
+      sql = "";
     }
   }
-  out.push(...pending);
-  return out.join("\n");
+  if (named(sql))
+    throw new Error(
+      `${where}: a statement without a closing ";" names a removed table`,
+    );
+  chunks.push({ text: text.slice(start), sql: "" });
+  return chunks
+    .filter((c) => !named(c.sql))
+    .map((c) => c.text)
+    .join("");
 }
 
 // ── module selection ─────────────────────────────────────────────────────
@@ -205,12 +257,12 @@ export function resolveModules({
 }
 
 // ── files ────────────────────────────────────────────────────────────────
+/** Files git tracks (committed or staged), read from the working tree. */
 function templateFiles() {
-  const out = execFileSync(
-    "git",
-    ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-    { cwd: ROOT, maxBuffer: 1 << 28 },
-  ).toString();
+  const out = execFileSync("git", ["ls-files", "-z", "--cached"], {
+    cwd: ROOT,
+    maxBuffer: 1 << 28,
+  }).toString();
   return out
     .split("\0")
     .filter(Boolean)
@@ -239,7 +291,12 @@ function renames(opts) {
   const slug = slugify(name);
   const scheme = opts.scheme ?? slug.replace(/-/g, "");
   const bundleId = opts.bundleId ?? `com.example.${scheme}`;
-  return { name, slug, scheme, bundleId };
+  // A home-screen label: the name if short, else its first word (12 chars max).
+  const shortName = (name.length <= 12 ? name : name.split(/\s+/)[0]).slice(
+    0,
+    12,
+  );
+  return { name, shortName, slug, scheme, bundleId };
 }
 
 /** [file, from, to] — every one must apply, so a template edit cannot silently skip a rename. */
@@ -289,6 +346,21 @@ function renameEdits(r) {
       "apps/web/src/app/layout.tsx",
       'default: "App Template", template: "%s · App Template"',
       `default: ${JSON.stringify(r.name)}, template: ${JSON.stringify(`%s · ${r.name}`)}`,
+    ],
+    [
+      "apps/web/src/app/layout.tsx",
+      'description: "Web + mobile app template — Next.js, Expo, tRPC, Prisma."',
+      `description: ${JSON.stringify(r.name)}`,
+    ],
+    [
+      "apps/web/src/app/manifest.ts",
+      'description: "Web + mobile app template — Next.js, Expo, tRPC, Prisma."',
+      `description: ${JSON.stringify(r.name)}`,
+    ],
+    [
+      "apps/web/src/app/manifest.ts",
+      'short_name: "App"',
+      `short_name: ${JSON.stringify(r.shortName)}`,
     ],
     [
       "apps/web/src/app/manifest.ts",
@@ -357,6 +429,57 @@ function renameEdits(r) {
   ];
 }
 
+// ── ports ────────────────────────────────────────────────────────────────
+/** The template's default ports (web first), as written in its files. */
+const PORTS = [3200, 5442, 6389, 1035, 8035, 1036, 8036, 8091, 8092];
+/** Files whose numbers are test data or fixtures, not configuration. */
+const PORTS_SKIP = ["packages/evals/", "packages/rag/"];
+
+/**
+ * `--port-base 3400`: web on 3400 and every other default port (Postgres,
+ * Redis, the mail catchers, Expo) and the smoke gate's port ranges shifted
+ * by the same +200, in every text file (.env.example, compose, Makefile,
+ * scripts, code defaults, docs), so two generated apps run side by side.
+ */
+function shiftPorts(target, files, base) {
+  if (base === undefined) return null;
+  const offset = base - PORTS[0];
+  if (
+    !Number.isInteger(base) ||
+    PORTS.some((p) => p + offset < 1024 || p + offset > 65000)
+  )
+    throw new Error(
+      `--port-base ${base}: every port must stay within 1024-65000`,
+    );
+  if (offset === 0) return { web: base };
+  const re = new RegExp(
+    String.raw`(?<![\d.])(${PORTS.join("|")})(?![\d])`,
+    "g",
+  );
+  for (const f of files) {
+    if (
+      PORTS_SKIP.some((p) => matches(f, p)) ||
+      LOCKFILES.has(path.basename(f))
+    )
+      continue;
+    const p = path.join(target, f);
+    if (!fs.existsSync(p)) continue;
+    const buf = fs.readFileSync(p);
+    if (!isText(buf)) continue;
+    let text = buf.toString("utf8");
+    const before = text;
+    text = text.replace(re, (n) => String(Number(n) + offset));
+    // The smoke gate picks free ports in fixed ranges: `pick_port <base> <span>`.
+    if (f === "scripts/smoke.sh")
+      text = text.replace(
+        /pick_port (\d+) (\d+)\)/g,
+        (_, b, span) => `pick_port ${Number(b) + offset} ${span})`,
+      );
+    if (text !== before) fs.writeFileSync(p, text);
+  }
+  return Object.fromEntries(PORTS.map((p) => [p, p + offset]));
+}
+
 // ── main ─────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const opts = { withIds: [], withoutIds: [], install: true, git: true };
@@ -380,6 +503,7 @@ function parseArgs(argv) {
     else if (a === "--name") opts.name = val();
     else if (a === "--scheme") opts.scheme = val();
     else if (a === "--bundle-id") opts.bundleId = val();
+    else if (a === "--port-base") opts.portBase = Number(val());
     else if (a === "--no-install") opts.install = false;
     else if (a === "--no-git") opts.git = false;
     else if (a.startsWith("-")) throw new Error(`unknown option ${a}`);
@@ -407,6 +531,7 @@ function printList() {
 
 const USAGE = `usage: scripts/new-app.sh <target-dir> [--profile <name>] [--with a,b] [--without c,d]
                           [--name "My App"] [--scheme myapp] [--bundle-id com.me.myapp]
+                          [--port-base 3400]
                           [--no-install] [--no-git]
        scripts/new-app.sh --list`;
 
@@ -421,8 +546,16 @@ const LOCKFILES = new Set(["package-lock.json", "Cargo.lock", "uv.lock"]);
 /** Every removed module's `leftovers` patterns, searched in every kept text file. */
 export function findLeftovers(target, selected, files) {
   const hits = [];
-  for (const [id, m] of Object.entries(MANIFEST.modules)) {
+  const modules = Object.entries(MANIFEST.modules);
+  modules.push(["template", { leftovers: MANIFEST.templateLeftovers }]);
+  for (const [id, m] of modules) {
+    // An app the module owns (apps/<name>/): turbo task ids, workspace flags.
+    const apps = (m.paths ?? [])
+      .map((p) => /^apps\/([^/]+)\/$/.exec(p)?.[1])
+      .filter(Boolean)
+      .flatMap((a) => [`"${a}#`, `-w ${a}\\b`, `--filter=${a}\\b`]);
     const patterns = [
+      ...apps,
       ...(m.leftovers ?? []),
       ...(m.env ?? []).map((k) => `\\b${k}\\b`),
     ];
@@ -453,6 +586,8 @@ export function generate(opts) {
   if (fs.existsSync(target) && fs.readdirSync(target).length)
     throw new Error(`${target} is not empty — pick a new directory`);
   const r = renames({ ...opts, name: opts.name ?? path.basename(target) });
+  if (opts.portBase !== undefined && !Number.isInteger(opts.portBase))
+    throw new Error("--port-base needs a whole number, e.g. 3400");
   const removed = Object.keys(MANIFEST.modules).filter(
     (id) => !selected.has(id),
   );
@@ -621,8 +756,19 @@ export function generate(opts) {
     );
     written.push(to);
   }
+  // 7. ports: every default port moves by the same offset as the web port
+  const ports = shiftPorts(target, written, opts.portBase);
+
   let commit = "unknown";
+  let dirty = false;
   try {
+    dirty = Boolean(
+      execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
+        cwd: ROOT,
+      })
+        .toString()
+        .trim(),
+    );
     commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
       cwd: ROOT,
     })
@@ -637,6 +783,10 @@ export function generate(opts) {
         profile: opts.profile ?? "web",
         modules: [...selected],
         removed,
+        // Generated from uncommitted template changes: `template` alone does
+        // not say what this app came from.
+        ...(dirty ? { dirty: true } : {}),
+        ...(ports ? { ports } : {}),
       },
       null,
       2,
@@ -668,8 +818,24 @@ function main() {
     console.error(USAGE);
     process.exit(2);
   }
+  const final = path.resolve(opts.target);
+  if (fs.existsSync(final) && fs.readdirSync(final).length) {
+    console.error(`✗ ${final} is not empty — pick a new directory`);
+    process.exit(1);
+  }
+  // Built next to the target and moved into place only when everything
+  // (copy, checks, install, commit) worked: a failure leaves no half an app.
+  const target = path.join(
+    path.dirname(final),
+    `.${path.basename(final)}.partial-${process.pid}`,
+  );
+  fs.rmSync(target, { recursive: true, force: true });
   try {
-    const { target, selected } = generate(opts);
+    const { selected } = generate({
+      ...opts,
+      target,
+      name: opts.name ?? path.basename(final),
+    });
     if (opts.install) {
       console.log("→ npm install");
       run("npm", ["install", "--no-audit", "--fund=false"], target);
@@ -701,15 +867,19 @@ function main() {
         target,
       );
     }
-    const rel = path.relative(process.cwd(), target) || ".";
-    console.log(`\n✓ ${target}\n\nNext:\n  cd ${rel}`);
+    if (fs.existsSync(final)) fs.rmdirSync(final); // empty, checked above
+    fs.renameSync(target, final);
+    const rel = path.relative(process.cwd(), final) || ".";
+    const web = opts.portBase ?? 3200;
+    console.log(`\n✓ ${final}\n\nNext:\n  cd ${rel}`);
     if (!opts.install) console.log("  npm install");
     console.log("  ./scripts/setup.sh     # .env, postgres/redis, migrations");
-    console.log("  make dev               # → http://localhost:3200");
+    console.log(`  make dev               # → http://localhost:${web}`);
     if (selected.has("mobile"))
       console.log("  make mobile            # Expo dev server");
     console.log("  then fill in the Project section of CLAUDE.md");
   } catch (err) {
+    fs.rmSync(target, { recursive: true, force: true });
     console.error(`✗ ${err.message}`);
     process.exit(1);
   }

@@ -794,7 +794,8 @@ and `EXPO_PUBLIC_API_URL` as EAS environment variables per environment.
   disables devices reported `DeviceNotRegistered`. Tapping a push opens what
   `lib/push-route.ts` maps its `kind`/`id` to. Wired, via the `push.notify`
   job, one per event, idempotent per device: a teammate's new item (to the
-  org's other members with a device), a pending proposal (to the user it was
+  org's other members with a device; created in the app, over MCP, or by an
+  approved proposal: `afterItemCreated` in `packages/api/src/item-events.ts`), a pending proposal (to the user it was
   made for), a new inbound message (to the org's members with a device). Nothing is queued while `OUTBOUND_MOBILE_PUSH_ENABLED` is off.
   Receipts are asked for 15 minutes to 24 hours after sending, oldest first,
   a page at a time; one still missing after 24 hours (Expo has dropped it)
@@ -1189,8 +1190,18 @@ so there is nothing extra to configure for the phone.
 
 ## Renaming and trimming
 
-`scripts/new-app.sh` (in the template) already renamed the app and removed
-the modules it did not need. What it cannot do for you:
+The template's generator already renamed the app and removed the modules it
+did not need (the list is in `.template.json`). Two consequences:
+
+- **This app no longer tracks the template.** Its migrations are the
+  template's with the removed modules' statements cut out, so a later
+  template migration cannot be copied in verbatim: re-create the change in
+  this schema with `npm run db:migrate`. Template fixes come over by hand.
+- **Modules cannot be added later** by re-running the generator. To get one
+  back, generate a throwaway app with it and port the module's files and
+  marked lines (the template's module manifest lists them).
+
+What it cannot do for you:
 
 <!-- @module:mobile -->
 

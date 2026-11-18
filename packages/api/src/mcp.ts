@@ -2,7 +2,7 @@
  * The MCP server: this app's capabilities, for MCP clients (Claude Code,
  * Claude Desktop), over streamable HTTP at /api/mcp.
  *
- * Design (see CLAUDE.md, "Agents, proposals and MCP"):
+ * Design (see docs/guide.md, "Agents, proposals and MCP"):
  *  - Auth: a per-organization API key (`Authorization: Bearer tk_...`, see
  *    ./api-keys.ts), created and revoked by owners/admins in the app.
  *  - Every tool calls the SAME tRPC procedure the web app does, through a

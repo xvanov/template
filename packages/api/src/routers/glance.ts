@@ -15,12 +15,14 @@ import { createTRPCRouter, orgProcedure } from "../trpc";
 
 /** Links are made by people in the app, never by an API key (MCP). */
 const memberOnly = orgProcedure.use(({ ctx, next }) => {
+  // @module:agent
   if (ctx.apiKey) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "API keys cannot manage glance links.",
     });
   }
+  // @end
   return next();
 });
 

@@ -24,10 +24,10 @@ import {
 } from "@repo/security";
 
 export const WEBHOOK_LIMITS = {
-  /** Resend events and Twilio callbacks are a few KB. */
+  /** Provider events and callbacks are a few KB. */
   small: 256 * 1024,
-  /** Generic inbound email, base64 attachments included. */
-  inboundEmail: 15 * 1024 * 1024,
+  /** Generic inbound email, base64 attachments included. */ // @module:inbound
+  inboundEmail: 15 * 1024 * 1024, // @module:inbound
 } as const;
 
 /** Failed signatures one IP may send per minute per webhook before 429s. */

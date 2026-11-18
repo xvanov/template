@@ -29,8 +29,9 @@ Fine-tune with `--with sms,inbound` or `--without ops`; dependencies come
 along automatically. `./scripts/new-app.sh --list` shows every profile and
 module. The generator copies the template, cuts the unused modules (code,
 tables, env vars, CI jobs, docs), renames the app (`--name`, `--scheme`,
-`--bundle-id`), installs, and makes the first git commit. Then fill in the
-Project section of the new app's `CLAUDE.md`.
+`--bundle-id`), gives it its own ports if you ask (`--port-base 3400`: web on
+3400, everything else shifted alongside), installs, and makes the first git
+commit. Then fill in the Project section of the new app's `CLAUDE.md`.
 
 ## Working on the template
 

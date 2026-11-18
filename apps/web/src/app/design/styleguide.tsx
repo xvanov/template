@@ -251,7 +251,7 @@ const invoiceColumns: DataTableColumn<Invoice>[] = [
   },
 ];
 
-// Client forms import from "zod/mini" by name (see CLAUDE.md "UI"): the same
+// Client forms import from "zod/mini" by name (see docs/guide.md "UI"): the same
 // validation as classic zod at a fraction of the browser bundle.
 const profileSchema = object({
   username: string().check(minLength(2, "At least 2 characters.")),

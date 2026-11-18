@@ -16,15 +16,19 @@ make demo            # setup if needed, infra, migrations, demo data, web + work
 ```
 
 `make demo` prints the URL and a login (`demo@example.com` / `demo-password`)
-that works at once: no sign-up, no email round trip. The workspace has items,
-a handbook indexed for search ("warranty", "reschedule"), and a customer email
-in the inbox. It all works with the AI off. Ctrl-C stops it; running it again
-RESETS the demo workspace (its items, documents and inbox go back to the
+that works at once: no sign-up, no email round trip. The workspace has:
+
+- items, and the background jobs that ran
+- a handbook indexed for search ("warranty", "reschedule") <!-- @module:rag -->
+- a customer email in the inbox <!-- @module:inbound -->
+
+It all works with the AI off. Ctrl-C stops it; running it again
+RESETS the demo workspace (its content goes back to the
 seeded content). The seed only touches a workspace and an account it created
 itself, and only in a database on this machine: it refuses an existing real
 account with the demo email.
 
-**Then make it yours** (CLAUDE.md, "Starting a real app from this template"):
+**Then make it yours** (docs/guide.md, "Renaming and trimming"):
 
 1. Rename `Item` to your thing (keep `organizationId` and the index shape).
 2. Change `apps/worker/src/demo/data.ts` so the demo tells YOUR story.

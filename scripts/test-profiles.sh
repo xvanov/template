@@ -10,6 +10,9 @@
 #   SMOKE_PROFILES= scripts/test-profiles.sh       # no smoke at all
 #   PLAYWRIGHT_INSTALL=1 ...                       # install Chromium before smoke (CI)
 #
+# The generator copies what git tracks (committed or staged): `git add` new
+# files before testing them.
+#
 # Per profile, in a fresh directory: scripts/new-app.mjs (copy, cut modules,
 # npm install, prettier, git init), then
 #   format     npm run format:check
@@ -30,6 +33,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${PROFILES_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/profiles.XXXXXX")}"
 mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)" # absolute: every step runs from another directory
 SMOKE_PROFILES="${SMOKE_PROFILES-web,hackathon}"
 
 if [ $# -gt 0 ]; then
@@ -77,7 +81,7 @@ fi
 # One SQL statement against the server's `postgres` database (run in an app
 # dir: its Prisma CLI).
 pg() {
-  printf '%s\n' "$1" | npx --no-install prisma db execute --stdin --url "${TEST_PG_URL}/postgres" >/dev/null
+  printf '%s\n' "$1" | (cd packages/db && DATABASE_URL="${TEST_PG_URL}/postgres" npx --no-install prisma db execute --stdin >/dev/null)
 }
 
 RESULTS="$OUT/results.tsv"

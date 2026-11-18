@@ -29,7 +29,7 @@
  * call `deliver` with their raw transport as the callback and DO NOT export
  * that transport. The callback receives the PARSED recipient and must send to
  * exactly that, and the row id, which a provider that supports it is given as
- * its idempotency key. See the "Outbound messages" section of CLAUDE.md.
+ * its idempotency key. See the "Outbound messages" section of docs/guide.md.
  *
  * Idempotency: an attempt with an `idempotencyKey` reuses the row of an
  * earlier attempt with the same key IN THE SAME TENANT (keys are namespaced
