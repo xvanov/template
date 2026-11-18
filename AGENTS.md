@@ -12,6 +12,7 @@ list of things that have already bitten someone here.
 ./scripts/setup.sh   # .env + deps + postgres/redis + migrations (idempotent)
 make dev             # web :3200 + worker
 make mobile          # Expo dev server :8091 — scan with Expo Go
+make desktop         # Tauri desktop shell around the web app (needs Rust)
 make smoke           # THE GATE: production build, booted, driven in a browser
 ```
 

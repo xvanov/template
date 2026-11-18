@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Server</title>
+    <link rel="stylesheet" href="setup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1 id="name">Desktop</h1>
+        <span id="version" class="muted"></span>
+      </header>
+
+      <section id="status" class="card" aria-live="polite">
+        <p id="status-title" class="status-title">Checking the server…</p>
+        <p id="status-detail" class="muted"></p>
+        <div class="actions">
+          <button type="button" id="retry" hidden>Try again</button>
+        </div>
+      </section>
+
+      <form id="server-form" class="card" novalidate>
+        <label for="server">Server address</label>
+        <input
+          id="server"
+          name="server"
+          type="url"
+          inputmode="url"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="https://app.example.com"
+          required
+        />
+        <p class="muted small">
+          The web app this window opens. Only this address loads inside the app;
+          other links open in your browser.
+        </p>
+        <div class="actions">
+          <button type="submit" class="primary">Connect</button>
+          <button type="button" id="reset" hidden>Use the default</button>
+        </div>
+      </form>
+
+      <section class="card toggles">
+        <label
+          ><input type="checkbox" id="notifications" /> Notifications
+          (approvals, new messages, finished agent runs)</label
+        >
+        <label
+          ><input type="checkbox" id="autostart" /> Start at login (in the
+          tray)</label
+        >
+      </section>
+
+      <p id="message" role="status"></p>
+    </main>
+    <script src="setup.js"></script>
+  </body>
+</html>

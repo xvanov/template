@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-.PHONY: help setup dev web mobile worker up inbox stack down test typecheck lint lint-sh smoke e2e test-ops deploy db-migrate db-seed db-reset studio clean
+.PHONY: help setup dev web mobile worker desktop desktop-build up inbox stack down test typecheck lint lint-sh smoke e2e test-ops deploy db-migrate db-seed db-reset studio clean
 
 help: ## show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -22,6 +22,15 @@ mobile: ## run the Expo dev server (scan the QR with Expo Go)
 
 worker: ## run only the background worker
 	@npm run dev:worker
+
+# The desktop shell needs Rust (https://rustup.rs) and, on Linux, the WebKitGTK
+# packages in apps/desktop/README.md. Nothing else in the repo does: no turbo
+# task (build/lint/typecheck/test/smoke) compiles it.
+desktop: ## run the desktop shell against the web app (DESKTOP_APP_URL, default http://localhost:3200)
+	@npm run desktop:dev -w desktop
+
+desktop-build: ## build the desktop installers for this OS (unsigned unless signing env is set)
+	@npm run desktop:build -w desktop
 
 up: ## start postgres + redis + the local mail inbox (rebuilds indexes if the db's collation changed)
 	@npm run infra:up

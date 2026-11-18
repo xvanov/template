@@ -1,6 +1,7 @@
 import { activityRouter } from "./routers/activity";
 import { agentRouter } from "./routers/agent";
 import { apiKeysRouter } from "./routers/api-keys";
+import { desktopRouter } from "./routers/desktop";
 import { docsRouter } from "./routers/docs";
 import { aiRouter } from "./routers/ai";
 import { healthRouter } from "./routers/health";
@@ -21,6 +22,7 @@ export const appRouter = createTRPCRouter({
   agent: agentRouter,
   apiKeys: apiKeysRouter,
   inbox: inboxRouter,
+  desktop: desktopRouter,
 });
 
 export type AppRouter = typeof appRouter;

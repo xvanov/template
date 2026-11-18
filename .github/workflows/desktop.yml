@@ -1,0 +1,177 @@
+name: Desktop
+
+# The desktop shell (apps/desktop) in its own workflow, so the main CI never
+# installs Rust or compiles WebKit bindings. It runs only when the desktop app
+# or this file changes, by hand, or for a `desktop-v*` tag (a release).
+# Path filters do not apply to tag pushes, so a release tag always builds.
+on:
+  push:
+    branches: [main]
+    tags: ["desktop-v*"]
+    paths:
+      - "apps/desktop/**"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # ── fmt · clippy · unit tests (incl. the IPC/ACL boundary tests) ─────────
+  # Linux only: the crate is the same everywhere, and WebKitGTK headers are
+  # needed to compile it at all.
+  rust:
+    name: rust (fmt · clippy · test)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: apps/desktop/src-tauri
+      - name: Tauri system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+
+  # ── unsigned bundles on every OS ──────────────────────────────────────────
+  # Proves each platform builds and leaves installers to try as artifacts.
+  # No secrets: nothing here is signed.
+  bundle:
+    name: bundle (${{ matrix.os }})
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/desktop-setup
+      - name: Build (unsigned)
+        shell: bash
+        run: npm run desktop:build -w desktop -- --ci
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ runner.os }}
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/**/*.deb
+            apps/desktop/src-tauri/target/release/bundle/**/*.rpm
+            apps/desktop/src-tauri/target/release/bundle/**/*.AppImage
+            apps/desktop/src-tauri/target/release/bundle/**/*.msi
+            apps/desktop/src-tauri/target/release/bundle/**/*-setup.exe
+            apps/desktop/src-tauri/target/release/bundle/**/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  # ── release: `git tag desktop-v0.2.0 && git push --tags` ──────────────────
+  # Builds on every OS and attaches the installers to a DRAFT GitHub release
+  # (publish it by hand). Each kind of signing turns on only when its secrets
+  # exist; without any, the release is unsigned, exactly like `bundle`.
+  # Secrets and variables: apps/desktop/README.md ("Signing", "Updates").
+  release:
+    name: release (${{ matrix.os }})
+    if: ${{ startsWith(github.ref, 'refs/tags/desktop-v') }}
+    needs: rust
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: write # create the draft release and upload to it
+    env:
+      DESKTOP_APP_URL: ${{ vars.DESKTOP_APP_URL }}
+      DESKTOP_UPDATER_PUBKEY: ${{ vars.DESKTOP_UPDATER_PUBKEY }}
+      DESKTOP_UPDATER_ENDPOINT: ${{ vars.DESKTOP_UPDATER_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/desktop-setup
+
+      # Only the secrets that are SET reach the build: the Tauri CLI treats a
+      # variable that exists but is empty as "sign with nothing" and fails.
+      - name: Signing environment (only what is configured)
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          pass() { for v in "$@"; do [ -n "${!v}" ] && echo "$v=${!v}" >> "$GITHUB_ENV"; done; return 0; }
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            pass TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            echo "updater bundles: signed"
+          else
+            # No private key: no updater, whatever the variables say.
+            echo "DESKTOP_UPDATER_PUBKEY=" >> "$GITHUB_ENV"
+            echo "DESKTOP_UPDATER_ENDPOINT=" >> "$GITHUB_ENV"
+            echo "updater: off (no TAURI_SIGNING_PRIVATE_KEY)"
+          fi
+          if [ "$RUNNER_OS" = macOS ] && [ -n "$APPLE_CERTIFICATE" ]; then
+            pass APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
+            # Notarisation needs all three; signing alone works without them.
+            if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+              pass APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+              echo "macOS: signed + notarised"
+            else
+              echo "macOS: signed, NOT notarised"
+            fi
+          fi
+
+      - name: Windows code signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE) { Write-Output "Windows: unsigned (no WINDOWS_CERTIFICATE)"; exit 0 }
+          $pfx = Join-Path $env:RUNNER_TEMP "cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $pw = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+          Remove-Item $pfx
+          "DESKTOP_WINDOWS_CERT_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Output "Windows: signed"
+
+      # tauri-action runs the build through our wrapper (scripts/tauri.mjs, so
+      # the same env → config overlay as a local build), uploads the bundles,
+      # and writes latest.json for the updater when update bundles were signed.
+      - uses: tauri-apps/tauri-action@v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: node scripts/tauri.mjs
+          tagName: ${{ github.ref_name }}
+          releaseName: "Desktop ${{ github.ref_name }}"
+          releaseDraft: true
+          uploadUpdaterJson: true

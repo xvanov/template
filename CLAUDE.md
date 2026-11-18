@@ -13,6 +13,8 @@ if something does not work, that is a bug, not an unfinished feature.
 apps/web       Next.js 16 (App Router) — the UI *and* the API (/api/trpc, /api/auth)
 apps/mobile    Expo 57 (expo-router + NativeWind) — iOS/Android via Expo Go
 apps/worker    BullMQ worker + cron schedules (separate process on purpose)
+apps/desktop   Tauri 2 shell (Win/macOS/Linux) around the DEPLOYED web app. Rust;
+               its own CI workflow; no turbo task touches it. apps/desktop/README.md
 packages/api   tRPC routers — the ONLY API surface, shared by web and mobile
 packages/db    Prisma schema + client (Postgres)
 packages/auth  better-auth: email+password, Google OAuth, organizations
@@ -776,6 +778,15 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   (`scripts/deploy.sh --detach`, or `systemctl --user start <app>-deploy`).
   `setsid nohup` leaves it in the caller's cgroup; stopping the caller kills
   the deploy halfway.
+- **The desktop shell (apps/desktop) is a browser, not a client.** It loads
+  the deployed `APP_URL` and gets NO Tauri IPC in that window: no capability
+  names it, and `src-tauri/src/tests.rs` fails if one ever does. Do not "just
+  add a command" for the web app to call; the only page with commands is the
+  bundled setup screen (`ui/`). Its notifications come from `desktop.feed` (a
+  tRPC query, polled with the window's own session cookie); change what it
+  notifies about there, in TypeScript. Its npm scripts are deliberately NOT
+  named build/dev/test/lint/typecheck, so turbo and the gates never compile
+  Rust; keep it that way (`make desktop`, `make desktop-build`).
 - Mobile has one `@ts-expect-error` on the better-auth Expo plugin: an upstream
   generic-variance gap in 1.6.25. Suppressed rather than cast so session types
   still infer. Remove it when upstream types line up.
@@ -784,7 +795,11 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
 
 1. Rename: `expo.scheme` + `APP_SCHEME`, `expo.name`/`slug`, bundle identifiers
    in `apps/mobile/app.json`, the `<title>` in `apps/web/src/app/layout.tsx`,
-   `apps/web/src/app/manifest.ts` and `icon.svg`.
+   `apps/web/src/app/manifest.ts` and `icon.svg`. Desktop: `productName` and
+   `identifier` in `apps/desktop/src-tauri/tauri.conf.json` (the identifier
+   names users' settings dir: never change it after a release), then
+   `npm run icons -w desktop` (regenerated from `icon.svg`). The desktop
+   shell has no URL scheme (no deep links yet), so `APP_SCHEME` is mobile's.
 2. Replace the `Item` model with your domain — keep its `organizationId` column
    and index shape. `packages/api/src/routers/items.ts` is the reference resolver.
 3. Delete what you do not need. `packages/ai`, `packages/storage` and
