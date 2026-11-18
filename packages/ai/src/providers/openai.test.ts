@@ -8,7 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LlmProviderError } from "../errors";
 import { parseModel } from "../models";
 import { setLlmEnv } from "../test-env";
-import { callOpenAiFamily, callOpenAiTools, embedOpenAiFamily } from "./openai";
+import { z } from "zod";
+
+import {
+  callOpenAiFamily,
+  callOpenAiTools,
+  embedOpenAiFamily,
+  strictCompatible,
+} from "./openai";
 
 interface Sent {
   url: string;
@@ -171,6 +178,107 @@ describe("local/ and stop reasons", () => {
     expect(r.text).toBe("not json");
     expect(r.usage.outputTokens).toBe(20);
   });
+
+  // Found live (Azure gpt-5.4-mini, gpt-4.1): strict mode 400s on a schema
+  // with an optional property before the model runs, so any askObject schema
+  // with `.optional()` failed every time on openai/ and azure/.
+  it("sends strict structured output only for a schema strict mode can enforce", async () => {
+    const schemaOf = (s: z.ZodType) => {
+      const { $schema: _d, ...body } = z.toJSONSchema(s) as Record<
+        string,
+        unknown
+      >;
+      return body;
+    };
+    const closed = schemaOf(
+      z.object({ items: z.array(z.object({ name: z.string() })) }),
+    );
+    const open = schemaOf(
+      z.object({
+        items: z.array(
+          z.object({ name: z.string(), note: z.string().optional() }),
+        ),
+      }),
+    );
+    expect(strictCompatible(closed)).toBe(true);
+    expect(strictCompatible(open)).toBe(false);
+    expect(strictCompatible(schemaOf(z.record(z.string(), z.number())))).toBe(
+      false,
+    );
+
+    const sent = stubFetch(completion('{"items":[]}'));
+    await callOpenAiFamily(req("azure/gpt-4.1", { jsonSchema: closed }));
+    await callOpenAiFamily(req("azure/gpt-4.1", { jsonSchema: open }));
+    const strictOf = (i: number) =>
+      (sent[i]!.body.response_format as { json_schema: { strict: boolean } })
+        .json_schema.strict;
+    expect(strictOf(0)).toBe(true);
+    expect(strictOf(1)).toBe(false);
+  });
+
+  it("treats a nullable object (type: [object, null]) as an object", () => {
+    const nullable = (extra: Record<string, unknown>) => ({
+      type: "object",
+      properties: {
+        child: {
+          type: ["object", "null"],
+          properties: { a: { type: "string" } },
+          ...extra,
+        },
+      },
+      required: ["child"],
+      additionalProperties: false,
+    });
+    expect(
+      strictCompatible(
+        nullable({ required: ["a"], additionalProperties: false }),
+      ),
+    ).toBe(true);
+    expect(strictCompatible(nullable({ additionalProperties: false }))).toBe(
+      false,
+    );
+    expect(strictCompatible(nullable({ required: ["a"] }))).toBe(false);
+    // No properties at all (a nullable open record): still an object.
+    expect(
+      strictCompatible({
+        type: "object",
+        properties: { meta: { type: ["object", "null"] } },
+        required: ["meta"],
+        additionalProperties: false,
+      }),
+    ).toBe(false);
+  });
+
+  // @ai-sdk/openai-compatible also defaults to strict, but ignores the
+  // "openai" options key: the fix has to reach it under its own key.
+  it.each(["openrouter/openai/gpt-4o-mini", "local/qwen3:32b"])(
+    "%s: a schema strict mode cannot enforce is sent non-strict, without extra body fields",
+    async (model) => {
+      setLlmEnv({
+        OPENROUTER_API_KEY: "or-key",
+        LLM_BASE_URL: "http://localhost:11434/v1",
+      });
+      const open = {
+        type: "object",
+        properties: { name: { type: "string" }, note: { type: "string" } },
+        required: ["name"],
+        additionalProperties: false,
+      };
+      const closed = { ...open, required: ["name", "note"] };
+      const sent = stubFetch(completion('{"name":"x"}'));
+      await callOpenAiFamily(req(model, { jsonSchema: open }));
+      await callOpenAiFamily(req(model, { jsonSchema: closed }));
+      const format = (i: number) =>
+        sent[i]!.body.response_format as {
+          type: string;
+          json_schema: { strict: boolean };
+        };
+      expect(format(0).type).toBe("json_schema");
+      expect(format(0).json_schema.strict).toBe(false);
+      expect(format(1).json_schema.strict).toBe(true);
+      expect(sent[0]!.body).not.toHaveProperty("strictJsonSchema");
+    },
+  );
 
   it("wraps HTTP errors in a typed, retry-aware error", async () => {
     stubFetch({ error: { message: "bad key" } }, 401);

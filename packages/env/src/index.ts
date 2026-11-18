@@ -272,7 +272,7 @@ const serverSchema = z.object({
   /** Model for embed(). Unset = embeddings disabled. e.g. openai/text-embedding-3-small */
   LLM_EMBEDDING_MODEL: z.preprocess(blankIsUnset, z.string().optional()),
   /**
-   * Speech-to-text for transcribe() (`provider/model`): openai/ or local/
+   * Speech-to-text for transcribe() (`provider/model`): openai/, azure/ or local/
    * (any OpenAI-compatible /audio/transcriptions, e.g. a local whisper
    * server). Unset = transcription off (the dictate button says so).
    */

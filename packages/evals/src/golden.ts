@@ -7,7 +7,10 @@
  *    "expected": ["expenses"],           retrieval: relevant corpus files (any order)
  *    "graders": [ ... ],                  see ./graders.ts
  *    "offline": { ... },                  the canned model output for offline runs
- *    "offlineOnly": true,                 a guard test live models cannot reproduce
+ *    "offlineOnly": true,                 a guard test live runs cannot reproduce (a
+ *                                         canned bad output, or a path only keyword-only
+ *                                         search reaches: the meaning leg always returns
+ *                                         nearest neighbours, so "no_sources" never happens live)
  *    "tags": ["answerable"]}
  */
 import { readFileSync } from "node:fs";

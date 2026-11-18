@@ -490,8 +490,12 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
     estimate: number | null,
     latencyMs: number,
   ): LlmCallRow {
+    // A config error (cli/ given images or tools, an unwired provider) is
+    // thrown before anything is sent: nothing billed, nothing to hold back.
     const costUnknown =
-      err instanceof LlmProviderError ? err.costUnknown : true;
+      err instanceof LlmProviderError
+        ? err.costUnknown
+        : !(err instanceof LlmConfigError);
     return {
       ...row,
       usage: ZERO_USAGE,
@@ -881,7 +885,7 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
     const modelString = opts.model ?? env().LLM_TRANSCRIBE_MODEL;
     if (!modelString) {
       throw new LlmDisabledError(
-        "Transcription is off — set LLM_TRANSCRIBE_MODEL (e.g. openai/gpt-4o-mini-transcribe, or local/<model> on a whisper server).",
+        "Transcription is off — set LLM_TRANSCRIBE_MODEL (e.g. openai/gpt-4o-mini-transcribe, azure/<deployment>, or local/<model> on a whisper server).",
       );
     }
     const route = parseModel(modelString);
@@ -890,7 +894,7 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
         `transcription is not wired for ${route.provider}/ — use ${TRANSCRIBE_PROVIDERS.join(", ")}`,
       );
     }
-    if (!env().LLM_ENABLED || !transcribeEndpoint(route).baseUrl) {
+    if (!env().LLM_ENABLED || !transcribeEndpoint(route).url) {
       throw new LlmDisabledError(`${route.id} is not configured.`);
     }
     const perMinute = env().LLM_TRANSCRIBE_COST_PER_MINUTE;
@@ -999,7 +1003,7 @@ export function transcribeEnabled(): boolean {
     const route = parseModel(e.LLM_TRANSCRIBE_MODEL);
     return (
       TRANSCRIBE_PROVIDERS.includes(route.provider) &&
-      Boolean(transcribeEndpoint(route).baseUrl)
+      Boolean(transcribeEndpoint(route).url)
     );
   } catch {
     return false;

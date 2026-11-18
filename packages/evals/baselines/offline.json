@@ -1,6 +1,6 @@
 {
   "key": "offline",
-  "savedAt": "2026-11-18T00:01:25.310Z",
+  "savedAt": "2026-11-18T17:13:43.348Z",
   "suites": {
     "retrieval": {
       "score": 0.8333,
@@ -37,6 +37,7 @@
         "a-rollback",
         "a-backup-retention",
         "a-not-in-docs",
+        "a-gibberish",
         "a-no-sources",
         "a-guard-ungrounded",
         "a-guard-fake-quote",
