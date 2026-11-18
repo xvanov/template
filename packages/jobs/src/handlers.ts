@@ -17,6 +17,12 @@ import { abandonStaleRuns, executeRun } from "@repo/agent";
 import { db } from "@repo/db";
 import { markInboundFailed, processInbound } from "@repo/inbound";
 import { runOperatorTick } from "@repo/notify";
+import {
+  checkMobilePushReceipts,
+  mobilePushEnabled,
+  notifyAppEvent,
+  type AppEvent,
+} from "@repo/push-mobile";
 import { ingestDocument, markIngestFailed, sweepStaleIngests } from "@repo/rag";
 import { reconcileSmsDelivery } from "@repo/sms";
 
@@ -58,6 +64,21 @@ const schemas = {
     organizationId: z.string().min(1),
     inboundMessageId: z.string().min(1),
   }),
+
+  /**
+   * Push "something wants you" to the app (packages/push-mobile): a pending
+   * proposal or a new inbound message. Queued by `queueAppPush`; one job per
+   * event (job id), and the outbound idempotency key per device makes a
+   * retry send nothing twice.
+   */
+  "push.notify": z.object({
+    organizationId: z.string().min(1),
+    kind: z.enum(["proposal", "inbound"]),
+    id: z.string().min(1),
+  }),
+
+  /** Expo push receipts: record delivery, disable uninstalled devices (every 15 min). */
+  "push.receipts": z.object({}),
 
   /** Ask Twilio about texts whose delivery status never arrived (every 30 min). */
   "sms.reconcile": z.object({}),
@@ -155,7 +176,25 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     schema: schemas["agent.run"],
     // Never throws for a run that went wrong (that is recorded on agent_run),
     // and a redelivered job finds the run already claimed: no double runs.
-    run: (payload) => executeRun(payload),
+    run: async (payload) => {
+      const outcome = await executeRun(payload);
+      // Its proposals wait for a person: tell their phone.
+      const pending = await db.agentProposal.findMany({
+        where: {
+          organizationId: payload.organizationId,
+          runId: payload.runId,
+          status: "pending",
+        },
+        select: { id: true },
+      });
+      for (const p of pending) {
+        await queueAppPush(payload.organizationId, {
+          kind: "proposal",
+          id: p.id,
+        });
+      }
+      return outcome;
+    },
   },
 
   "docs.ingest": {
@@ -175,10 +214,32 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
   "inbound.process": {
     scope: "org",
     schema: schemas["inbound.process"],
-    run: (payload) => processInbound(payload),
+    run: async (payload) => {
+      const result = await processInbound(payload);
+      if (result.status === "processed") {
+        await queueAppPush(payload.organizationId, {
+          kind: "inbound",
+          id: payload.inboundMessageId,
+        });
+      }
+      return result;
+    },
     // Retries used up (Resend unreachable for minutes, storage down): the
     // row shows "failed" and why, instead of "received" forever.
     onFinalFailure: (payload, err) => markInboundFailed(payload, err),
+  },
+
+  "push.notify": {
+    scope: "org",
+    schema: schemas["push.notify"],
+    run: ({ organizationId, kind, id }) =>
+      notifyAppEvent(organizationId, { kind, id }),
+  },
+
+  "push.receipts": {
+    scope: "system",
+    schema: schemas["push.receipts"],
+    run: () => checkMobilePushReceipts(),
   },
 
   "sms.reconcile": {
@@ -247,6 +308,38 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     },
   },
 };
+
+/**
+ * Queue a mobile push about an event (push.notify). Never throws: a push is
+ * a courtesy, and the work that produced the event (an agent run, an inbound
+ * message) must not fail or retry because Redis hiccuped. A no-op while
+ * mobile push is off, so the template queues nothing by default.
+ */
+export async function queueAppPush(
+  organizationId: string,
+  event: AppEvent,
+): Promise<void> {
+  if (!mobilePushEnabled()) return;
+  try {
+    // Bounded: the queue's Redis client waits for a connection rather than
+    // failing, and this can run inside a user's request.
+    await Promise.race([
+      enqueue(
+        "push.notify",
+        { organizationId, ...event },
+        { jobId: `push-${event.kind}-${event.id}` },
+      ),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("queue timeout (3s)")), 3000).unref(),
+      ),
+    ]);
+  } catch (err) {
+    console.error(
+      `[push-mobile] could not queue a push for ${event.kind} ${event.id}:`,
+      err,
+    );
+  }
+}
 
 /**
  * Inbound messages still "received" 10 minutes after arriving: their

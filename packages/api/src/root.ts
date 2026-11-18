@@ -9,6 +9,7 @@ import { inboxRouter } from "./routers/inbox";
 import { itemsRouter } from "./routers/items";
 import { mediaRouter } from "./routers/media";
 import { orgRouter } from "./routers/org";
+import { pushRouter } from "./routers/push";
 import { createTRPCRouter } from "./trpc";
 
 export const appRouter = createTRPCRouter({
@@ -23,6 +24,7 @@ export const appRouter = createTRPCRouter({
   apiKeys: apiKeysRouter,
   inbox: inboxRouter,
   desktop: desktopRouter,
+  push: pushRouter,
 });
 
 export type AppRouter = typeof appRouter;

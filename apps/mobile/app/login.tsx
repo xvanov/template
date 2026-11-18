@@ -65,7 +65,7 @@ export default function Login() {
     setError(null);
     setBusy(true);
     try {
-      // Opens the system browser and deep-links back on the app.json scheme.
+      // Opens the system browser and deep-links back on the app scheme (APP_SCHEME, app.config.ts).
       await authClient.signIn.social({
         provider: "google",
         callbackURL: "/items",

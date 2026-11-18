@@ -18,6 +18,7 @@
     "@repo/env": "*",
     "@repo/inbound": "*",
     "@repo/notify": "*",
+    "@repo/push-mobile": "*",
     "@repo/rag": "*",
     "@repo/sms": "*",
     "bullmq": "^5.81.2",

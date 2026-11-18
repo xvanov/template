@@ -22,7 +22,7 @@ import {
   TOOLS,
   toolSpec,
 } from "@repo/agent";
-import { enqueue } from "@repo/jobs";
+import { enqueue, queueAppPush } from "@repo/jobs";
 
 import { ConflictError, NotFoundError } from "../errors";
 import { createTRPCRouter, orgProcedure, rateLimited } from "../trpc";
@@ -247,8 +247,8 @@ export const agentRouter = createTRPCRouter({
   propose: orgProcedure
     .use(rateLimited({ limit: 60, windowSeconds: 60 }))
     .input(z.object({ tool: z.string().min(1).max(64), input: z.unknown() }))
-    .mutation(({ ctx, input }) =>
-      createProposal(ctx.db, {
+    .mutation(async ({ ctx, input }) => {
+      const p = await createProposal(ctx.db, {
         organizationId: ctx.organizationId,
         userId: ctx.user.id,
         apiKeyId: ctx.apiKey?.id ?? null,
@@ -256,8 +256,14 @@ export const agentRouter = createTRPCRouter({
         tool: input.tool,
         input: input.input,
         audit: ctx.audit,
-      }),
-    ),
+      });
+      // From an MCP client, the key's owner is not looking at the app: push.
+      // (A proposal you just made yourself in the app needs no push.)
+      if (ctx.apiKey) {
+        await queueAppPush(ctx.organizationId, { kind: "proposal", id: p.id });
+      }
+      return p;
+    }),
 
   /** Apply a proposal, optionally with an edited input (re-validated). */
   approve: orgProcedure

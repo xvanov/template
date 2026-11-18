@@ -20,6 +20,7 @@ const nextConfig: NextConfig = {
     "@repo/jobs",
     "@repo/notify",
     "@repo/outbound",
+    "@repo/push-mobile",
     "@repo/rag",
     "@repo/security",
     "@repo/sms",

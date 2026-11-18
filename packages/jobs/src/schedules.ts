@@ -43,6 +43,14 @@ export const SCHEDULES: Schedule[] = [
     data: {},
   },
   {
+    // A no-op unless mobile push is enabled (packages/push-mobile). Expo
+    // keeps receipts about a day; they are ready ~15 minutes after sending.
+    id: "push-receipts",
+    job: "push.receipts",
+    pattern: "*/15 * * * *",
+    data: {},
+  },
+  {
     // A no-op unless SMS is enabled and configured (packages/sms).
     id: "sms-reconcile",
     job: "sms.reconcile",

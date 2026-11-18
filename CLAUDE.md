@@ -11,7 +11,7 @@ if something does not work, that is a bug, not an unfinished feature.
 
 ```
 apps/web       Next.js 16 (App Router) — the UI *and* the API (/api/trpc, /api/auth)
-apps/mobile    Expo 57 (expo-router + NativeWind) — iOS/Android via Expo Go
+apps/mobile    Expo 57 (expo-router + NativeWind) — Expo Go, or a dev client / store build via EAS
 apps/worker    BullMQ worker + cron schedules (separate process on purpose)
 apps/desktop   Tauri 2 shell (Win/macOS/Linux) around the DEPLOYED web app. Rust;
                its own CI workflow; no turbo task touches it. apps/desktop/README.md
@@ -27,6 +27,7 @@ packages/evals  eval harness: golden sets, graders, retrieval metrics, baselines
 packages/storage  file storage: local disk or any S3-compatible bucket
 packages/email  outbound email (SMTP by default, or Resend), ONLY via the outbound guard. Mailpit locally
 packages/sms   outbound SMS (Twilio), ONLY via the outbound guard. Off by default
+packages/push-mobile  push to the mobile app (Expo push → APNs/FCM), ONLY via the outbound guard. Off by default
 packages/inbound  messages that ARRIVE (email, SMS): routed to a tenant, stored, finished by the worker
 packages/outbound  the outbound guard: every outbound message passes it and is logged
 packages/notify  operator alerts (ntfy push, else email, else console), deduped + digested
@@ -195,9 +196,10 @@ Exists because a production app emailed the wrong thing to 8 real customers.
    `INVALID_RECIPIENT`; the parsed address is what gets checked, capped,
    logged, and handed to the transport. SMS: one number in international
    form, normalised to E.164 (`+44 7700 900123` → `+447700900123`); a
-   national number (`07700 900123`) is refused, never guessed at.
+   national number (`07700 900123`) is refused, never guessed at. Mobile
+   push: one Expo push token (`ExponentPushToken[...]`), case kept.
 1. channel switch `OUTBOUND_EMAIL_ENABLED` (on), `OUTBOUND_PUSH_ENABLED` (on),
-   `OUTBOUND_SMS_ENABLED` (OFF)
+   `OUTBOUND_SMS_ENABLED` (OFF), `OUTBOUND_MOBILE_PUSH_ENABLED` (OFF)
 2. kill switch: `OUTBOUND_FROZEN=true`, or at runtime with no restart:
    `npm run outbound:freeze -- on` / `off` / `status` (stored in `app_setting`)
 3. **safe mode**, resolved once per process and printed loudly at boot:
@@ -208,8 +210,8 @@ Exists because a production app emailed the wrong thing to 8 real customers.
      delivers nowhere. `.env.example` sets it, so `make dev` just works. It is
      never inferred from a loopback `SMTP_HOST` (a local postfix relays to the
      internet), and production refuses it and runs strict. It opens EMAIL
-     only: SMS and push have no catcher (they reach real phones), so for them
-     it means strict.
+     only: SMS, push and mobile push have no catcher (they reach real
+     phones), so for them it means strict.
    - `off`: real mail to real people (`OUTBOUND_SAFE_MODE=false`, or unset in
      production).
 
@@ -274,6 +276,17 @@ push reaches a real phone, so push stays strict. A staging box with
 production's `NTFY_TOPIC` alerts production's operator: every title is
 prefixed with the `APP_URL` host (`[staging.example.com] …`) so the two can be
 told apart, but give staging its own topic.
+
+**Mobile push vs safe mode.** The recipient the guard checks, caps and logs
+is the device's Expo push token (one `deliver` per device; the transport
+batches them into one Expo request). Strict mode lets a device through if
+`OUTBOUND_SAFE_RECIPIENTS` lists its exact token, OR its owner's verified
+email or `@domain`: the guard looks the owner up itself (`push_device` →
+`user`, `emailVerified` only), so `you@yourco.com` in the list is "my own
+phone" without copying a token that changes on reinstall, and no caller can
+claim an owner. Pushes carry NO customer data (lock screen, and Expo's and
+Apple's/Google's servers in between): "New email", never who or what; `data`
+holds ids only. Same default as the desktop shell.
 
 **Auth mail vs safe mode.** better-auth's verification mail is sent with
 `sendAuthMail`, which is exempt from the strict allowlist and nothing else.
@@ -608,6 +621,52 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   popovers and tooltips pull in positioning code — keep them off public pages
   that do not need them.
 
+## Mobile (apps/mobile)
+
+Same API as the web app (tRPC with the session cookie attached by hand; file
+bytes to `/api/media/*`). Screens: `items` (with dictation), `photos`,
+`device` (push status, test push, glasses). New screens use
+`components/states.tsx` (Loading / Empty / Error / Button / ProgressBar).
+
+**Expo Go or a development build.** Expo Go runs sign-in, items, photos
+(camera, library, upload) and dictation. Push notifications and the glasses
+module need a development build: Expo Go cannot receive a project's remote
+pushes (removed on Android in SDK 53) and holds no custom native code.
+
+```bash
+cd apps/mobile
+npx eas init                                   # once: prints EAS_PROJECT_ID → .env
+npx eas build --profile development --platform android   # dev client APK
+npx eas build --profile development-simulator --platform ios
+npx eas build --profile preview                # internal test build
+npx eas build --profile production             # store build (build number auto-incremented)
+npx expo start --dev-client --port 8091        # then open the dev client
+```
+
+`eas.json` profiles: `development` (dev client, internal distribution, APK /
+device build), `development-simulator`, `preview` (internal), `production`.
+Cloud builds have no `.env`: set `MOBILE_*`, `APP_SCHEME`, `EAS_PROJECT_ID`
+and `EXPO_PUBLIC_API_URL` as EAS environment variables per environment.
+
+- **Uploads** (`lib/upload.ts`): expo-file-system's native upload task
+  (streams from disk, reports progress, sends the cookie). Never
+  `FormData.append("file", { uri, name, type })`: see "Things that will bite".
+- **Push** (`lib/push.ts`, `lib/use-push.ts`): on sign-in the app gets its
+  Expo token and calls `push.register` (repeat = heartbeat); sign-out calls
+  `push.unregister` first. Sent by `@repo/push-mobile` through the guard;
+  the worker's `push.receipts` (every 15 min) records Expo receipts and
+  disables devices reported `DeviceNotRegistered`. Wired: a pending proposal
+  (to the user it was made for) and a new inbound message (to the org's
+  members with a device), via the `push.notify` job, one per event, idempotent
+  per device. Nothing is queued while `OUTBOUND_MOBILE_PUSH_ENABLED` is off.
+- **Dictation**: expo-audio records 16 kHz mono AAC; `POST
+/api/media/transcribe` runs `transcribe()` from `@repo/ai`
+  (`LLM_TRANSCRIBE_MODEL`, `openai/` or `local/` OpenAI-compatible
+  `/audio/transcriptions`), priced per minute into `llm_call` under the
+  daily cap; the audio is not stored. The button hides when it is not set up.
+- **Glasses**: `modules/glasses` is a typed JS API that reports
+  "unavailable" until a native module is added (its README says how).
+
 ## Things that will bite you (all learned here, the hard way)
 
 - **A database image with another C library silently corrupts text
@@ -648,6 +707,18 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
 - **A new account's first session has no `activeOrganizationId`** — sign-up
   creates the session before the membership exists. `orgProcedure` repairs it on
   first use; do not "fix" this by removing the fallback.
+- **Expo's global `fetch` rejects React Native's file parts.** Since SDK 52
+  `fetch` is expo/fetch, whose FormData encoder takes a string, a Blob or an
+  object with `bytes()`. `body.append("file", { uri, name, type })` (every
+  RN upload example) throws "Unsupported FormDataPart implementation" and
+  nothing is uploaded. Use `uploadMedia` / `transcribeAudio` from
+  `apps/mobile/lib/upload.ts`; `lib/upload-body.test.ts` runs both shapes
+  through expo's real encoder.
+- **Push needs a development build, a physical device and `EAS_PROJECT_ID`.**
+  In Expo Go the device screen says so and nothing is registered. A blocked
+  test push in dev is safe mode doing its job: put your own (verified)
+  account email in `OUTBOUND_SAFE_RECIPIENTS`. `InvalidCredentials` receipts
+  mean the APNs key / FCM credentials are missing in EAS (`eas credentials`).
 - **`localhost` is unreachable from a phone.** The mobile app derives your LAN
   address from the Expo dev server; `EXPO_PUBLIC_API_URL` only overrides it when
   it is not a loopback address.
@@ -793,8 +864,11 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
 
 ## Starting a real app from this template
 
-1. Rename: `expo.scheme` + `APP_SCHEME`, `expo.name`/`slug`, bundle identifiers
-   in `apps/mobile/app.json`, the `<title>` in `apps/web/src/app/layout.tsx`,
+1. Rename: in `.env`, `APP_SCHEME` (server AND app read it), `MOBILE_APP_NAME`,
+   `MOBILE_APP_SLUG`, `MOBILE_BUNDLE_ID` (iOS bundle id and Android package),
+   and after `cd apps/mobile && npx eas init`, `EAS_PROJECT_ID` (+ `EXPO_OWNER`).
+   `apps/mobile/app.config.ts` reads them (defaults there); set the same as EAS
+   environment variables for cloud builds. Then the `<title>` in `apps/web/src/app/layout.tsx`,
    `apps/web/src/app/manifest.ts` and `icon.svg`. Desktop: `productName`,
    `mainBinaryName` and `identifier` in `apps/desktop/src-tauri/tauri.conf.json` (the identifier
    names users' settings dir: never change it after a release), then

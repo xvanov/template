@@ -65,6 +65,55 @@ export function assertUploadAllowed(
   }
 }
 
+/**
+ * Audio accepted for transcription (POST /api/media/transcribe). Not stored:
+ * these never reach the media allow-list above. The aliases phones send for
+ * the same format are normalised (normalizeAudioType) before the check.
+ */
+export const AUDIO_CONTENT_TYPES = new Set([
+  "audio/mp4",
+  "audio/aac",
+  "audio/mpeg",
+  "audio/wav",
+  "audio/webm",
+  "audio/ogg",
+  "audio/flac",
+]);
+
+/** Under the 25 MB OpenAI's /audio/transcriptions accepts; ~25 min of AAC. */
+export const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
+
+const AUDIO_ALIASES: Record<string, string> = {
+  "audio/m4a": "audio/mp4",
+  "audio/x-m4a": "audio/mp4",
+  "audio/mp4a-latm": "audio/mp4",
+  "audio/mp3": "audio/mpeg",
+  "audio/x-wav": "audio/wav",
+  "audio/wave": "audio/wav",
+  "audio/vnd.wave": "audio/wav",
+  "audio/x-aac": "audio/aac",
+};
+
+/** `audio/x-m4a; codecs=...` → `audio/mp4`. Lowercased, parameters dropped. */
+export function normalizeAudioType(contentType: string): string {
+  const base = contentType.split(";")[0]!.trim().toLowerCase();
+  return AUDIO_ALIASES[base] ?? base;
+}
+
+export function assertAudioAllowed(
+  contentType: string,
+  sizeBytes: number,
+): void {
+  if (!AUDIO_CONTENT_TYPES.has(normalizeAudioType(contentType))) {
+    throw new Error(`Unsupported audio type: ${contentType}`);
+  }
+  if (sizeBytes <= 0 || sizeBytes > MAX_AUDIO_BYTES) {
+    throw new Error(
+      `Recording too large: ${sizeBytes} bytes (max ${MAX_AUDIO_BYTES})`,
+    );
+  }
+}
+
 function extensionOf(filename: string): string {
   const dot = filename.lastIndexOf(".");
   if (dot <= 0 || dot === filename.length - 1) return "";

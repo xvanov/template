@@ -43,6 +43,7 @@ model User {
   proposed       AgentProposal[]  @relation("ProposalProposer")
   documents      Document[]
   handledInbound InboundMessage[]
+  pushDevices    PushDevice[]
 
   @@map("user")
 }
@@ -126,6 +127,7 @@ model Organization {
   docChunks     DocumentChunk[]
   inbound       InboundMessage[]
   inboundRoutes InboundRoute[]
+  pushDevices   PushDevice[]
 
   @@map("organization")
 }
@@ -180,6 +182,37 @@ model Item {
 
   @@index([organizationId, createdAt])
   @@map("item")
+}
+
+/// One app install that can receive mobile push (Expo push token), registered
+/// by the signed-in user under their ACTIVE organization (push.register).
+///
+/// A token names one install, so it is unique: whoever registers it last owns
+/// it (a phone that changed hands, or a user who switched org, moves the row;
+/// see packages/api/src/routers/push.ts). `disabled` is set when Expo reports
+/// DeviceNotRegistered (the app was uninstalled), or on sign-out; the sender
+/// skips disabled rows and a fresh registration re-enables it.
+model PushDevice {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// `ExponentPushToken[...]`. Case-sensitive. A bearer capability for the
+  /// device: never shown to other users, never logged in full.
+  token          String       @unique
+  /// ios | android
+  platform       String
+  disabled       Boolean      @default(false)
+  /// Why it was disabled: "DeviceNotRegistered", "signed out", ...
+  disabledReason String?
+  /// Last registration (every app start while signed in).
+  lastSeenAt     DateTime     @default(now())
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, userId])
+  @@map("push_device")
 }
 
 /// A blob in packages/storage. The row is the source of truth for metadata;
@@ -292,7 +325,7 @@ model LlmCall {
   tier             String?
   /// essential | discretionary — what the daily cap does with it.
   priority         String?
-  /// "chat" or "embed".
+  /// "chat", "embed" or "transcribe".
   kind             String   @default("chat")
   inputTokens      Int      @default(0)
   outputTokens     Int      @default(0)
@@ -385,7 +418,7 @@ model OutboundMessage {
   id                String           @id @default(cuid())
   organizationId    String?
   organization      Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  /// "email" | "sms" | "push"
+  /// "email" | "sms" | "push" | "mobile_push"
   channel           String
   recipient         String
   subject           String?

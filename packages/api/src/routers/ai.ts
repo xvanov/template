@@ -13,6 +13,7 @@ import {
   describeLlm,
   llmEnabled,
   LlmTruncatedError,
+  transcribeEnabled,
   spendByPurpose,
 } from "@repo/ai";
 
@@ -21,6 +22,14 @@ import { createTRPCRouter, orgProcedure, publicProcedure } from "../trpc";
 export const aiRouter = createTRPCRouter({
   /** Public: a boolean only. Which model runs is not for anonymous visitors. */
   enabled: publicProcedure.query(() => ({ enabled: llmEnabled() })),
+
+  /**
+   * Signed in: can audio be transcribed (POST /api/media/transcribe)? The app
+   * hides its dictate button when not.
+   */
+  transcribeEnabled: orgProcedure.query(() => ({
+    enabled: transcribeEnabled(),
+  })),
 
   /** Signed in: which model each tier routes to, and the cap. Never a key. */
   info: orgProcedure.query(() => {

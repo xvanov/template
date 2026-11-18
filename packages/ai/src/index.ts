@@ -72,6 +72,13 @@ import {
   EMBEDDING_PROVIDERS,
   embedOpenAiFamily,
 } from "./providers/openai";
+import {
+  TRANSCRIBE_PROVIDERS,
+  transcribeEndpoint,
+  transcribeOpenAiCompatible,
+  type TranscribeRequest,
+  type TranscribeResponse,
+} from "./providers/transcribe";
 import type {
   ChatEntry,
   ProviderCall,
@@ -199,6 +206,35 @@ export interface EmbedOptions extends Omit<CallOptions, "tier"> {
   dimensions?: number;
 }
 
+export interface TranscribeOptions extends Omit<CallOptions, "tier"> {
+  audio: Uint8Array;
+  /** With its extension: servers use it to tell the format (`note.m4a`). */
+  filename: string;
+  contentType: string;
+  /** ISO-639-1 hint ("en"). */
+  language?: string;
+  /** Vocabulary hint: product names, jargon. */
+  prompt?: string;
+  timeoutMs?: number;
+}
+
+export interface TranscribeResult {
+  text: string;
+  model: string;
+  /** Audio length the server reported; null if it did not. */
+  seconds: number | null;
+  costUsd: number;
+  costKnown: boolean;
+  latencyMs: number;
+}
+
+/**
+ * Bytes per second assumed when estimating a recording's length before it is
+ * sent: 16 kbit/s, below any speech codec setting the app records with
+ * (AAC at 32-128 kbit/s), so the estimate errs LONG, i.e. high on cost.
+ */
+const ESTIMATE_BYTES_PER_SECOND = 2000;
+
 export interface EmbedResult {
   embeddings: number[][];
   model: string;
@@ -219,6 +255,10 @@ export interface LlmDeps {
     texts: string[],
     opts: { dimensions?: number },
   ) => Promise<{ embeddings: number[][]; tokens: number }>;
+  transcribe: (
+    route: Route,
+    req: TranscribeRequest,
+  ) => Promise<TranscribeResponse>;
   ledger: Ledger;
   warn: (message: string, data: Record<string, unknown>) => void;
   /** A tenant reached its daily cap. Default: tell the operator, once per org per day. */
@@ -318,6 +358,7 @@ const defaultDeps: LlmDeps = {
   call: dispatch,
   converse: dispatchTurn,
   embed: (route, texts, opts) => embedOpenAiFamily(route, texts, opts),
+  transcribe: (route, req) => transcribeOpenAiCompatible(route, req),
   ledger: dbLedger,
   warn: (message, data) => console.warn(`[ai] ${message}`, data),
   capHit: notifyCapHit,
@@ -785,7 +826,98 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
     };
   }
 
-  return { ask, askObject, embed, converse };
+  /**
+   * Speech to text through LLM_TRANSCRIBE_MODEL (or `opts.model`), capped and
+   * priced like any call: per minute of audio (LLM_TRANSCRIBE_COST_PER_MINUTE).
+   * The cap reserves an estimate from the file size (errs long); the row
+   * settles with the duration the server reports, or keeps the estimate
+   * (costKnown=false) when it reports none.
+   */
+  async function transcribe(
+    opts: TranscribeOptions,
+  ): Promise<TranscribeResult> {
+    const modelString = opts.model ?? env().LLM_TRANSCRIBE_MODEL;
+    if (!modelString) {
+      throw new LlmDisabledError(
+        "Transcription is off — set LLM_TRANSCRIBE_MODEL (e.g. openai/gpt-4o-mini-transcribe, or local/<model> on a whisper server).",
+      );
+    }
+    const route = parseModel(modelString);
+    if (!TRANSCRIBE_PROVIDERS.includes(route.provider)) {
+      throw new LlmConfigError(
+        `transcription is not wired for ${route.provider}/ — use ${TRANSCRIBE_PROVIDERS.join(", ")}`,
+      );
+    }
+    if (!env().LLM_ENABLED || !transcribeEndpoint(route).baseUrl) {
+      throw new LlmDisabledError(`${route.id} is not configured.`);
+    }
+    const perMinute = env().LLM_TRANSCRIBE_COST_PER_MINUTE;
+    const priceSeconds = (seconds: number) =>
+      perMinute === undefined
+        ? null
+        : Math.round((seconds / 60) * perMinute * 1e6) / 1e6;
+    const estimate = priceSeconds(
+      Math.ceil(opts.audio.byteLength / ESTIMATE_BYTES_PER_SECOND),
+    );
+    const row: LlmCallRow = {
+      organizationId: opts.organizationId ?? null,
+      userId: opts.userId ?? null,
+      purpose: opts.purpose,
+      model: route.id,
+      provider: route.provider,
+      tier: null,
+      priority: opts.priority,
+      kind: "transcribe",
+      usage: ZERO_USAGE,
+      costUsd: estimate ?? 0,
+      costKnown: false,
+      latencyMs: 0,
+      ok: false,
+      error: null,
+      status: "pending",
+    };
+    const id = await reserve(opts, route, row, estimate);
+
+    const started = Date.now();
+    let r: TranscribeResponse;
+    try {
+      r = await deps.transcribe(route, {
+        audio: opts.audio,
+        filename: opts.filename,
+        contentType: opts.contentType,
+        language: opts.language,
+        prompt: opts.prompt,
+        timeoutMs: opts.timeoutMs,
+      });
+    } catch (err) {
+      await deps.ledger.settle(
+        id,
+        failedRow(row, err, estimate, Date.now() - started),
+      );
+      throw err;
+    }
+    const latencyMs = Date.now() - started;
+    const cost = r.seconds !== null ? priceSeconds(r.seconds) : null;
+    await deps.ledger.settle(id, {
+      ...row,
+      costUsd: cost ?? estimate ?? 0,
+      costKnown: cost !== null,
+      latencyMs,
+      ok: true,
+      error: null,
+      status: "done",
+    });
+    return {
+      text: r.text,
+      model: route.id,
+      seconds: r.seconds,
+      costUsd: cost ?? estimate ?? 0,
+      costKnown: cost !== null,
+      latencyMs,
+    };
+  }
+
+  return { ask, askObject, embed, converse, transcribe };
 }
 
 /** Rough size of a transcript for the pre-send estimate (errs high). */
@@ -805,6 +937,22 @@ export const ask = llm.ask;
 export const converse = llm.converse;
 export const askObject = llm.askObject;
 export const embed = llm.embed;
+export const transcribe = llm.transcribe;
+
+/** Can transcribe() run right now (model set, provider configured, LLM on)? */
+export function transcribeEnabled(): boolean {
+  const e = env();
+  if (!e.LLM_ENABLED || !e.LLM_TRANSCRIBE_MODEL) return false;
+  try {
+    const route = parseModel(e.LLM_TRANSCRIBE_MODEL);
+    return (
+      TRANSCRIBE_PROVIDERS.includes(route.provider) &&
+      Boolean(transcribeEndpoint(route).baseUrl)
+    );
+  } catch {
+    return false;
+  }
+}
 
 // ── introspection ────────────────────────────────────────────────────────
 

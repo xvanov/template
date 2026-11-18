@@ -27,5 +27,6 @@ export default defineConfig([
     mail: "packages/email/src/transport.ts",
     push: "packages/notify/src/ntfy.ts",
     sms: "packages/sms/src/transport.ts",
+    mobilePush: "packages/push-mobile/src/transport.ts",
   }),
 ]);

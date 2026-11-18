@@ -44,5 +44,6 @@ export {
   type Channel,
   type GuardConfig,
   type OutboundAttempt,
+  type RecipientFacts,
   type SafeMode,
 } from "./policy";

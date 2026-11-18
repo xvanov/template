@@ -1,6 +1,7 @@
 export { QUEUE_NAME, connection, queue, enqueue, closeQueue } from "./queue";
 export {
   handlers,
+  queueAppPush,
   type JobEntry,
   type JobName,
   type JobPayloads,

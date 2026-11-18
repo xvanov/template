@@ -16,7 +16,7 @@ import {
 const config = (over: Partial<GuardConfig> = {}): GuardConfig => ({
   safeMode: "strict",
   safeRecipients: parseSafeList("dev@team.test, @example.com"),
-  enabled: { email: true, push: true, sms: true },
+  enabled: { email: true, push: true, sms: true, mobile_push: true },
   operatorRecipients: { email: "ops@team.test", push: "ops-topic-123" },
   frozen: false,
   caps: {
@@ -147,7 +147,9 @@ describe("static gates", () => {
     expect(
       staticBlock(
         mail({ authMail: true }),
-        config({ enabled: { email: false, push: true, sms: true } }),
+        config({
+          enabled: { email: false, push: true, sms: true, mobile_push: true },
+        }),
         false,
       )?.reason,
     ).toBe("CHANNEL_DISABLED");
@@ -214,7 +216,9 @@ describe("push and operator messages", () => {
     expect(
       staticBlock(
         push(),
-        config({ enabled: { email: true, push: false, sms: true } }),
+        config({
+          enabled: { email: true, push: false, sms: true, mobile_push: true },
+        }),
         false,
       )?.reason,
     ).toBe("CHANNEL_DISABLED");
@@ -332,7 +336,7 @@ describe("sms recipients", () => {
 
   it("is off unless OUTBOUND_SMS_ENABLED, and authMail does not exempt a number from the switch", () => {
     const cfg = config({
-      enabled: { email: true, push: true, sms: false },
+      enabled: { email: true, push: true, sms: false, mobile_push: true },
       safeMode: "off",
     });
     expect(staticBlock(text({ authMail: true }), cfg, false)).toEqual(
@@ -348,5 +352,100 @@ describe("sms recipients", () => {
         false,
       ),
     ).toEqual(expect.objectContaining({ reason: "INVALID_RECIPIENT" }));
+  });
+});
+
+describe("mobile_push recipients (Expo push tokens)", () => {
+  const TOKEN = "ExponentPushToken[AbC-123_xyzQRS]";
+  const device = (over: Partial<OutboundAttempt> = {}): OutboundAttempt => ({
+    channel: "mobile_push",
+    recipient: TOKEN,
+    purpose: "push.proposal",
+    organizationId: "org_1",
+    ...over,
+  });
+
+  it("a recipient is exactly one Expo token, case kept; anything else is invalid", () => {
+    expect(parseRecipient("mobile_push", ` ${TOKEN} `)).toBe(TOKEN);
+    expect(parseRecipient("mobile_push", "ExpoPushToken[abcdefgh12]")).toBe(
+      "ExpoPushToken[abcdefgh12]",
+    );
+    for (const bad of [
+      TOKEN.toLowerCase(),
+      `${TOKEN},${TOKEN}`,
+      "ExponentPushToken[]",
+      "dev@team.test",
+      "+447700900123",
+      "ExponentPushToken[a b]",
+    ]) {
+      expect(parseRecipient("mobile_push", bad), bad).toBeNull();
+    }
+  });
+
+  it("the safe list keeps a token entry as written (tokens are case-sensitive)", () => {
+    expect(parseSafeList(`Dev@Team.test, ${TOKEN}`)).toEqual([
+      "dev@team.test",
+      TOKEN,
+    ]);
+  });
+
+  it("strict: allowed by its exact token, or by its owner's verified email or @domain", () => {
+    const list = parseSafeList(`dev@team.test, @example.com, ${TOKEN}`);
+    expect(isSafeRecipient("mobile_push", TOKEN, list)).toBe(true);
+    const other = "ExponentPushToken[someoneElse99]";
+    expect(isSafeRecipient("mobile_push", other, list)).toBe(false);
+    expect(
+      isSafeRecipient("mobile_push", other, list, {
+        deviceOwnerEmail: "dev@team.test",
+      }),
+    ).toBe(true);
+    expect(
+      isSafeRecipient("mobile_push", other, list, {
+        deviceOwnerEmail: "anyone@example.com",
+      }),
+    ).toBe(true);
+    expect(
+      isSafeRecipient("mobile_push", other, list, {
+        deviceOwnerEmail: "customer@real.com",
+      }),
+    ).toBe(false);
+    // Unverified owners arrive as null (the guard's lookup): nothing passes.
+    expect(
+      isSafeRecipient("mobile_push", other, list, { deviceOwnerEmail: null }),
+    ).toBe(false);
+  });
+
+  it("an email entry never admits an email-shaped string as a device", () => {
+    const list = parseSafeList("dev@team.test");
+    expect(isSafeRecipient("mobile_push", "dev@team.test", list)).toBe(false);
+  });
+
+  it("the local mail catcher does NOT open mobile push: it reaches a real phone", () => {
+    expect(effectiveSafeMode("local-catcher", "mobile_push")).toBe("strict");
+    expect(
+      staticBlock(device(), config({ safeMode: "local-catcher" }), false),
+    ).toMatchObject({
+      reason: "SAFE_MODE",
+      detail: expect.stringContaining("device token nor its owner"),
+    });
+    expect(
+      staticBlock(device(), config({ safeMode: "local-catcher" }), false, {
+        deviceOwnerEmail: "dev@team.test",
+      }),
+    ).toBeNull();
+  });
+
+  it("is off unless OUTBOUND_MOBILE_PUSH_ENABLED, and obeys the kill switch", () => {
+    const off = config({
+      safeMode: "off",
+      enabled: { email: true, push: true, sms: true, mobile_push: false },
+    });
+    expect(staticBlock(device(), off, false)).toMatchObject({
+      reason: "CHANNEL_DISABLED",
+      detail: "OUTBOUND_MOBILE_PUSH_ENABLED is off.",
+    });
+    expect(
+      staticBlock(device(), config({ safeMode: "off" }), true),
+    ).toMatchObject({ reason: "FROZEN" });
   });
 });

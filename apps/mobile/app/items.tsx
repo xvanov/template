@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { router } from "expo-router";
 import {
-  ActivityIndicator,
   FlatList,
   Pressable,
   RefreshControl,
@@ -11,9 +10,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { authClient, useSession } from "../lib/auth";
+import { DictateButton } from "../components/dictate-button";
+import { EmptyState, ErrorState, LoadingState } from "../components/states";
+import { useSession } from "../lib/auth";
 import { useThemeColors } from "../lib/theme";
 import { trpc } from "../lib/trpc";
+import { useSignOut } from "../lib/use-push";
 
 /** The same data as the web dashboard, over the same typed API. */
 export default function Items() {
@@ -28,6 +30,8 @@ export default function Items() {
   const remove = trpc.items.remove.useMutation({ onSuccess: refetch });
 
   const [title, setTitle] = useState("");
+  const [dictateError, setDictateError] = useState<string | null>(null);
+  const signOut = useSignOut();
 
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "bottom"]}>
@@ -43,12 +47,27 @@ export default function Items() {
         <Pressable
           accessibilityRole="button"
           onPress={async () => {
-            await authClient.signOut();
+            await signOut();
             router.replace("/login");
           }}
           className="rounded-lg border border-border bg-surface px-3 py-2"
         >
           <Text className="text-sm text-fg">Sign out</Text>
+        </Pressable>
+      </View>
+
+      <View className="flex-row gap-4 px-5 pb-3">
+        <Pressable
+          accessibilityRole="link"
+          onPress={() => router.push("/photos")}
+        >
+          <Text className="text-sm text-accent">Photos</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="link"
+          onPress={() => router.push("/device")}
+        >
+          <Text className="text-sm text-accent">This device</Text>
         </Pressable>
       </View>
 
@@ -67,6 +86,14 @@ export default function Items() {
           }}
           returnKeyType="done"
         />
+        <DictateButton
+          onText={(text) => {
+            setDictateError(null);
+            // Into the field, not straight into the list: the user checks it.
+            setTitle((t) => (t.trim() ? `${t.trim()} ${text}` : text));
+          }}
+          onError={setDictateError}
+        />
         <Pressable
           accessibilityRole="button"
           disabled={!title.trim() || create.isPending}
@@ -82,10 +109,14 @@ export default function Items() {
         </Pressable>
       </View>
 
+      {dictateError ? (
+        <Text className="px-5 pb-2 text-sm text-danger">{dictateError}</Text>
+      ) : null}
+
       {items.isPending ? (
-        <View className="flex-1 items-center justify-center">
-          <ActivityIndicator />
-        </View>
+        <LoadingState />
+      ) : items.error && !items.data ? (
+        <ErrorState message={items.error.message} onRetry={refetch} />
       ) : (
         <FlatList
           data={items.data ?? []}
@@ -99,10 +130,10 @@ export default function Items() {
             />
           }
           ListEmptyComponent={
-            <Text className="py-8 text-center text-sm text-muted">
-              Nothing yet.{" "}
-              {items.error ? `(${items.error.message})` : "Add one above."}
-            </Text>
+            <EmptyState
+              title="Nothing yet"
+              hint="Add one above, or dictate it."
+            />
           }
           renderItem={({ item }) => (
             <View className="flex-row items-center gap-3 border-b border-border py-3">
