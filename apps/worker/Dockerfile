@@ -42,7 +42,11 @@ ENV NODE_ENV=production
 COPY --from=prune /app/out/full/packages/db/prisma ./packages/db/prisma
 WORKDIR /app/packages/db
 USER node
-CMD ["npx", "--no-install", "prisma", "migrate", "deploy"]
+# The collation guard first (prisma/ops/collation-guard.sql): if the database
+# image changed its C library, text indexes are rebuilt before anything runs
+# on them — even on a host whose deploy.sh predates that check. A no-op query
+# otherwise. If the rebuild fails, migrate fails, and web/worker are not started.
+CMD ["sh", "-c", "npx --no-install prisma db execute --file prisma/ops/collation-guard.sql && exec npx --no-install prisma migrate deploy"]
 
 # The worker runs its TypeScript through tsx — no bundling step to keep in
 # sync — so the runtime needs production dependencies only.

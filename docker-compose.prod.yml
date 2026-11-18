@@ -58,6 +58,11 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.deploy (openssl rand -hex 24)}
       POSTGRES_DB: app
+      # NEW volumes only (initdb): sort text with Postgres's own builtin
+      # C.UTF-8 collation, not the C library's, so an image with a different
+      # libc (Alpine/musl ↔ Debian/glibc) cannot silently invalidate text
+      # indexes. Existing volumes keep theirs: scripts/lib/collation.sh.
+      POSTGRES_INITDB_ARGS: "--locale-provider=builtin --builtin-locale=C.UTF-8"
     # No `ports:` — nothing outside this compose network needs the database.
     # Backups use `docker compose exec db pg_dump`; for a psql shell use
     # `docker compose ... exec db psql -U postgres app`.
@@ -92,7 +97,8 @@ services:
       start_interval: 1s
     logging: *logging
 
-  # One-shot: `prisma migrate deploy`, then exit. Idempotent (applies only what
+  # One-shot: the collation guard (packages/db/prisma/ops/collation-guard.sql),
+  # then `prisma migrate deploy`, then exit. Idempotent (applies only what
   # is pending; each migration runs in a transaction). If it fails, web and
   # worker are NOT replaced — the previous version keeps serving — and the
   # reason is in this container's output, which deploy.sh prints.

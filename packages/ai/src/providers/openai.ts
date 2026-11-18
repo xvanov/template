@@ -16,10 +16,12 @@
  * that runs gpt-5 is not detected as a reasoning model by name. Name
  * deployments after the model (the Azure default) or expect max_tokens.
  */
+// @repo/env FIRST: evaluating it removes blank optional URLs from
+// process.env, and @ai-sdk/openai reads OPENAI_BASE_URL when it loads.
+import { env } from "@repo/env";
 import { createAzure } from "@ai-sdk/azure";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { env } from "@repo/env";
 import {
   APICallError,
   embedMany,

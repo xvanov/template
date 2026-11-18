@@ -23,7 +23,7 @@ mobile: ## run the Expo dev server (scan the QR with Expo Go)
 worker: ## run only the background worker
 	@npm run dev:worker
 
-up: ## start postgres + redis + the local mail inbox
+up: ## start postgres + redis + the local mail inbox (rebuilds indexes if the db's collation changed)
 	@npm run infra:up
 
 inbox: ## print the local mail inbox URL (confirmation links land here)
@@ -64,8 +64,10 @@ e2e: ## playwright end-to-end tests against the web app
 smoke: ## boot the real app and drive the core journey (the merge gate)
 	@npm run smoke
 
-test-ops: ## migration guard unit test + backup/restore round trip (~20s, docker)
+test-ops: ## migration guard, deploy self-exec, collation repair repro, backup/restore round trip (~30s, docker)
 	@bash scripts/test-migration-guard.sh
+	@bash scripts/test-deploy-selfexec.sh
+	@bash scripts/test-collation.sh
 	@bash scripts/test-backup-restore.sh
 
 deploy: ## PRODUCTION: pull, build, migrate, swap, health-gate (docs/deploy.md)

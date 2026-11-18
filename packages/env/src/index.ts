@@ -422,11 +422,38 @@ export const serverEnvKeys = Object.keys(
   serverSchema.shape,
 ) as (keyof ServerEnv)[];
 
+/**
+ * Optional URL settings that are present but BLANK (`OPENAI_BASE_URL=`, as
+ * copied from .env.example) are removed from the environment, so "blank"
+ * means "unset" for every reader — not only for env(). Third-party SDKs read
+ * some of these themselves at import time: `@ai-sdk/openai` builds a default
+ * provider from OPENAI_BASE_URL when the module loads, and throws "baseURL
+ * must be a non-empty string" on a blank one, which took the production
+ * server down at boot. Runs when this module is first evaluated, so it must
+ * be imported before such SDKs (packages/ai/src/providers/openai.ts does).
+ */
+export function dropBlankOptionalUrls(
+  target: Record<string, string | undefined> = process.env,
+): string[] {
+  const dropped: string[] = [];
+  for (const [key, schema] of Object.entries(serverSchema.shape)) {
+    if (!/(_URL|_ENDPOINT)$/.test(key)) continue;
+    const v = target[key];
+    if (v === undefined || v.trim() !== "") continue;
+    if (!schema.safeParse(undefined).success) continue; // required: let env() say so
+    delete target[key];
+    dropped.push(key);
+  }
+  return dropped;
+}
+dropBlankOptionalUrls();
+
 let cached: ServerEnv | undefined;
 
 export function env(): ServerEnv {
   if (cached) return cached;
 
+  dropBlankOptionalUrls();
   const parsed = serverSchema.safeParse(process.env);
   if (!parsed.success) {
     const lines = parsed.error.issues.map(
