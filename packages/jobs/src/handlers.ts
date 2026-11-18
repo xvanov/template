@@ -15,8 +15,12 @@
 import { z } from "zod";
 import { abandonStaleRuns, executeRun } from "@repo/agent";
 import { db } from "@repo/db";
+import { markInboundFailed, processInbound } from "@repo/inbound";
 import { runOperatorTick } from "@repo/notify";
 import { ingestDocument, markIngestFailed, sweepStaleIngests } from "@repo/rag";
+import { reconcileSmsDelivery } from "@repo/sms";
+
+import { enqueue } from "./queue";
 import {
   ask,
   LlmBudgetExceededError,
@@ -45,6 +49,18 @@ const schemas = {
     /** Rebuild even if the content hash says nothing changed. */
     force: z.boolean().optional(),
   }),
+
+  /**
+   * Finish an inbound message the webhook stored (packages/inbound): fetch
+   * its content, attachments into storage, thread it. Idempotent.
+   */
+  "inbound.process": z.object({
+    organizationId: z.string().min(1),
+    inboundMessageId: z.string().min(1),
+  }),
+
+  /** Ask Twilio about texts whose delivery status never arrived (every 30 min). */
+  "sms.reconcile": z.object({}),
 
   /** Demo scheduled job: prune soft state and log a heartbeat. */
   "maintenance.nightly": z.object({}),
@@ -156,6 +172,21 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     onFinalFailure: (payload, err) => markIngestFailed(payload, err),
   },
 
+  "inbound.process": {
+    scope: "org",
+    schema: schemas["inbound.process"],
+    run: (payload) => processInbound(payload),
+    // Retries used up (Resend unreachable for minutes, storage down): the
+    // row shows "failed" and why, instead of "received" forever.
+    onFinalFailure: (payload, err) => markInboundFailed(payload, err),
+  },
+
+  "sms.reconcile": {
+    scope: "system",
+    schema: schemas["sms.reconcile"],
+    run: () => reconcileSmsDelivery(),
+  },
+
   "maintenance.nightly": {
     scope: "system",
     schema: schemas["maintenance.nightly"],
@@ -191,10 +222,14 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
       const abandonedAgentRuns = await abandonStaleRuns(db);
       // Same idea for documents a lost docs.ingest job left "indexing".
       const abandonedIngests = await sweepStaleIngests();
+      // ...and inbound messages whose job was never queued (Redis was down
+      // when the webhook stored them).
+      const requeuedInbound = await requeueStuckInbound();
       return {
         ...(await runOperatorTick()),
         abandonedAgentRuns,
         abandonedIngests,
+        requeuedInbound,
       };
     },
   },
@@ -212,6 +247,35 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     },
   },
 };
+
+/**
+ * Inbound messages still "received" 10 minutes after arriving: their
+ * `inbound.process` job was never queued or was lost. Queue them again; the
+ * job id makes this a no-op for one that is merely still waiting.
+ */
+async function requeueStuckInbound(): Promise<number> {
+  const now = Date.now();
+  const stuck = await db.inboundMessage.findMany({
+    where: {
+      status: "received",
+      createdAt: {
+        lt: new Date(now - 10 * 60_000),
+        gt: new Date(now - 7 * 24 * 3_600_000),
+      },
+    },
+    orderBy: { createdAt: "asc" },
+    take: 100,
+    select: { id: true, organizationId: true },
+  });
+  for (const m of stuck) {
+    await enqueue(
+      "inbound.process",
+      { organizationId: m.organizationId, inboundMessageId: m.id },
+      { jobId: `inbound-${m.id}` },
+    );
+  }
+  return stuck.length;
+}
 
 export function isJobName(name: string): name is JobName {
   return name in handlers;

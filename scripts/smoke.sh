@@ -216,6 +216,11 @@ echo "→ booting the built app on :${PORT}"
 # mail (auth mail to the address being signed up) still arrives, while any
 # other mail to these throwaway addresses would be blocked and logged.
 #
+# Inbound email gets a fixed throwaway domain so the journey can create an
+# address and post to it. EMAIL_TRANSPORT=smtp and SMS off whatever .env says:
+# the gate must never reach Resend or Twilio. Their webhook secrets are blanked
+# so the journey can prove those webhooks fail closed in production.
+#
 # NOTE the override names: `.env` was sourced above with `set -a`, so SMTP_PORT
 # and MAILPIT_URL are ALREADY exported. A `${SMTP_PORT:-1036}` default would
 # therefore never apply, and the gate would quietly mail your dev inbox instead
@@ -227,6 +232,8 @@ REQUIRE_EMAIL_VERIFICATION=true \
 DEV_MAIL_INBOX_URL="" \
 OUTBOUND_SAFE_MODE=true OUTBOUND_SAFE_RECIPIENTS="" OUTBOUND_FROZEN=false \
 CRON_SECRET="$SMOKE_CRON_SECRET" EMAIL_WEBHOOK_SECRET="$SMOKE_WEBHOOK_SECRET" \
+INBOUND_EMAIL_DOMAIN=inbound.smoke.test EMAIL_TRANSPORT=smtp OUTBOUND_SMS_ENABLED=false \
+TWILIO_AUTH_TOKEN="" RESEND_WEBHOOK_SECRET="" \
   node "${STANDALONE}/server.js" > "$WEB_LOG" 2>&1 &
 SERVER_PID=$!
 
@@ -236,6 +243,7 @@ echo "→ booting the worker"
 # runs (tsx, no bundle), same isolated environment as the server. Started
 # directly with node — not via `npm run` — so the pid we kill is the worker
 # itself and nothing is left orphaned.
+EMAIL_TRANSPORT=smtp OUTBOUND_SMS_ENABLED=false \
 APP_URL="$BASE_URL" node --import tsx apps/worker/src/index.ts > "$WORKER_LOG" 2>&1 &
 WORKER_PID=$!
 

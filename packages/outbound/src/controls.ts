@@ -105,3 +105,106 @@ export async function findSuppression(
     select: { reason: true, organizationId: true },
   });
 }
+
+/**
+ * Lift a suppression the RECIPIENT asked for and has now taken back (an SMS
+ * "START" after "STOP"). Only rows whose reason starts with `reasonPrefix` go:
+ * a hard bounce or a complaint is not the recipient's to undo by text.
+ */
+export async function unsuppress(
+  input: {
+    channel: Channel;
+    recipient: string;
+    reasonPrefix: string;
+    organizationId?: string | null;
+  },
+  client: Db = db,
+): Promise<number> {
+  const recipient = parseRecipient(input.channel, input.recipient);
+  if (!recipient) return 0;
+  const { count } = await client.outboundSuppression.deleteMany({
+    where: {
+      channel: input.channel,
+      recipient,
+      organizationId: input.organizationId ?? null,
+      reason: { startsWith: input.reasonPrefix },
+    },
+  });
+  return count;
+}
+
+/**
+ * Delivery states a provider reports after accepting a message, ranked so a
+ * late or repeated callback cannot move a message backwards: Twilio may post
+ * "sent" after "delivered", and every provider retries its webhooks.
+ */
+const DELIVERY_RANK: Record<string, number> = {
+  queued: 0,
+  accepted: 0,
+  sending: 1,
+  sent: 1,
+  delayed: 2,
+  delivered: 3,
+  undelivered: 3,
+  failed: 3,
+  bounced: 3,
+  suppressed: 3,
+  // Above delivered: a complaint arrives after delivery and is the worst news.
+  complained: 4,
+};
+
+export const DELIVERY_STATUSES = Object.keys(DELIVERY_RANK);
+
+/** Would moving from `prior` to `next` be progress (or the same state)? */
+export function deliveryAdvances(
+  prior: string | null | undefined,
+  next: string,
+): boolean {
+  const n = DELIVERY_RANK[next];
+  if (n === undefined) return false;
+  if (!prior) return true;
+  return n >= (DELIVERY_RANK[prior] ?? -1);
+}
+
+/**
+ * Record what the provider says happened to a message it accepted, by the
+ * provider's message id. Idempotent, and never moves a message backwards
+ * (see DELIVERY_RANK). Returns how many outbound_message rows matched: zero
+ * is normal for a message sent before tracking, or by another app sharing
+ * the provider account.
+ */
+export async function recordDeliveryStatus(
+  input: {
+    channel: Channel;
+    providerMessageId: string;
+    status: string;
+    detail?: string | null;
+  },
+  client: Pick<PrismaClient, "outboundMessage"> = db,
+): Promise<{ matched: number; updated: number }> {
+  const rows = await client.outboundMessage.findMany({
+    where: {
+      channel: input.channel,
+      providerMessageId: input.providerMessageId,
+    },
+    select: { id: true, deliveryStatus: true },
+  });
+  let updated = 0;
+  for (const row of rows) {
+    if (!deliveryAdvances(row.deliveryStatus, input.status)) continue;
+    // Compare-and-set on the status we read, so two concurrent callbacks
+    // cannot interleave into a regression.
+    const r = await client.outboundMessage.updateMany({
+      where: { id: row.id, deliveryStatus: row.deliveryStatus },
+      data: {
+        deliveryStatus: input.status,
+        ...(input.detail !== undefined
+          ? { deliveryDetail: input.detail?.slice(0, 1000) ?? null }
+          : {}),
+        deliveryUpdatedAt: new Date(),
+      },
+    });
+    updated += r.count;
+  }
+  return { matched: rows.length, updated };
+}

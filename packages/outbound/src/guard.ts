@@ -24,10 +24,19 @@
  * sent/failed, so a message cannot leave without a record: if the row cannot
  * be written, the provider is never called.
  *
- * Channel packages (packages/email; push lives in packages/notify) call `deliver` with their raw
- * transport as the callback and DO NOT export that transport. The callback
- * receives the PARSED recipient and must send to exactly that. See the
- * "Outbound messages" section of CLAUDE.md.
+ * Channel packages (packages/email, packages/sms; push lives in packages/notify)
+ * call `deliver` with their raw transport as the callback and DO NOT export
+ * that transport. The callback receives the PARSED recipient and must send to
+ * exactly that, and the row id, which a provider that supports it is given as
+ * its idempotency key. See the "Outbound messages" section of CLAUDE.md.
+ *
+ * Idempotency: an attempt with an `idempotencyKey` reuses the row of an
+ * earlier attempt with the same key. Once that row is "sent" nothing is sent
+ * again; otherwise the gates run again and the send reuses the row, and so the
+ * provider idempotency key. SMTP has no such key: a process that dies between
+ * the relay accepting a message and the row being marked sent can still lead
+ * to one duplicate on retry; so can Twilio, whose message API takes no key.
+ * Resend drops a repeat of the same key for 24 hours.
  */
 import { db as defaultDb, type PrismaClient } from "@repo/db";
 import { env } from "@repo/env";
@@ -57,6 +66,22 @@ export interface ProviderReceipt {
   detail?: string;
 }
 
+/** What the transport is told besides the recipient. */
+export interface SendMeta {
+  /**
+   * The outbound_message row id. Stable across retries of an attempt with an
+   * idempotencyKey: pass it to the provider as ITS idempotency key (Resend's
+   * Idempotency-Key header) and use it in the Message-ID, so a reply can be
+   * threaded back to this row.
+   */
+  messageId: string;
+}
+
+export type Transport = (
+  recipient: string,
+  meta: SendMeta,
+) => Promise<ProviderReceipt>;
+
 export interface GuardDeps {
   db: Pick<
     PrismaClient,
@@ -82,6 +107,7 @@ export function configFromEnv(): GuardConfig {
     enabled: {
       email: e.OUTBOUND_EMAIL_ENABLED,
       push: e.OUTBOUND_PUSH_ENABLED,
+      sms: e.OUTBOUND_SMS_ENABLED,
     },
     operatorRecipients: operatorRecipients(e),
     frozen: e.OUTBOUND_FROZEN,
@@ -103,7 +129,8 @@ function operatorRecipients(e: {
   OPERATOR_EMAIL?: string;
   NTFY_TOPIC?: string;
 }): GuardConfig["operatorRecipients"] {
-  const raw = { email: e.OPERATOR_EMAIL, push: e.NTFY_TOPIC };
+  // No operator phone: operator alerts go by push or email (packages/notify).
+  const raw = { email: e.OPERATOR_EMAIL, push: e.NTFY_TOPIC, sms: undefined };
   const out: GuardConfig["operatorRecipients"] = {};
   for (const ch of CHANNELS) {
     const r = raw[ch] && parseRecipient(ch, raw[ch]);
@@ -128,7 +155,7 @@ export function describeSafeMode(
     case "local-catcher":
       return [
         "",
-        "[outbound] SAFE MODE: LOCAL CATCHER (OUTBOUND_SAFE_MODE=local) — EVERY email recipient allowed (push: operator only).",
+        "[outbound] SAFE MODE: LOCAL CATCHER (OUTBOUND_SAFE_MODE=local) — EVERY email recipient allowed (push: operator only; sms: allowlist only).",
         `[outbound]   This trusts that SMTP (${smtpHost ?? "unset: console"}) is a catcher like Mailpit that`,
         "[outbound]   delivers nowhere. If it can relay to the internet, real people get this mail.",
         "",
@@ -148,55 +175,108 @@ export function describeSafeMode(
  */
 export async function deliver(
   attempt: OutboundAttempt,
-  send: (recipient: string) => Promise<ProviderReceipt>,
+  send: Transport,
   deps: Partial<GuardDeps> = {},
 ): Promise<DeliveryResult> {
   const db = deps.db ?? defaultDb;
   const config = deps.config ?? configFromEnv();
   const recipient = parseRecipient(attempt.channel, attempt.recipient);
 
+  // An earlier attempt at this same logical message?
+  const key = attempt.idempotencyKey?.slice(0, 300);
+  const prior = key
+    ? await db.outboundMessage.findUnique({
+        where: { idempotencyKey: key },
+        select: { id: true, status: true, providerMessageId: true },
+      })
+    : null;
+  if (prior?.status === "sent") return alreadySent(prior);
+
   const block = recipient
     ? await firstBlock({ ...attempt, recipient }, config, db, deps.store)
     : staticBlock(attempt, config, false);
-  const row = (status: string, extra: Record<string, unknown> = {}) =>
-    db.outboundMessage.create({
-      data: {
-        organizationId: attempt.organizationId ?? null,
-        channel: attempt.channel,
-        // The parsed address; an unparseable one is kept raw (truncated) so the
-        // log shows what was attempted.
-        recipient: recipient ?? attempt.recipient.slice(0, 320),
-        subject: attempt.subject?.slice(0, 300),
-        purpose: attempt.purpose,
-        actorUserId: attempt.actorUserId ?? null,
-        status,
-        ...extra,
-      },
-      select: { id: true },
-    });
+
+  /**
+   * Write this attempt's row: a new one, or the prior attempt's row reset to
+   * this outcome. Returns null when a CONCURRENT attempt with the same key
+   * has already sent it (or holds it): then this one must not send.
+   */
+  const record = async (
+    status: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<{ id: string } | { sent: SentRow }> => {
+    const data = {
+      status,
+      blockReason: null,
+      detail: null,
+      finishedAt: null,
+      ...extra,
+    };
+    if (prior) {
+      // Only from a state that is not "sent": the compare-and-set makes two
+      // racing retries take turns instead of both sending.
+      const r = await db.outboundMessage.updateMany({
+        where: { id: prior.id, status: { not: "sent" } },
+        data,
+      });
+      if (r.count === 1) return { id: prior.id };
+      return { sent: { ...prior, status: "sent" } };
+    }
+    try {
+      return await db.outboundMessage.create({
+        data: {
+          organizationId: attempt.organizationId ?? null,
+          channel: attempt.channel,
+          // The parsed address; an unparseable one is kept raw (truncated) so
+          // the log shows what was attempted.
+          recipient: recipient ?? attempt.recipient.slice(0, 320),
+          subject: attempt.subject?.slice(0, 300),
+          purpose: attempt.purpose,
+          actorUserId: attempt.actorUserId ?? null,
+          idempotencyKey: key ?? null,
+          ...data,
+        },
+        select: { id: true },
+      });
+    } catch (err) {
+      // Another attempt with this key created its row between our read and
+      // this insert. It is sending (or has sent): do not send a second copy.
+      if (key && isUniqueViolation(err)) {
+        const winner = await db.outboundMessage.findUniqueOrThrow({
+          where: { idempotencyKey: key },
+          select: { id: true, status: true, providerMessageId: true },
+        });
+        return { sent: winner };
+      }
+      throw err;
+    }
+  };
 
   if (block || !recipient) {
     const b = block ?? {
       reason: "INVALID_RECIPIENT" as const,
       detail: "Invalid recipient.",
     };
-    const { id } = await row("blocked", {
+    const row = await record("blocked", {
       blockReason: b.reason,
       detail: b.detail,
       finishedAt: new Date(),
     });
+    if ("sent" in row) return alreadySent(row.sent);
     console.warn(
       `[outbound] BLOCKED ${attempt.channel} to ${displayRecipient(attempt.channel, attempt.recipient)} (${attempt.purpose}): ${b.reason} — ${b.detail}`,
     );
-    return { status: "blocked", id, ...b };
+    return { status: "blocked", id: row.id, ...b };
   }
 
-  // No row, no send: if this insert throws, the provider is never called.
-  const { id } = await row("pending");
+  // No row, no send: if this write throws, the provider is never called.
+  const row = await record("pending");
+  if ("sent" in row) return alreadySent(row.sent);
+  const { id } = row;
 
   let receipt: ProviderReceipt;
   try {
-    receipt = await send(recipient);
+    receipt = await send(recipient, { messageId: id });
   } catch (err) {
     await db.outboundMessage
       .updateMany({
@@ -236,6 +316,33 @@ export async function deliver(
     );
   }
   return { status: "sent", id, ...receipt };
+}
+
+interface SentRow {
+  id: string;
+  status: string;
+  providerMessageId: string | null;
+}
+
+/** The answer for an attempt whose key was already used by a send. */
+function alreadySent(row: SentRow): DeliveryResult {
+  return {
+    status: "sent",
+    id: row.id,
+    providerMessageId: row.providerMessageId ?? undefined,
+    detail:
+      row.status === "sent"
+        ? "duplicate: already sent under this idempotency key"
+        : "duplicate: another attempt with this idempotency key is in progress",
+  };
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: unknown }).code === "P2002"
+  );
 }
 
 /** `attempt.recipient` is already parsed. */

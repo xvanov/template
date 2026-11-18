@@ -23,7 +23,9 @@ packages/domain  domain functions (input rules + writes) shared by tRPC routers 
 packages/rag   documents: chunk → embed → pgvector + Postgres FTS → hybrid search (RRF) → cited answers
 packages/evals  eval harness: golden sets, graders, retrieval metrics, baselines (`npm run eval`)
 packages/storage  file storage: local disk or any S3-compatible bucket
-packages/email  outbound SMTP (nodemailer), ONLY via the outbound guard. Mailpit locally
+packages/email  outbound email (SMTP by default, or Resend), ONLY via the outbound guard. Mailpit locally
+packages/sms   outbound SMS (Twilio), ONLY via the outbound guard. Off by default
+packages/inbound  messages that ARRIVE (email, SMS): routed to a tenant, stored, finished by the worker
 packages/outbound  the outbound guard: every outbound message passes it and is logged
 packages/notify  operator alerts (ntfy push, else email, else console), deduped + digested
 packages/security  rate limiting, cron/webhook auth, AES-GCM sealing of stored secrets
@@ -112,8 +114,12 @@ backup/restore round trip (about 30s). `make lint` shellchecks every script.
    (`/api/auth/[...all]`), file bytes (`/api/media/*`), health (`/api/health`),
    and machine callers authenticated by a secret instead of a session: cron
    triggers (`/api/cron/[schedule]`, `requireCronAuth`), inbound webhooks
-   (`/api/webhooks/*`, `verifyHmac` over the raw body) and the MCP endpoint
-   (`/api/mcp`, an org API key; its tools call tRPC procedures). Copy those.
+   (`/api/webhooks/*`, signature over the raw body: `email-events` (Resend
+   via `verifySvix`, or generic `verifyHmac`), `email-inbound` (`verifyHmac`),
+   `twilio` and `twilio/status` (`verifyTwilioWebhook` from `@repo/sms`)) and
+   the MCP endpoint (`/api/mcp`, an org API key; its tools call tRPC
+   procedures). Copy those. A webhook verifies, stores, and hands slow work to
+   a job; it never does that work in the request.
 2. **Tenant isolation lives in `orgProcedure`, not in resolvers.** Any query on
    an org-scoped table goes through `orgProcedure` and filters on
    `ctx.organizationId`. Mutations use `updateMany`/`deleteMany` with the org in
@@ -146,14 +152,19 @@ backup/restore round trip (about 30s). `make lint` shellchecks every script.
 7. **Shared packages export TypeScript source**, no build step. Next transpiles
    them (`transpilePackages`); Metro sees them via `watchFolders`.
 8. **Every outbound message goes through the guard** (`deliver` in
-   `packages/outbound`). Channels today: `email` (`sendMail` from
-   `@repo/email`) and `push` (ntfy, only via `notifyOperator` from
-   `@repo/notify`). Never import nodemailer or a provider SDK anywhere else,
-   and never read `NTFY_URL`/`NTFY_TOKEN` outside `packages/notify/src/ntfy.ts`
-   (ESLint rules in `eslint.boundaries.mjs` fail `make lint`; wiring tests
-   back them up). A new channel (SMS) gets its own package that calls
-   `deliver` and does not export its raw transport, plus a `Channel` value and
-   enable flag added in the same change (not before).
+   `packages/outbound`). Channels: `email` (`sendMail` from `@repo/email`),
+   `sms` (`sendSms` from `@repo/sms`) and `push` (ntfy, only via
+   `notifyOperator` from `@repo/notify`). Each provider is reachable from ONE
+   file, its channel's transport: mail SDKs (nodemailer, resend) and
+   `RESEND_API_KEY` only in `packages/email/src/transport.ts`, the `twilio` SDK
+   and `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN` only in
+   `packages/sms/src/transport.ts`, `NTFY_URL`/`NTFY_TOKEN` only in
+   `packages/notify/src/ntfy.ts` (ESLint rules in `eslint.boundaries.mjs` fail
+   `make lint`; wiring tests back them up). A new channel gets its own package
+   that calls `deliver` and does not export its raw transport, plus a
+   `Channel` value, a recipient parser and an enable flag in the same change.
+   Transports refuse the real SDK under `NODE_ENV=test`; tests install a fake
+   (`useFakeResend`, `useFakeTwilio`).
 9. **Mutations write an audit event in the same transaction**:
    `ctx.db.$transaction(async (tx) => { ...; await ctx.audit("item.delete", { targetId }, tx) })`.
    `packages/api/src/routers/items.ts` is the reference.
@@ -179,26 +190,33 @@ Exists because a production app emailed the wrong thing to 8 real customers.
 0. recipient: exactly ONE plain address. Lists (`a@x, b@y`), display names
    (`Name <a@x>`) and anything else a mail library would expand are blocked as
    `INVALID_RECIPIENT`; the parsed address is what gets checked, capped,
-   logged, and handed to the transport.
-1. channel switch `OUTBOUND_EMAIL_ENABLED` (on)
+   logged, and handed to the transport. SMS: one number in international
+   form, normalised to E.164 (`+44 7700 900123` → `+447700900123`); a
+   national number (`07700 900123`) is refused, never guessed at.
+1. channel switch `OUTBOUND_EMAIL_ENABLED` (on), `OUTBOUND_PUSH_ENABLED` (on),
+   `OUTBOUND_SMS_ENABLED` (OFF)
 2. kill switch: `OUTBOUND_FROZEN=true`, or at runtime with no restart:
    `npm run outbound:freeze -- on` / `off` / `status` (stored in `app_setting`)
 3. **safe mode**, resolved once per process and printed loudly at boot:
-   - `strict`: only `OUTBOUND_SAFE_RECIPIENTS` (addresses, `@domain`) get mail;
-     everything else is blocked and logged.
+   - `strict`: only `OUTBOUND_SAFE_RECIPIENTS` (addresses, `@domain`, exact
+     E.164 numbers) get anything; everything else is blocked and logged.
    - `local-catcher`: everyone is allowed. Only via an explicit
      `OUTBOUND_SAFE_MODE=local`, which asserts SMTP is a catcher (Mailpit) that
      delivers nowhere. `.env.example` sets it, so `make dev` just works. It is
      never inferred from a loopback `SMTP_HOST` (a local postfix relays to the
-     internet), and production refuses it and runs strict.
+     internet), and production refuses it and runs strict. It opens EMAIL
+     only: SMS and push have no catcher (they reach real phones), so for them
+     it means strict.
    - `off`: real mail to real people (`OUTBOUND_SAFE_MODE=false`, or unset in
      production).
 
    Unset outside production = `strict`, so a staging box loaded with
    production data cannot mail a customer.
 
-4. suppression list (`outbound_suppression`: global for bounces/complaints,
-   fed by `/api/webhooks/email-events`; per-org for unsubscribes)
+4. suppression list (`outbound_suppression`: global for hard bounces and
+   complaints, fed by `/api/webhooks/email-events`, and for SMS STOP, fed by
+   `/api/webhooks/twilio` in the request itself (an opt-out must not wait for
+   the worker), lifted again by START; per-org for unsubscribes)
 5. volume caps in Redis: per recipient/hour, per org/hour and /day, and a
    global/hour, with SEPARATE global pools for auth mail and app mail so a
    flood of anonymous sign-ups cannot starve tenants' mail. Redis unreachable =
@@ -210,6 +228,23 @@ called, so nothing leaves without a record. Blocked sends resolve with
 recorded as `failed`. If the provider accepted a message but recording "sent"
 fails, it still returns sent (the row stays `pending`) so a retry cannot send
 it twice. Tenants read their own rows via `activity.outbound`.
+
+**Retries and idempotency.** Pass `idempotencyKey` (`invoice.42.reminder`)
+from anything that retries: a second `deliver` with the same key reuses the
+first row, returns it untouched once it was sent, and otherwise sends again
+under the same row id, which the transport hands the provider (Resend's
+`Idempotency-Key`; every email's `Message-ID` is `<obm.<row id>@<from
+domain>>`, which is how replies are threaded). SMTP and Twilio take no key, so
+a crash between their accepting a message and our marking it sent can still
+duplicate one.
+
+**Delivery status.** `status` is the guard's verdict ("the provider took
+it"). What happened next is `deliveryStatus` (`delivered`, `bounced`,
+`undelivered`, `complained`, ...), written by the Resend and Twilio webhooks by
+provider message id and never moved backwards (`recordDeliveryStatus`). The
+`sms.reconcile` job asks Twilio about texts with no final status after 15
+minutes, because a lost callback otherwise makes a dead number look
+delivered (it did, for months, in the app this came from).
 
 **Operator messages vs safe mode.** `notifyOperator` sends with
 `operator: true`, which is exempt from the strict allowlist ONLY when the
@@ -231,6 +266,37 @@ The recipient just typed that address into the sign-up form, so it cannot be
 strict box. The kill switch, suppression and caps still apply. Use
 `sendAuthMail` for better-auth callbacks only. `make smoke` forces safe mode
 to `strict` with an empty allowlist, so the gate proves sign-up still works.
+
+## Inbound messages (packages/inbound)
+
+Email and texts that ARRIVE land in `inbound_message` (org-scoped), shown on
+`/app/inbox` (tRPC `inbox.*`).
+
+- **Routing** is an explicit table, `inbound_route` (channel, address →
+  tenant), nothing guessed from content. Email: each tenant gets one random
+  address on `INBOUND_EMAIL_DOMAIN` (`acme-k3x9p2mq@in.example.com`, created
+  from the Inbox page); `+tag` addresses route like the bare one; add rows for
+  any other address. SMS: the number texted if it has a row, else the tenant
+  that last texted the sender (30 days), which is right for one shared Twilio
+  number. No match = not stored (logged, 200 to the provider).
+- **Flow**: the webhook verifies, stores a `received` row (unique on provider +
+  provider id, so retries are duplicates) and queues `inbound.process`. The
+  job fetches Resend's content (its webhook carries only metadata), stores
+  attachments in packages/storage at deterministic keys (only the upload
+  allow-list's types; the rest are listed as skipped), threads to the
+  outbound message it answers (same tenant only) and marks it `processed`.
+  If queueing failed, the 15-minute `operator.digest` tick re-queues it.
+- **HTML is never rendered.** It is stored as received; the UI shows text
+  (derived from the HTML when a mail had none), so a stranger's HTML never
+  runs on our origin.
+- **Providers**: Resend (`email.received` on `/api/webhooks/email-events`),
+  any other sender via the generic signed `/api/webhooks/email-inbound`
+  (body format: `genericInboundEmail` in `packages/inbound/src/process.ts`),
+  Twilio on `/api/webhooks/twilio`. Twilio signs the PUBLIC URL it called:
+  verification rebuilds it from `TWILIO_WEBHOOK_BASE_URL` (else `APP_URL`)
+  plus the path, never from the request (behind a proxy that is an internal
+  host). A wrong base URL shows as `[sms] refused a webhook ...` in the log.
+- No auto-replies to texts: Twilio's Advanced Opt-Out answers STOP/HELP.
 
 ## Operator notifications
 

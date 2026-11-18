@@ -8,6 +8,7 @@
 import {
   Bot,
   FileText,
+  Inbox,
   LayoutDashboard,
   LogOut,
   type LucideIcon,
@@ -47,6 +48,7 @@ import { trpc } from "@/lib/trpc";
 
 const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/app", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/app/inbox", label: "Inbox", icon: Inbox },
   { href: "/app/docs", label: "Documents", icon: FileText },
   { href: "/app/agent", label: "Agent", icon: Bot },
 ];

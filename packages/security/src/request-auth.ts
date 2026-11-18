@@ -92,6 +92,58 @@ export function verifyHmac(opts: HmacOptions): AuthCheck {
   return constantTimeEqual(given, expected) ? { ok: true } : deny;
 }
 
+export interface SvixOptions {
+  /** The RAW request body, exactly as received. */
+  payload: string;
+  /** The `svix-id`, `svix-timestamp` and `svix-signature` headers. */
+  id: string | null | undefined;
+  timestamp: string | null | undefined;
+  signature: string | null | undefined;
+  /** `whsec_<base64>`, as the provider shows it. */
+  secret: string | undefined;
+  secretName?: string;
+  production: boolean;
+  /** Svix's own libraries allow 5 minutes either way. */
+  toleranceSeconds?: number;
+  now?: () => number;
+}
+
+/**
+ * A Svix-signed webhook (Resend, Clerk and others sign this way): HMAC-SHA256,
+ * keyed by the base64-decoded part of `whsec_...`, over
+ * `${svix-id}.${svix-timestamp}.${rawBody}`, base64. The signature header is a
+ * space-separated list of `v1,<sig>` (several during a secret rotation): any
+ * match passes. A timestamp outside the tolerance is refused, so a captured
+ * request cannot be replayed later. Fails closed in production without a secret.
+ */
+export function verifySvix(opts: SvixOptions): AuthCheck {
+  if (!opts.secret)
+    return missingSecret(opts.secretName ?? "webhook secret", opts);
+  const deny: AuthCheck = { ok: false, status: 401, error: "Unauthorized" };
+  if (!opts.id || !opts.timestamp || !opts.signature) return deny;
+
+  const ts = Number(opts.timestamp);
+  const nowSec = (opts.now?.() ?? Date.now()) / 1000;
+  if (
+    !/^\d+$/.test(opts.timestamp) ||
+    Math.abs(nowSec - ts) > (opts.toleranceSeconds ?? 300)
+  )
+    return deny;
+
+  const key = Buffer.from(opts.secret.replace(/^whsec_/, ""), "base64");
+  if (key.length === 0) return deny;
+  const expected = createHmac("sha256", key)
+    .update(`${opts.id}.${opts.timestamp}.${opts.payload}`)
+    .digest("base64");
+  const match = opts.signature.split(" ").some((part) => {
+    const [version, sig] = part.split(",", 2);
+    return (
+      version === "v1" && sig !== undefined && constantTimeEqual(sig, expected)
+    );
+  });
+  return match ? { ok: true } : deny;
+}
+
 /** The `Response` for a failed check (JSON body, never the secret's name in a 401). */
 export function authFailure(check: Extract<AuthCheck, { ok: false }>) {
   return Response.json({ error: check.error }, { status: check.status });

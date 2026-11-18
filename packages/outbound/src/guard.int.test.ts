@@ -12,8 +12,10 @@ import { memoryStore } from "@repo/security";
 import {
   deliver,
   parseSafeList,
+  recordDeliveryStatus,
   setFrozen,
   suppress,
+  unsuppress,
   type GuardConfig,
   type GuardDeps,
 } from "./index";
@@ -21,7 +23,7 @@ import {
 const config = (over: Partial<GuardConfig> = {}): GuardConfig => ({
   safeMode: "off",
   safeRecipients: parseSafeList("@safe.test"),
-  enabled: { email: true, push: true },
+  enabled: { email: true, push: true, sms: true },
   operatorRecipients: {},
   frozen: false,
   caps: {
@@ -238,7 +240,10 @@ describe("deliver", () => {
       send,
       { config: config({ safeMode: "strict" }), store: memoryStore() },
     );
-    expect(send).toHaveBeenCalledWith("mixed.case@safe.test");
+    // ...and the row id, which providers get as their idempotency key.
+    expect(send).toHaveBeenCalledWith("mixed.case@safe.test", {
+      messageId: r.id,
+    });
     expect(await rowOf(r.id)).toMatchObject({
       recipient: "mixed.case@safe.test",
     });
@@ -270,5 +275,130 @@ describe("deliver", () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(await rowOf(r.id)).toMatchObject({ status: "pending" });
     error.mockRestore();
+  });
+
+  it("idempotency key: a retry after a send sends nothing; after a failure it reuses the row and the provider key", async () => {
+    const key = `test.idem.${randomBytes(6).toString("hex")}`;
+    const deps = { config: config(), store: memoryStore() };
+    const attempt = {
+      channel: "email" as const,
+      recipient: addr(),
+      purpose: "test.idem",
+      idempotencyKey: key,
+    };
+    const keysSeen: string[] = [];
+
+    // 1st try: the provider fails after we called it.
+    await expect(
+      deliver(
+        attempt,
+        async (_to, meta) => {
+          keysSeen.push(meta.messageId);
+          throw new Error("timeout");
+        },
+        deps,
+      ),
+    ).rejects.toThrow("timeout");
+
+    // 2nd try (the job retry): same row, same provider key, now sent.
+    const second = await deliver(
+      attempt,
+      async (_to, meta) => {
+        keysSeen.push(meta.messageId);
+        return { providerMessageId: "prov-1" };
+      },
+      deps,
+    );
+    expect(second.status).toBe("sent");
+    expect(keysSeen).toEqual([second.id, second.id]);
+
+    // 3rd try: already sent, so the provider is not called at all.
+    const send = spy();
+    const third = await deliver(attempt, send, deps);
+    expect(send).not.toHaveBeenCalled();
+    expect(third).toMatchObject({ status: "sent", id: second.id });
+    expect(
+      await db.outboundMessage.count({ where: { idempotencyKey: key } }),
+    ).toBe(1);
+  });
+
+  it("idempotency key: concurrent attempts send once", async () => {
+    const key = `test.race.${randomBytes(6).toString("hex")}`;
+    const deps = { config: config(), store: memoryStore() };
+    const send = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      return { providerMessageId: "p" };
+    });
+    const attempt = {
+      channel: "email" as const,
+      recipient: addr(),
+      purpose: "test.race",
+      idempotencyKey: key,
+    };
+    const results = await Promise.all([
+      deliver(attempt, send, deps),
+      deliver(attempt, send, deps),
+    ]);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(results.map((r) => r.status)).toEqual(["sent", "sent"]);
+  });
+
+  it("delivery status: recorded by provider id, never moved backwards", async () => {
+    const providerMessageId = `sm-${randomBytes(6).toString("hex")}`;
+    const r = await deliver(
+      { channel: "sms", recipient: "+447700900123", purpose: "test.dlr" },
+      async () => ({ providerMessageId }),
+      { config: config(), store: memoryStore() },
+    );
+    const status = (s: string, detail?: string) =>
+      recordDeliveryStatus({
+        channel: "sms",
+        providerMessageId,
+        status: s,
+        detail,
+      });
+    expect(await status("delivered")).toEqual({ matched: 1, updated: 1 });
+    // A late "sent" callback must not undo "delivered".
+    expect(await status("sent")).toEqual({ matched: 1, updated: 0 });
+    expect(await rowOf(r.id)).toMatchObject({ deliveryStatus: "delivered" });
+    expect(
+      await recordDeliveryStatus({
+        channel: "email",
+        providerMessageId,
+        status: "bounced",
+      }),
+    ).toEqual({ matched: 0, updated: 0 });
+  });
+
+  it("sms: STOP-style suppression blocks a number in any format; START lifts only that", async () => {
+    const number = `+4477009${String(randomBytes(3).readUIntBE(0, 3) % 100000).padStart(5, "0")}`;
+    await suppress({ channel: "sms", recipient: number, reason: "sms STOP" });
+    const deps = { config: config(), store: memoryStore() };
+    const send = spy();
+    const spaced = `${number.slice(0, 3)} ${number.slice(3, 7)} ${number.slice(7)}`;
+    expect(
+      await deliver(
+        { channel: "sms", recipient: spaced, purpose: "test.stop" },
+        send,
+        deps,
+      ),
+    ).toMatchObject({ status: "blocked", reason: "SUPPRESSED" });
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      await unsuppress({
+        channel: "sms",
+        recipient: number,
+        reasonPrefix: "sms STOP",
+      }),
+    ).toBe(1);
+    expect(
+      (
+        await deliver(
+          { channel: "sms", recipient: number, purpose: "test.stop" },
+          send,
+          deps,
+        )
+      ).status,
+    ).toBe("sent");
   });
 });

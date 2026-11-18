@@ -4,6 +4,7 @@
  *   rateLimit          Redis-backed fixed window (tRPC middleware, route handlers)
  *   verifyBearer /
  *   verifyHmac /
+ *   verifySvix /
  *   requireCronAuth    machine-to-machine auth; fail closed in production
  *   sealSecret /
  *   openSecret         AES-256-GCM for third-party tokens at rest, key rotation
@@ -26,8 +27,10 @@ export {
   requireCronAuth,
   verifyBearer,
   verifyHmac,
+  verifySvix,
   type AuthCheck,
   type HmacOptions,
+  type SvixOptions,
 } from "./request-auth";
 export {
   keysFromEnv,

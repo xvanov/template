@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  effectiveSafeMode,
   isSafeRecipient,
+  parsePhone,
   parseRecipient,
   parseSafeList,
   resolveSafeMode,
@@ -14,7 +16,7 @@ import {
 const config = (over: Partial<GuardConfig> = {}): GuardConfig => ({
   safeMode: "strict",
   safeRecipients: parseSafeList("dev@team.test, @example.com"),
-  enabled: { email: true, push: true },
+  enabled: { email: true, push: true, sms: true },
   operatorRecipients: { email: "ops@team.test", push: "ops-topic-123" },
   frozen: false,
   caps: {
@@ -145,7 +147,7 @@ describe("static gates", () => {
     expect(
       staticBlock(
         mail({ authMail: true }),
-        config({ enabled: { email: false, push: true } }),
+        config({ enabled: { email: false, push: true, sms: true } }),
         false,
       )?.reason,
     ).toBe("CHANNEL_DISABLED");
@@ -212,7 +214,7 @@ describe("push and operator messages", () => {
     expect(
       staticBlock(
         push(),
-        config({ enabled: { email: true, push: false } }),
+        config({ enabled: { email: true, push: false, sms: true } }),
         false,
       )?.reason,
     ).toBe("CHANNEL_DISABLED");
@@ -267,5 +269,84 @@ describe("volume buckets", () => {
       config(),
     );
     expect(auth.at(-1)?.key).toBe("outbound:email:global:auth:h");
+  });
+});
+
+describe("sms recipients", () => {
+  const text = (over: Partial<OutboundAttempt> = {}): OutboundAttempt =>
+    mail({ channel: "sms", recipient: "+447700900123", ...over });
+
+  it("normalises international numbers to E.164", () => {
+    expect(parsePhone("+44 7700 900123")).toBe("+447700900123");
+    expect(parsePhone(" +1 (555) 010-0001 ")).toBe("+15550100001");
+    expect(parsePhone("+1.555.010.0001")).toBe("+15550100001");
+    expect(parsePhone("0044 7700 900123")).toBe("+447700900123");
+  });
+
+  it("refuses national numbers, lists and anything that is not ONE number", () => {
+    for (const raw of [
+      "07700 900123", // national: which country is a guess
+      "(555) 010-0001",
+      "5550100001",
+      "+15550100001, +447700900123",
+      "+15550100001;+447700900123",
+      "+15550100001 +447700900123", // two numbers
+      "+1555010000a",
+      "tel:+15550100001",
+      "+0123456789", // no country code 0
+      "+1234567", // too short
+      "+1234567890123456", // too long
+      "",
+    ]) {
+      expect(parseRecipient("sms", raw), raw).toBeNull();
+    }
+  });
+
+  it("the allowlist holds exact numbers, normalised; no domain or prefix rules", () => {
+    const list = parseSafeList("dev@team.test, +44 7700 900123, 07700900999");
+    expect(list).toEqual(["dev@team.test", "+447700900123"]);
+    expect(isSafeRecipient("sms", "+447700900123", list)).toBe(true);
+    expect(isSafeRecipient("sms", "00447700900123", list)).toBe(true);
+    expect(isSafeRecipient("sms", "+447700900124", list)).toBe(false);
+    // An email entry never allows a number, nor a number an email.
+    expect(isSafeRecipient("sms", "dev@team.test", list)).toBe(false);
+  });
+
+  it("strict safe mode blocks a stranger's number and allows a listed one", () => {
+    const cfg = config({ safeRecipients: parseSafeList("+447700900123") });
+    expect(
+      staticBlock(text({ recipient: "+15550100001" }), cfg, false),
+    ).toEqual(expect.objectContaining({ reason: "SAFE_MODE" }));
+    expect(staticBlock(text(), cfg, false)).toBeNull();
+  });
+
+  it("the local mail catcher does NOT open sms: a text reaches a real phone", () => {
+    expect(effectiveSafeMode("local-catcher", "sms")).toBe("strict");
+    const cfg = config({ safeMode: "local-catcher", safeRecipients: [] });
+    expect(staticBlock(text(), cfg, false)).toEqual(
+      expect.objectContaining({ reason: "SAFE_MODE" }),
+    );
+    // ...while email to the same stranger passes in local-catcher mode.
+    expect(staticBlock(mail(), cfg, false)).toBeNull();
+  });
+
+  it("is off unless OUTBOUND_SMS_ENABLED, and authMail does not exempt a number from the switch", () => {
+    const cfg = config({
+      enabled: { email: true, push: true, sms: false },
+      safeMode: "off",
+    });
+    expect(staticBlock(text({ authMail: true }), cfg, false)).toEqual(
+      expect.objectContaining({ reason: "CHANNEL_DISABLED" }),
+    );
+  });
+
+  it("a recipient list is INVALID_RECIPIENT before any other gate", () => {
+    expect(
+      staticBlock(
+        text({ recipient: "+15550100001,+447700900123" }),
+        config({ safeRecipients: parseSafeList("+447700900123") }),
+        false,
+      ),
+    ).toEqual(expect.objectContaining({ reason: "INVALID_RECIPIENT" }));
   });
 });

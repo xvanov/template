@@ -1,5 +1,6 @@
 /**
- * Outbound email over plain SMTP — no third-party API, no vendor SDK.
+ * Outbound email: SMTP by default (no third-party account needed), or
+ * Resend's API with EMAIL_TRANSPORT=resend (see ./transport.ts).
  *
  * Development: `docker compose up -d mailpit` runs a real SMTP server locally
  * and every message lands in its web inbox at http://localhost:8035. The
@@ -17,21 +18,46 @@
  * a fresh clone still runs and you can copy the verification link out of the
  * terminal.
  *
- * Every message goes through @repo/outbound's guard. The raw transport lives in
- * ./transport.ts and is not exported; do not add another way to reach SMTP.
+ * Every message goes through @repo/outbound's guard. The raw transports live in
+ * ./transport.ts and are not exported; do not add another way to reach a
+ * mail provider.
  */
 import { env } from "@repo/env";
 import { deliver, type DeliveryResult } from "@repo/outbound";
 
-import { smtpConfigured, transmit } from "./transport";
+import {
+  downloadReceivedAttachment,
+  fetchReceivedEmail,
+  messageIdFor,
+  smtpConfigured,
+  transmit,
+  useFakeResend,
+  type FakeResend,
+  type ReceivedEmail,
+} from "./transport";
 
-export { smtpConfigured };
+export {
+  downloadReceivedAttachment,
+  fetchReceivedEmail,
+  messageIdFor,
+  smtpConfigured,
+  /** Tests only: Resend calls go to this fake (the real SDK is refused under test). */
+  useFakeResend,
+  type FakeResend,
+  type ReceivedEmail,
+};
 
 export interface Mail {
   to: string;
   subject: string;
   text: string;
   html?: string;
+  /**
+   * Extra headers, e.g. In-Reply-To/References to answer an inbound message,
+   * or List-Unsubscribe. To/From/Cc/Bcc/Reply-To/Message-ID are ignored: the
+   * guard checked one recipient and that is who gets it.
+   */
+  headers?: Record<string, string>;
 }
 
 export interface MailContext {
@@ -41,6 +67,12 @@ export interface MailContext {
    *  the per-org volume caps, suppressions and who can read the log row. */
   organizationId?: string | null;
   actorUserId?: string | null;
+  /**
+   * Stable name of this one logical message (`invoice.42.reminder`). Set it
+   * in anything that retries: a retry then never sends a second copy once
+   * the first was sent (see `idempotencyKey` in @repo/outbound).
+   */
+  idempotencyKey?: string;
 }
 
 export type SendResult = DeliveryResult;
@@ -62,9 +94,10 @@ export function sendMail(mail: Mail, ctx: MailContext): Promise<SendResult> {
       purpose: ctx.purpose,
       organizationId: ctx.organizationId,
       actorUserId: ctx.actorUserId,
+      idempotencyKey: ctx.idempotencyKey,
     },
     // The guard passes the address it checked; send to that, never mail.to.
-    (to) => transmit({ ...mail, to }),
+    (to, meta) => transmit({ ...mail, to }, meta),
   );
 }
 
@@ -86,7 +119,7 @@ export function sendAuthMail(
       authMail: true,
     },
     // The guard passes the address it checked; send to that, never mail.to.
-    (to) => transmit({ ...mail, to }),
+    (to, meta) => transmit({ ...mail, to }, meta),
   );
 }
 
@@ -110,7 +143,7 @@ export function sendOperatorMail(
       purpose,
       operator: true,
     },
-    (to) => transmit({ ...mail, to }),
+    (to, meta) => transmit({ ...mail, to }, meta),
   );
 }
 

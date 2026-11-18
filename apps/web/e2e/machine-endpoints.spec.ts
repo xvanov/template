@@ -69,3 +69,37 @@ test("email webhook: verifies the HMAC over the raw body and refuses replays", a
   expect((await post(stale, sign(stale, body))).status()).toBe(401);
   expect((await post(now, sign(now, body))).status()).toBe(200);
 });
+
+test("provider webhooks without their secret FAIL CLOSED in the production build", async ({
+  request,
+}) => {
+  // The gate's server runs NODE_ENV=production with no Twilio token and no
+  // Resend webhook secret: every such call must be refused as a
+  // misconfiguration (500), never processed. Also proves the Twilio route
+  // (and its SDK) loads in the standalone bundle.
+  const stop = await request.post("/api/webhooks/twilio", {
+    form: {
+      MessageSid: "SM1",
+      From: "+447700900123",
+      To: "+15550100000",
+      Body: "STOP",
+    },
+  });
+  expect(stop.status()).toBe(500);
+  const status = await request.post("/api/webhooks/twilio/status", {
+    form: { MessageSid: "SM1", MessageStatus: "delivered" },
+  });
+  expect(status.status()).toBe(500);
+  const resend = await request.post("/api/webhooks/email-events", {
+    headers: {
+      "svix-id": "msg_1",
+      "svix-timestamp": String(Math.floor(Date.now() / 1000)),
+      "svix-signature": "v1,AAAA",
+    },
+    data: {
+      type: "email.complained",
+      data: { email_id: "x", to: ["a@b.test"] },
+    },
+  });
+  expect(resend.status()).toBe(500);
+});
