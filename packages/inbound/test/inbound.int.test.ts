@@ -93,6 +93,24 @@ async function sentEmail(organizationId: string) {
 }
 
 describe("routing", () => {
+  it("concurrent first calls still give a tenant exactly ONE address", async () => {
+    const a = await createTenant("in-addr-race");
+    const got = await Promise.all(
+      Array.from({ length: 5 }, () => ensureEmailAddress(a.organizationId)),
+    );
+    expect(new Set(got).size).toBe(1);
+    expect(
+      await db.inboundRoute.count({
+        where: { organizationId: a.organizationId },
+      }),
+    ).toBe(1);
+    // ...and inside a transaction, a lost race does not abort it.
+    await db.$transaction(async (tx) => {
+      expect(await ensureEmailAddress(a.organizationId, tx)).toBe(got[0]);
+      await tx.inboundRoute.count();
+    });
+  });
+
   it("gives each tenant one random address on the inbound domain, stable across calls", async () => {
     const a = await createTenant("in-addr");
     const first = await ensureEmailAddress(a.organizationId);
@@ -355,7 +373,69 @@ describe("sms", () => {
     AccountSid: "AC_not_stored",
   });
 
-  it("routes a reply to the tenant that last texted the number; strangers are dropped", async () => {
+  it("a reply from a number TWO tenants texted goes to neither (and the operator is told)", async () => {
+    const a = await createTenant("in-sms-amb-a");
+    const b = await createTenant("in-sms-amb-b");
+    const bob = number();
+    const text = (organizationId: string) =>
+      deliver(
+        { channel: "sms", recipient: bob, purpose: "test.sms", organizationId },
+        async () => ({ providerMessageId: `SM${uid()}` }),
+        {
+          config: {
+            safeMode: "off",
+            safeRecipients: [],
+            enabled: { email: true, push: true, sms: true },
+            operatorRecipients: {},
+            frozen: false,
+            caps: {
+              recipientPerHour: 100,
+              orgPerHour: 100,
+              orgPerDay: 100,
+              globalPerHour: 1000,
+            },
+          },
+          store: memoryStore(),
+        },
+      );
+    await text(a.organizationId); // "Your appointment with Dr A..."
+    await text(b.organizationId); // B texts Bob afterwards (or on purpose)
+    const shared = `+1555${String(randomBytes(3).readUIntBE(0, 3) % 10_000_000).padStart(7, "0")}`;
+    const r = await handleInboundSms(
+      twilioParams(bob, "Can we move it to 4?", shared),
+    );
+    expect(r).toMatchObject({ ok: true, outcome: "unrouted" });
+    for (const t of [a, b]) {
+      expect(
+        await db.inboundMessage.count({
+          where: { organizationId: t.organizationId },
+        }),
+      ).toBe(0);
+    }
+    expect(
+      await db.notification.findFirst({
+        where: { dedupeKey: `inbound-sms-ambiguous:${shared}` },
+      }),
+    ).toMatchObject({ priority: "low" });
+
+    // With its own number (an inbound_route row), the tenant gets its replies.
+    await db.inboundRoute.create({
+      data: {
+        organizationId: a.organizationId,
+        channel: "sms",
+        address: shared,
+      },
+    });
+    expect(
+      await handleInboundSms(twilioParams(bob, "Can we move it to 4?", shared)),
+    ).toMatchObject({
+      ok: true,
+      outcome: "created",
+      organizationId: a.organizationId,
+    });
+  });
+
+  it("routes a reply to the ONE tenant that texted the number; strangers are dropped", async () => {
     const a = await createTenant("in-sms");
     const from = number();
     const sent = await deliver(

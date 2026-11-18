@@ -153,9 +153,9 @@ export const inboxRouter = createTRPCRouter({
   /** Where this tenant's messages can be sent. */
   addresses: orgProcedure.query(async ({ ctx }) => {
     const e = env();
-    const email = await ctx.db.inboundRoute.findFirst({
-      where: { organizationId: ctx.organizationId, channel: "email" },
-      orderBy: { createdAt: "asc" },
+    // The generated address (one per tenant); hand-added routes are not listed.
+    const email = await ctx.db.inboundRoute.findUnique({
+      where: { autoForOrg: ctx.organizationId },
       select: { address: true },
     });
     return {

@@ -15,6 +15,7 @@
     "@repo/db": "*",
     "@repo/email": "*",
     "@repo/env": "*",
+    "@repo/notify": "*",
     "@repo/outbound": "*",
     "@repo/sms": "*",
     "@repo/storage": "*",

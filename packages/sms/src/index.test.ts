@@ -63,6 +63,14 @@ describe("verifyTwilioWebhook", () => {
     expect(verifyTwilioWebhook(documented)).toEqual({ ok: true });
   });
 
+  it("accepts the URL with or without the default port, as Twilio's SDKs do", () => {
+    setEnv({
+      TWILIO_AUTH_TOKEN: "12345",
+      TWILIO_WEBHOOK_BASE_URL: "https://mycompany.com:443",
+    });
+    expect(verifyTwilioWebhook(documented)).toEqual({ ok: true });
+  });
+
   it("refuses a changed param, a missing signature, or the wrong origin", () => {
     setEnv({
       TWILIO_AUTH_TOKEN: "12345",
@@ -99,10 +107,7 @@ describe("transport (faked SDK)", () => {
       sid: "SM123",
       status: "queued",
     }));
-    return {
-      create,
-      client: { messages: { create } } as unknown as FakeTwilio,
-    };
+    return { create, client: { createMessage: create } as FakeTwilio };
   }
 
   it("refuses the real SDK under test", async () => {
@@ -127,10 +132,10 @@ describe("transport (faked SDK)", () => {
       await transmit({ to: "+447700900123", body: "hi" }, { messageId: "m" }),
     ).toEqual({ providerMessageId: "SM123" });
     expect(create).toHaveBeenCalledWith({
-      to: "+447700900123",
-      from: "+15550100000",
-      body: "hi",
-      statusCallback: "https://app.example.com/api/webhooks/twilio/status",
+      To: "+447700900123",
+      From: "+15550100000",
+      Body: "hi",
+      StatusCallback: "https://app.example.com/api/webhooks/twilio/status",
     });
   });
 

@@ -8,6 +8,8 @@ export {
   deliver,
   describeSafeMode,
   displayRecipient,
+  IdempotencyConflictError,
+  PENDING_STALE_MS,
   type DeliveryResult,
   type GuardDeps,
   type ProviderReceipt,

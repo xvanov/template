@@ -32,15 +32,7 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: path.join(import.meta.dirname, "../.."),
 
   // Native / server-only packages must not be bundled.
-  // twilio: a large CommonJS SDK with dynamic requires; loaded from
-  // node_modules at runtime instead of bundled.
-  serverExternalPackages: [
-    "@prisma/adapter-pg",
-    "pg",
-    "bullmq",
-    "ioredis",
-    "twilio",
-  ],
+  serverExternalPackages: ["@prisma/adapter-pg", "pg", "bullmq", "ioredis"],
 
   // Dev-only: let Tailscale/LAN hosts load the dev server's scripts, or pages
   // opened there never hydrate. Read from process.env (not env()) because the

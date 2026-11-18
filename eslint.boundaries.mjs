@@ -7,8 +7,9 @@
  * so each provider is reachable from exactly one file, its channel's transport:
  *   mail  nodemailer / resend / ...      packages/email/src/transport.ts
  *         (and RESEND_API_KEY)
- *   sms   twilio / ...                   packages/sms/src/transport.ts
- *         (and TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN)
+ *   sms   the Twilio API host            packages/sms/src/transport.ts
+ *         (and TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN; that file is a small
+ *         fetch client, and SMS SDKs such as `twilio` are refused everywhere)
  *   push  the ntfy URL and token         packages/notify/src/ntfy.ts
  * Used by the root eslint.config.mjs (all packages + the worker) and by
  * apps/web's own config.
@@ -31,7 +32,7 @@ const SMS_SDKS_REGEX =
 const MAIL_MESSAGE =
   "Outbound messages go through the guard: use sendMail from @repo/email (CLAUDE.md rule 8). Only packages/email/src/transport.ts may import a mail library.";
 const SMS_MESSAGE =
-  "Outbound messages go through the guard: use sendSms from @repo/sms (CLAUDE.md rule 8). Only packages/sms/src/transport.ts may import an SMS library.";
+  "Outbound messages go through the guard: use sendSms from @repo/sms (CLAUDE.md rule 8). SMS SDKs are not used at all: packages/sms/src/transport.ts is the (fetch) client.";
 const MAIL_RE =
   "/^(nodemailer|@sendgrid\\u002F|resend$|postmark$|mailgun|@aws-sdk\\u002Fclient-ses)/";
 const SMS_RE = "/^(twilio|@vonage\\u002F|vonage$|messagebird$|plivo$|telnyx$)/";
@@ -45,6 +46,9 @@ const RESEND_KEY_RE = "/^RESEND_API_KEY$/";
 const TWILIO_KEY_MESSAGE =
   "Only packages/sms/src/transport.ts may read TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN (CLAUDE.md rule 8).";
 const TWILIO_KEY_RE = "/^TWILIO_(ACCOUNT_SID|AUTH_TOKEN)$/";
+const TWILIO_HOST_MESSAGE =
+  "Only packages/sms/src/transport.ts may call the Twilio API (CLAUDE.md rule 8): use sendSms from @repo/sms.";
+const TWILIO_HOST_RE = "/api\\.twilio\\.com/i";
 
 const dynamicImport = (re, message) => [
   {
@@ -63,9 +67,18 @@ const mailSyntax = [
   ...dynamicImport(MAIL_RE, MAIL_MESSAGE),
   ...reads(RESEND_KEY_RE, RESEND_KEY_MESSAGE),
 ];
+const smsSdkSyntax = dynamicImport(SMS_RE, SMS_MESSAGE);
 const smsSyntax = [
-  ...dynamicImport(SMS_RE, SMS_MESSAGE),
+  ...smsSdkSyntax,
   ...reads(TWILIO_KEY_RE, TWILIO_KEY_MESSAGE),
+  {
+    selector: `Literal[value=${TWILIO_HOST_RE}]`,
+    message: TWILIO_HOST_MESSAGE,
+  },
+  {
+    selector: `TemplateElement[value.raw=${TWILIO_HOST_RE}]`,
+    message: TWILIO_HOST_MESSAGE,
+  },
 ];
 const pushSyntax = reads(NTFY_RE, NTFY_MESSAGE);
 
@@ -105,11 +118,20 @@ export function outboundBoundary({ mail, push, sms }) {
       },
     },
     {
-      // The sms transport; its tests live next to the package entry point.
+      // The sms transport (the SDK stays refused here too); its tests live
+      // next to the package entry point.
       files: [sms, sms.replace(/transport\.ts$/, "index.test.ts")],
       rules: {
-        "no-restricted-imports": ["error", { patterns: [mailImports] }],
-        "no-restricted-syntax": ["error", ...mailSyntax, ...pushSyntax],
+        "no-restricted-imports": [
+          "error",
+          { patterns: [mailImports, smsImports] },
+        ],
+        "no-restricted-syntax": [
+          "error",
+          ...mailSyntax,
+          ...smsSdkSyntax,
+          ...pushSyntax,
+        ],
       },
     },
     {

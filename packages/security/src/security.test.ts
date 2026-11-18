@@ -8,6 +8,7 @@ import {
   openSecret,
   openSecretDetailed,
   rateLimit,
+  readBodyLimited,
   sealSecret,
   verifyBearer,
   verifyHmac,
@@ -109,6 +110,48 @@ describe("verifyHmac", () => {
       verifyHmac({ payload: body, signature: "x", secret: undefined, ...prod }),
     ).toMatchObject({
       status: 500,
+    });
+  });
+});
+
+describe("readBodyLimited", () => {
+  const stream = (chunks: number, size: number) =>
+    new ReadableStream<Uint8Array>({
+      start(c) {
+        for (let i = 0; i < chunks; i++)
+          c.enqueue(new Uint8Array(size).fill(97));
+        c.close();
+      },
+    });
+  const req = (body: ReadableStream<Uint8Array> | string, headers = {}) =>
+    new Request("http://x.test/", {
+      method: "POST",
+      body,
+      headers,
+      // @ts-expect-error Node's fetch needs this for a stream body
+      duplex: "half",
+    });
+
+  it("reads a body within the cap", async () => {
+    expect(await readBodyLimited(req("héllo"), 100)).toEqual({
+      ok: true,
+      text: "héllo",
+    });
+  });
+
+  it("refuses by declared length without reading", async () => {
+    expect(
+      await readBodyLimited(req("x", { "content-length": "999999" }), 100),
+    ).toMatchObject({ ok: false, status: 413 });
+  });
+
+  it("refuses a chunked body (no length) once it streams past the cap", async () => {
+    expect(await readBodyLimited(req(stream(10, 64)), 300)).toMatchObject({
+      ok: false,
+      status: 413,
+    });
+    expect(await readBodyLimited(req(stream(4, 64)), 300)).toMatchObject({
+      ok: true,
     });
   });
 });

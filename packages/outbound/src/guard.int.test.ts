@@ -12,6 +12,7 @@ import { memoryStore } from "@repo/security";
 import {
   deliver,
   parseSafeList,
+  PENDING_STALE_MS,
   recordDeliveryStatus,
   setFrozen,
   suppress,
@@ -340,7 +341,160 @@ describe("deliver", () => {
       deliver(attempt, send, deps),
     ]);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(results.map((r) => r.status)).toEqual(["sent", "sent"]);
+    // The loser reports what it found on the winner's row: still sending
+    // ("in_progress") or, if it looked after the send, already sent.
+    expect(new Set(results.map((r) => r.id)).size).toBe(1);
+    const loser = results.find(
+      (r) => r.status === "in_progress" || r.detail?.startsWith("duplicate"),
+    );
+    expect(loser).toBeDefined();
+  });
+
+  it("idempotency key: concurrent RETRIES after a failure send once", async () => {
+    const key = `test.retry-race.${randomBytes(6).toString("hex")}`;
+    const deps = { config: config(), store: memoryStore() };
+    const attempt = {
+      channel: "email" as const,
+      recipient: addr(),
+      purpose: "test.retry-race",
+      idempotencyKey: key,
+    };
+    await expect(
+      deliver(
+        attempt,
+        async () => {
+          throw new Error("421 try later");
+        },
+        deps,
+      ),
+    ).rejects.toThrow("421");
+
+    // A fake SMTP relay that counts what it accepts.
+    let accepted = 0;
+    const smtp = async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      accepted++;
+      return { providerMessageId: `<m${accepted}@relay>` };
+    };
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () => deliver(attempt, smtp, deps)),
+    );
+    expect(accepted).toBe(1);
+    expect(results.filter((r) => r.status === "sent")).toHaveLength(1);
+    expect(new Set(results.map((r) => r.id)).size).toBe(1);
+  });
+
+  it("idempotency key: a pending row is in progress until stale, then a retry takes it", async () => {
+    const key = `test.stale.${randomBytes(6).toString("hex")}`;
+    const recipient = addr();
+    const attempt = {
+      channel: "email" as const,
+      recipient,
+      purpose: "test.stale",
+      idempotencyKey: key,
+    };
+    // A sender that died after claiming the row (the provider may or may not
+    // have got it: we cannot know).
+    const claimedAt = new Date();
+    const row = await db.outboundMessage.create({
+      data: {
+        channel: "email",
+        recipient,
+        purpose: "test.stale",
+        status: "pending",
+        claimedAt,
+        idempotencyKey: key,
+        idempotencyScope: "system",
+      },
+    });
+    const send = spy();
+    const fresh = await deliver(attempt, send, {
+      config: config(),
+      store: memoryStore(),
+    });
+    expect(fresh).toMatchObject({ status: "in_progress", id: row.id });
+    expect(send).not.toHaveBeenCalled();
+
+    const later = await deliver(attempt, send, {
+      config: config(),
+      store: memoryStore(),
+      now: () => new Date(claimedAt.getTime() + PENDING_STALE_MS + 1000),
+    });
+    expect(later).toMatchObject({ status: "sent", id: row.id });
+    expect(send).toHaveBeenCalledWith(recipient, { messageId: row.id });
+  });
+
+  it("idempotency key: reuse for another channel or recipient is a ConflictError and sends nothing", async () => {
+    const org = await createTenant("ob-idem-conflict");
+    const key = `test.conflict.${randomBytes(6).toString("hex")}`;
+    const deps = { config: config(), store: memoryStore() };
+    await deliver(
+      {
+        channel: "sms",
+        recipient: "+447700900123",
+        purpose: "test.conflict",
+        organizationId: org.organizationId,
+        idempotencyKey: key,
+      },
+      ok,
+      deps,
+    );
+    const send = spy();
+    for (const other of [
+      { channel: "email" as const, recipient: addr() },
+      { channel: "sms" as const, recipient: "+447700900999" },
+    ]) {
+      await expect(
+        deliver(
+          {
+            ...other,
+            purpose: "test.conflict",
+            organizationId: org.organizationId,
+            idempotencyKey: key,
+          },
+          send,
+          deps,
+        ),
+      ).rejects.toMatchObject({ name: "ConflictError" });
+    }
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("idempotency keys are per tenant: another org's identical key is its own message", async () => {
+    const a = await createTenant("ob-idem-a");
+    const b = await createTenant("ob-idem-b");
+    const key = `test.scope.${randomBytes(6).toString("hex")}`;
+    const deps = { config: config(), store: memoryStore() };
+    const ra = await deliver(
+      {
+        channel: "sms",
+        recipient: "+447700900123",
+        purpose: "test.scope",
+        organizationId: a.organizationId,
+        idempotencyKey: key,
+      },
+      ok,
+      deps,
+    );
+    const send = spy();
+    const rb = await deliver(
+      {
+        channel: "email",
+        recipient: addr(),
+        purpose: "test.scope",
+        organizationId: b.organizationId,
+        idempotencyKey: key,
+      },
+      send,
+      deps,
+    );
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(rb.status).toBe("sent");
+    expect(rb.id).not.toBe(ra.id);
+    expect(await rowOf(rb.id)).toMatchObject({
+      organizationId: b.organizationId,
+      channel: "email",
+    });
   });
 
   it("delivery status: recorded by provider id, never moved backwards", async () => {

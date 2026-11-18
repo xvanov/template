@@ -62,13 +62,20 @@ describe("no way around the outbound guard", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("only the sms transport imports an SMS library", () => {
+  it("nothing imports an SMS SDK (packages/sms/src/transport.ts is a fetch client)", () => {
     const offenders = files
       .filter((f) =>
         /from\s+["'](twilio|vonage|@vonage\/|messagebird|plivo|telnyx)/.test(
           readFileSync(f, "utf8"),
         ),
       )
+      .map((f) => relative(ROOT, f));
+    expect(offenders).toEqual([]);
+  });
+
+  it("only the sms transport names the Twilio API host", () => {
+    const offenders = files
+      .filter((f) => /api\.twilio\.com/i.test(readFileSync(f, "utf8")))
       .map((f) => relative(ROOT, f))
       .filter((f) => f !== SMS_TRANSPORT);
     expect(offenders).toEqual([]);
@@ -110,7 +117,7 @@ describe("no way around the outbound guard", () => {
         const deps = { ...pkg.dependencies, ...pkg.devDependencies };
         if (m.endsWith("packages/email/package.json")) return "twilio" in deps;
         if (m.endsWith("packages/sms/package.json"))
-          return "nodemailer" in deps || "resend" in deps;
+          return "nodemailer" in deps || "resend" in deps || "twilio" in deps;
         return "nodemailer" in deps || "resend" in deps || "twilio" in deps;
       } catch {
         return false;

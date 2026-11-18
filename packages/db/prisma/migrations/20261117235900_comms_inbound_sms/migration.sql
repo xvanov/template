@@ -2,10 +2,12 @@
 ALTER TABLE "media_asset" ALTER COLUMN "uploadedById" DROP NOT NULL;
 
 -- AlterTable
-ALTER TABLE "outbound_message" ADD COLUMN     "deliveryDetail" TEXT,
+ALTER TABLE "outbound_message" ADD COLUMN     "claimedAt" TIMESTAMP(3),
+ADD COLUMN     "deliveryDetail" TEXT,
 ADD COLUMN     "deliveryStatus" TEXT,
 ADD COLUMN     "deliveryUpdatedAt" TIMESTAMP(3),
-ADD COLUMN     "idempotencyKey" TEXT;
+ADD COLUMN     "idempotencyKey" TEXT,
+ADD COLUMN     "idempotencyScope" TEXT;
 
 -- CreateTable
 CREATE TABLE "inbound_message" (
@@ -41,6 +43,7 @@ CREATE TABLE "inbound_route" (
     "organizationId" TEXT NOT NULL,
     "channel" TEXT NOT NULL,
     "address" TEXT NOT NULL,
+    "autoForOrg" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "inbound_route_pkey" PRIMARY KEY ("id")
@@ -56,16 +59,19 @@ CREATE INDEX "inbound_message_organizationId_handledAt_idx" ON "inbound_message"
 CREATE UNIQUE INDEX "inbound_message_provider_providerMessageId_key" ON "inbound_message"("provider", "providerMessageId");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "inbound_route_autoForOrg_key" ON "inbound_route"("autoForOrg");
+
+-- CreateIndex
 CREATE INDEX "inbound_route_organizationId_idx" ON "inbound_route"("organizationId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "inbound_route_channel_address_key" ON "inbound_route"("channel", "address");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "outbound_message_idempotencyKey_key" ON "outbound_message"("idempotencyKey");
+CREATE INDEX "outbound_message_channel_providerMessageId_idx" ON "outbound_message"("channel", "providerMessageId");
 
 -- CreateIndex
-CREATE INDEX "outbound_message_channel_providerMessageId_idx" ON "outbound_message"("channel", "providerMessageId");
+CREATE UNIQUE INDEX "outbound_message_idempotencyScope_idempotencyKey_key" ON "outbound_message"("idempotencyScope", "idempotencyKey");
 
 -- AddForeignKey
 ALTER TABLE "inbound_message" ADD CONSTRAINT "inbound_message_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;

@@ -9,6 +9,7 @@
 import { db } from "@repo/db";
 import { storage } from "@repo/storage";
 
+import { contentDisposition } from "@/lib/content-disposition";
 import { requireTenant } from "@/lib/route-auth";
 
 export const dynamic = "force-dynamic";
@@ -50,7 +51,7 @@ export async function GET(req: Request) {
     headers: {
       "Content-Type": asset.contentType,
       "Content-Length": String(bytes.byteLength),
-      "Content-Disposition": `inline; filename="${asset.filename.replace(/"/g, "")}"`,
+      "Content-Disposition": contentDisposition(asset.filename),
       // Private: this URL is per-user authorised, so no shared cache may keep it.
       "Cache-Control": "private, max-age=300",
       "X-Content-Type-Options": "nosniff",

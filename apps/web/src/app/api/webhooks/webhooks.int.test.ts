@@ -278,3 +278,49 @@ describe("/api/webhooks/twilio", () => {
     ).toBe("delivered");
   });
 });
+
+describe("every webhook: size cap and rate limit before signature work", () => {
+  const routes = [
+    ["email-events", emailEvents],
+    ["email-inbound", emailInbound],
+    ["twilio", twilioInbound],
+    ["twilio/status", twilioStatus],
+  ] as const;
+
+  it("refuses an oversized chunked body (no Content-Length) with 413", async () => {
+    for (const [name, handler] of routes) {
+      const huge = new ReadableStream<Uint8Array>({
+        start(c) {
+          // 16 MB in 1 MB chunks: past every route's cap, inbound email's too.
+          for (let i = 0; i < 16; i++) c.enqueue(new Uint8Array(1 << 20));
+          c.close();
+        },
+      });
+      const res = await handler(
+        new Request(`http://internal:3000/api/webhooks/${name}`, {
+          method: "POST",
+          body: huge,
+          // @ts-expect-error Node's fetch needs this for a stream body
+          duplex: "half",
+        }),
+      );
+      expect(res.status, name).toBe(413);
+    }
+  });
+
+  it("throttles one IP flooding a webhook (429), not other IPs", async () => {
+    const hit = (ip: string) =>
+      twilioStatus(
+        new Request("http://internal:3000/api/webhooks/twilio/status", {
+          method: "POST",
+          headers: { "x-forwarded-for": ip },
+          body: "MessageSid=SM1&MessageStatus=sent",
+        }),
+      );
+    const ip = `203.0.113.${Math.floor(Math.random() * 250)}`;
+    let last = 0;
+    for (let i = 0; i < 601; i++) last = (await hit(ip)).status;
+    expect(last).toBe(429);
+    expect((await hit("198.51.100.7")).status).not.toBe(429);
+  });
+});

@@ -156,9 +156,10 @@ backup/restore round trip (about 30s). `make lint` shellchecks every script.
    `sms` (`sendSms` from `@repo/sms`) and `push` (ntfy, only via
    `notifyOperator` from `@repo/notify`). Each provider is reachable from ONE
    file, its channel's transport: mail SDKs (nodemailer, resend) and
-   `RESEND_API_KEY` only in `packages/email/src/transport.ts`, the `twilio` SDK
-   and `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN` only in
-   `packages/sms/src/transport.ts`, `NTFY_URL`/`NTFY_TOKEN` only in
+   `RESEND_API_KEY` only in `packages/email/src/transport.ts`, the Twilio API
+   host and `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN` only in
+   `packages/sms/src/transport.ts` (a ~150-line fetch client; the `twilio` SDK,
+   ~11 MB in the bundle for three calls, is refused everywhere), `NTFY_URL`/`NTFY_TOKEN` only in
    `packages/notify/src/ntfy.ts` (ESLint rules in `eslint.boundaries.mjs` fail
    `make lint`; wiring tests back them up). A new channel gets its own package
    that calls `deliver` and does not export its raw transport, plus a
@@ -216,7 +217,9 @@ Exists because a production app emailed the wrong thing to 8 real customers.
 4. suppression list (`outbound_suppression`: global for hard bounces and
    complaints, fed by `/api/webhooks/email-events`, and for SMS STOP, fed by
    `/api/webhooks/twilio` in the request itself (an opt-out must not wait for
-   the worker), lifted again by START; per-org for unsubscribes)
+   the worker), lifted again by START; per-org for unsubscribes). One STOP
+   suppresses that number for EVERY tenant, deliberately: it mirrors the
+   carrier's own block on the shared sender number.
 5. volume caps in Redis: per recipient/hour, per org/hour and /day, and a
    global/hour, with SEPARATE global pools for auth mail and app mail so a
    flood of anonymous sign-ups cannot starve tenants' mail. Redis unreachable =
@@ -230,9 +233,15 @@ fails, it still returns sent (the row stays `pending`) so a retry cannot send
 it twice. Tenants read their own rows via `activity.outbound`.
 
 **Retries and idempotency.** Pass `idempotencyKey` (`invoice.42.reminder`)
-from anything that retries: a second `deliver` with the same key reuses the
-first row, returns it untouched once it was sent, and otherwise sends again
-under the same row id, which the transport hands the provider (Resend's
+from anything that retries. Keys are per tenant (system rows share one
+namespace). A second `deliver` with the same key reuses the first row: once
+sent, it is returned untouched; while another attempt holds it (`pending`,
+claimed under 5 minutes ago) it returns `status: "in_progress"` and sends
+nothing; otherwise (failed, blocked, or a stale pending) it takes the row with
+a compare-and-set, so of any number of racing retries exactly one sends. The
+same key for a different channel or recipient throws `ConflictError`
+(CONFLICT) and sends nothing. A send reuses the row id, which the transport
+hands the provider (Resend's
 `Idempotency-Key`; every email's `Message-ID` is `<obm.<row id>@<from
 domain>>`, which is how replies are threaded). SMTP and Twilio take no key, so
 a crash between their accepting a message and our marking it sent can still
@@ -275,10 +284,15 @@ Email and texts that ARRIVE land in `inbound_message` (org-scoped), shown on
 - **Routing** is an explicit table, `inbound_route` (channel, address →
   tenant), nothing guessed from content. Email: each tenant gets one random
   address on `INBOUND_EMAIL_DOMAIN` (`acme-k3x9p2mq@in.example.com`, created
-  from the Inbox page); `+tag` addresses route like the bare one; add rows for
-  any other address. SMS: the number texted if it has a row, else the tenant
-  that last texted the sender (30 days), which is right for one shared Twilio
-  number. No match = not stored (logged, 200 to the provider).
+  from the Inbox page; at most one per tenant, `inbound_route.autoForOrg`);
+  `+tag` addresses route like the bare one; add rows for any other address.
+  SMS: the number texted if it has a row. **One Twilio number per tenant (an
+  `inbound_route` row) is the safe multi-tenant setup.** On a shared number a
+  reply goes to the tenant that texted the sender in the last 30 days ONLY if
+  exactly one did; if two did, it is about either (and "text a rival's
+  customer to capture their replies" must not work), so it is not routed, and
+  the operator is told (low, deduped). No match = not stored (logged, 200 to
+  the provider).
 - **Flow**: the webhook verifies, stores a `received` row (unique on provider +
   provider id, so retries are duplicates) and queues `inbound.process`. The
   job fetches Resend's content (its webhook carries only metadata), stores
@@ -297,6 +311,12 @@ Email and texts that ARRIVE land in `inbound_message` (org-scoped), shown on
   plus the path, never from the request (behind a proxy that is an internal
   host). A wrong base URL shows as `[sms] refused a webhook ...` in the log.
 - No auto-replies to texts: Twilio's Advanced Opt-Out answers STOP/HELP.
+- Every webhook rate-limits per IP (fails open, like other capacity limits)
+  and caps its body while streaming (`readBodyLimited`), both BEFORE any
+  signature work.
+- Twilio signatures carry no timestamp, so a captured, validly signed START
+  could be replayed to lift a STOP. Accepted: it needs a request Twilio
+  signed for that number, and the carrier keeps its own block regardless.
 
 ## Operator notifications
 

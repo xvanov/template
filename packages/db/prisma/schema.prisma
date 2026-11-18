@@ -400,8 +400,16 @@ model OutboundMessage {
   providerMessageId String?
   actorUserId       String?
   /// The caller's key for "this one logical message" (e.g. `invoice.42.reminder`).
-  /// A retry with the same key reuses this row and never sends twice once sent.
-  idempotencyKey    String?          @unique
+  /// Unique per tenant (`idempotencyScope`): a retry with the same key reuses
+  /// this row and never sends twice once sent.
+  idempotencyKey    String?
+  /// The tenant id, or "system" for rows with no tenant: the key's namespace.
+  /// A column rather than organizationId itself because Postgres treats NULLs
+  /// as distinct, and system keys must collide too.
+  idempotencyScope  String?
+  /// When a sender last took this row to send ("pending" since then). A
+  /// pending row claimed longer ago than the in-flight window is abandoned.
+  claimedAt         DateTime?
   /// What the provider reported AFTER accepting it (webhooks, the SMS
   /// reconcile job): "queued" | "sent" | "delayed" | "delivered" | "bounced"
   /// | "undelivered" | "failed" | "complained" | "suppressed". `status` above
@@ -414,6 +422,7 @@ model OutboundMessage {
   finishedAt        DateTime?
   repliesReceived   InboundMessage[]
 
+  @@unique([idempotencyScope, idempotencyKey])
   @@index([organizationId, createdAt])
   @@index([recipient, createdAt])
   @@index([status, createdAt])
@@ -501,6 +510,10 @@ model InboundRoute {
   /// "email" | "sms"
   channel        String
   address        String
+  /// Set (to organizationId) only on the address the app generated for the
+  /// tenant: unique, so a tenant has at most one, however many requests race.
+  /// Null on addresses added by hand (NULLs do not collide).
+  autoForOrg     String?      @unique
   createdAt      DateTime     @default(now())
 
   @@unique([channel, address])

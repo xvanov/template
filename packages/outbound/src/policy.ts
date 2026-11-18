@@ -55,8 +55,10 @@ export interface OutboundAttempt {
    * in something that retries (a job): a second deliver() with the same key
    * reuses the first attempt's outbound_message row, returns it untouched once
    * it was sent, and otherwise re-sends under the SAME provider idempotency key
-   * (the row id), so the provider can drop a duplicate too. Unique app-wide:
-   * include the tenant or entity id in it.
+   * (the row id), so the provider can drop a duplicate too. Unique per
+   * tenant (organizationId; rows without one share a "system" namespace).
+   * Reusing a key for another channel or recipient throws ConflictError.
+   * See `deliver` for the in-progress and stale rules.
    */
   idempotencyKey?: string;
   /**

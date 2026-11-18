@@ -12,10 +12,17 @@ import { handleSmsStatus } from "@repo/inbound";
 import { authFailure } from "@repo/security";
 import { verifyTwilioWebhook } from "@repo/sms";
 
+import { WEBHOOK_LIMITS, webhookBody } from "@/lib/webhook-guard";
+
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  const params = Object.fromEntries(new URLSearchParams(await req.text()));
+  const raw = await webhookBody(req, {
+    name: "twilio-status",
+    maxBytes: WEBHOOK_LIMITS.small,
+  });
+  if (raw instanceof Response) return raw;
+  const params = Object.fromEntries(new URLSearchParams(raw));
   const url = new URL(req.url);
   const check = verifyTwilioWebhook({
     pathAndQuery: url.pathname + url.search,

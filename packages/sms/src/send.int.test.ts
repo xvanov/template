@@ -22,7 +22,7 @@ beforeEach(() => {
   process.env.TWILIO_FROM_NUMBER = "+15550100000";
   resetEnvCache();
   create = vi.fn(async () => ({ sid: `SM${randomBytes(8).toString("hex")}` }));
-  useFakeTwilio({ messages: { create } } as unknown as FakeTwilio);
+  useFakeTwilio({ createMessage: create } as unknown as FakeTwilio);
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -72,7 +72,7 @@ describe("sendSms", () => {
     );
     expect(r.status).toBe("sent");
     expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({ to, body: "Your booking is confirmed." }),
+      expect.objectContaining({ To: to, Body: "Your booking is confirmed." }),
     );
     expect(
       await db.outboundMessage.findUniqueOrThrow({ where: { id: r.id } }),

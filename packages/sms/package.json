@@ -15,8 +15,7 @@
     "@repo/db": "*",
     "@repo/env": "*",
     "@repo/outbound": "*",
-    "@repo/security": "*",
-    "twilio": "6.2.0"
+    "@repo/security": "*"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

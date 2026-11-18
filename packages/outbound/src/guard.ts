@@ -31,11 +31,22 @@
  * its idempotency key. See the "Outbound messages" section of CLAUDE.md.
  *
  * Idempotency: an attempt with an `idempotencyKey` reuses the row of an
- * earlier attempt with the same key. Once that row is "sent" nothing is sent
- * again; otherwise the gates run again and the send reuses the row, and so the
- * provider idempotency key. SMTP has no such key: a process that dies between
- * the relay accepting a message and the row being marked sent can still lead
- * to one duplicate on retry; so can Twilio, whose message API takes no key.
+ * earlier attempt with the same key IN THE SAME TENANT (keys are namespaced
+ * by organization; rows with none share the "system" namespace). The earlier
+ * row must be for the same channel and recipient, or the attempt throws a
+ * ConflictError and nothing is sent. Then:
+ *   sent                        → returned as sent; nothing is sent again
+ *   pending, claimed recently   → "in_progress": another process is sending it
+ *   failed / blocked / pending
+ *   claimed > PENDING_STALE_MS  → the gates run again, and this attempt takes
+ *                                 the row with a compare-and-set on the status
+ *                                 (and claim time) it read. Exactly one of any
+ *                                 number of racing retries wins; the others
+ *                                 re-read and report what they find.
+ * The send then reuses the row id, and so the provider idempotency key. SMTP
+ * has no such key: a process that dies between the relay accepting a message
+ * and the row being marked sent can still lead to one duplicate on a retry
+ * after the stale window; so can Twilio, whose message API takes no key.
  * Resend drops a repeat of the same key for 24 hours.
  */
 import { db as defaultDb, type PrismaClient } from "@repo/db";
@@ -57,7 +68,30 @@ import {
 
 export type DeliveryResult =
   | { status: "sent"; id: string; providerMessageId?: string; detail?: string }
-  | { status: "blocked"; id: string; reason: Block["reason"]; detail: string };
+  | { status: "blocked"; id: string; reason: Block["reason"]; detail: string }
+  /**
+   * Only with an idempotencyKey: another attempt with this key holds the row
+   * and is sending it now. Nothing was sent by this call; retry later if the
+   * outcome matters (a job can simply throw and be retried).
+   */
+  | { status: "in_progress"; id: string; detail: string };
+
+/**
+ * How long a "pending" row may be held before a retry may take it over: well
+ * past the slowest transport's timeouts (SMTP: 3 x 30s).
+ */
+export const PENDING_STALE_MS = 5 * 60_000;
+
+/** Namespace of idempotency keys on rows with no tenant. */
+const SYSTEM_SCOPE = "system";
+
+/**
+ * The same idempotency key was used for a DIFFERENT message (another channel
+ * or recipient). Named ConflictError so @repo/api maps it to CONFLICT.
+ */
+export class IdempotencyConflictError extends Error {
+  override name = "ConflictError";
+}
 
 /** What a channel's transport returns once the provider has accepted it. */
 export interface ProviderReceipt {
@@ -90,6 +124,8 @@ export interface GuardDeps {
   /** Counter store for the volume caps. Default: Redis (memory under test). */
   store?: CounterStore;
   config: GuardConfig;
+  /** The clock (tests move it past PENDING_STALE_MS). */
+  now?: () => Date;
 }
 
 let announced = false;
@@ -180,103 +216,134 @@ export async function deliver(
 ): Promise<DeliveryResult> {
   const db = deps.db ?? defaultDb;
   const config = deps.config ?? configFromEnv();
+  const now = deps.now ?? (() => new Date());
   const recipient = parseRecipient(attempt.channel, attempt.recipient);
+  // The parsed address; an unparseable one is kept raw (truncated) so the log
+  // shows what was attempted.
+  const recordedRecipient = recipient ?? attempt.recipient.slice(0, 320);
 
-  // An earlier attempt at this same logical message?
   const key = attempt.idempotencyKey?.slice(0, 300);
-  const prior = key
-    ? await db.outboundMessage.findUnique({
-        where: { idempotencyKey: key },
-        select: { id: true, status: true, providerMessageId: true },
-      })
-    : null;
-  if (prior?.status === "sent") return alreadySent(prior);
+  const scope = attempt.organizationId ?? SYSTEM_SCOPE;
+  const readPrior = () =>
+    key
+      ? db.outboundMessage.findUnique({
+          where: {
+            idempotencyScope_idempotencyKey: {
+              idempotencyScope: scope,
+              idempotencyKey: key,
+            },
+          },
+          select: PRIOR_SELECT,
+        })
+      : Promise.resolve(null);
+
+  // An earlier attempt at this same logical message? Settled before the
+  // gates, so a duplicate does not use up anyone's volume quota.
+  const first = await readPrior();
+  if (first) {
+    assertSameMessage(first, attempt.channel, recordedRecipient);
+    const settled = settledResult(first, now());
+    if (settled) return settled;
+  }
 
   const block = recipient
     ? await firstBlock({ ...attempt, recipient }, config, db, deps.store)
     : staticBlock(attempt, config, false);
+  const outcome: {
+    status: "blocked" | "pending";
+    blockReason: Block["reason"] | null;
+    detail: string | null;
+    finishedAt: Date | null;
+    claimedAt: Date | null;
+  } =
+    block || !recipient
+      ? {
+          status: "blocked" as const,
+          blockReason: (block ?? { reason: "INVALID_RECIPIENT" }).reason,
+          detail: (block ?? { detail: "Invalid recipient." }).detail,
+          finishedAt: now(),
+          claimedAt: null,
+        }
+      : {
+          status: "pending" as const,
+          blockReason: null,
+          detail: null,
+          finishedAt: null,
+          claimedAt: now(),
+        };
 
   /**
-   * Write this attempt's row: a new one, or the prior attempt's row reset to
-   * this outcome. Returns null when a CONCURRENT attempt with the same key
-   * has already sent it (or holds it): then this one must not send.
+   * Write this attempt's row: a new one, or take over the prior attempt's.
+   * Returns the row id this attempt owns, or the result to report when
+   * another attempt with the same key got there first.
    */
-  const record = async (
-    status: string,
-    extra: Record<string, unknown> = {},
-  ): Promise<{ id: string } | { sent: SentRow }> => {
-    const data = {
-      status,
-      blockReason: null,
-      detail: null,
-      finishedAt: null,
-      ...extra,
-    };
-    if (prior) {
-      // Only from a state that is not "sent": the compare-and-set makes two
-      // racing retries take turns instead of both sending.
-      const r = await db.outboundMessage.updateMany({
-        where: { id: prior.id, status: { not: "sent" } },
-        data,
-      });
-      if (r.count === 1) return { id: prior.id };
-      return { sent: { ...prior, status: "sent" } };
-    }
-    try {
-      return await db.outboundMessage.create({
-        data: {
-          organizationId: attempt.organizationId ?? null,
-          channel: attempt.channel,
-          // The parsed address; an unparseable one is kept raw (truncated) so
-          // the log shows what was attempted.
-          recipient: recipient ?? attempt.recipient.slice(0, 320),
-          subject: attempt.subject?.slice(0, 300),
-          purpose: attempt.purpose,
-          actorUserId: attempt.actorUserId ?? null,
-          idempotencyKey: key ?? null,
-          ...data,
-        },
-        select: { id: true },
-      });
-    } catch (err) {
-      // Another attempt with this key created its row between our read and
-      // this insert. It is sending (or has sent): do not send a second copy.
-      if (key && isUniqueViolation(err)) {
-        const winner = await db.outboundMessage.findUniqueOrThrow({
-          where: { idempotencyKey: key },
-          select: { id: true, status: true, providerMessageId: true },
+  const claim = async (): Promise<{ id: string } | DeliveryResult> => {
+    let prior = first;
+    for (let round = 0; round < 3; round++) {
+      if (prior) {
+        assertSameMessage(prior, attempt.channel, recordedRecipient);
+        const settled = settledResult(prior, now());
+        if (settled) return settled;
+        // Compare-and-set on exactly what we read: if anyone changed the row
+        // since (another retry took it, or it was sent), this matches nothing
+        // and we re-read instead of sending a second copy.
+        const r = await db.outboundMessage.updateMany({
+          where: {
+            id: prior.id,
+            status: prior.status,
+            claimedAt: prior.claimedAt,
+          },
+          data: outcome,
         });
-        return { sent: winner };
+        if (r.count === 1) return { id: prior.id };
+      } else {
+        try {
+          return await db.outboundMessage.create({
+            data: {
+              organizationId: attempt.organizationId ?? null,
+              channel: attempt.channel,
+              recipient: recordedRecipient,
+              subject: attempt.subject?.slice(0, 300),
+              purpose: attempt.purpose,
+              actorUserId: attempt.actorUserId ?? null,
+              idempotencyKey: key ?? null,
+              idempotencyScope: key ? scope : null,
+              ...outcome,
+            },
+            select: { id: true },
+          });
+        } catch (err) {
+          // Another attempt with this key inserted first: look at its row.
+          if (!(key && isUniqueViolation(err))) throw err;
+        }
       }
-      throw err;
+      prior = await readPrior();
     }
+    // Still contended after three rounds: someone else is on it.
+    return {
+      status: "in_progress",
+      id: prior?.id ?? "",
+      detail: "another attempt with this idempotency key holds the message",
+    };
   };
 
-  if (block || !recipient) {
-    const b = block ?? {
-      reason: "INVALID_RECIPIENT" as const,
-      detail: "Invalid recipient.",
-    };
-    const row = await record("blocked", {
-      blockReason: b.reason,
-      detail: b.detail,
-      finishedAt: new Date(),
-    });
-    if ("sent" in row) return alreadySent(row.sent);
+  const claimed = await claim();
+  if ("status" in claimed) return claimed;
+  const { id } = claimed;
+
+  if (outcome.status === "blocked") {
+    const b = { reason: outcome.blockReason!, detail: outcome.detail ?? "" };
     console.warn(
       `[outbound] BLOCKED ${attempt.channel} to ${displayRecipient(attempt.channel, attempt.recipient)} (${attempt.purpose}): ${b.reason} — ${b.detail}`,
     );
-    return { status: "blocked", id: row.id, ...b };
+    return { status: "blocked", id, ...b };
   }
 
-  // No row, no send: if this write throws, the provider is never called.
-  const row = await record("pending");
-  if ("sent" in row) return alreadySent(row.sent);
-  const { id } = row;
-
+  // The row is "pending" and ours. No row, no send: had the write thrown,
+  // the provider would never have been called.
   let receipt: ProviderReceipt;
   try {
-    receipt = await send(recipient, { messageId: id });
+    receipt = await send(recipient!, { messageId: id });
   } catch (err) {
     await db.outboundMessage
       .updateMany({
@@ -287,7 +354,7 @@ export async function deliver(
             0,
             1000,
           ),
-          finishedAt: new Date(),
+          finishedAt: now(),
         },
       })
       .catch((logErr) =>
@@ -298,7 +365,8 @@ export async function deliver(
 
   // The provider HAS accepted the message. Failing to record that must not
   // turn into an error: a caller (a job) would retry and send it twice. The
-  // row stays "pending", which is the honest state of what we know.
+  // row stays "pending", which is the honest state of what we know (and a
+  // retry with the same key reports it in progress until it goes stale).
   try {
     await db.outboundMessage.updateMany({
       where: { id },
@@ -306,7 +374,7 @@ export async function deliver(
         status: "sent",
         providerMessageId: receipt.providerMessageId,
         detail: receipt.detail,
-        finishedAt: new Date(),
+        finishedAt: now(),
       },
     });
   } catch (logErr) {
@@ -318,23 +386,64 @@ export async function deliver(
   return { status: "sent", id, ...receipt };
 }
 
-interface SentRow {
+const PRIOR_SELECT = {
+  id: true,
+  status: true,
+  channel: true,
+  recipient: true,
+  claimedAt: true,
+  providerMessageId: true,
+  blockReason: true,
+  detail: true,
+} as const;
+
+interface PriorRow {
   id: string;
   status: string;
+  channel: string;
+  recipient: string;
+  claimedAt: Date | null;
   providerMessageId: string | null;
 }
 
-/** The answer for an attempt whose key was already used by a send. */
-function alreadySent(row: SentRow): DeliveryResult {
-  return {
-    status: "sent",
-    id: row.id,
-    providerMessageId: row.providerMessageId ?? undefined,
-    detail:
-      row.status === "sent"
-        ? "duplicate: already sent under this idempotency key"
-        : "duplicate: another attempt with this idempotency key is in progress",
-  };
+/** A key names ONE message: reusing it for another is a bug, not a retry. */
+function assertSameMessage(
+  prior: PriorRow,
+  channel: string,
+  recipient: string,
+): void {
+  if (prior.channel !== channel || prior.recipient !== recipient) {
+    throw new IdempotencyConflictError(
+      "This idempotency key was already used for a different message (another channel or recipient). Nothing was sent.",
+    );
+  }
+}
+
+/**
+ * The result to report for a prior attempt that may not be taken over, or
+ * null when it may (failed, blocked, or pending past the stale window).
+ */
+function settledResult(prior: PriorRow, now: Date): DeliveryResult | null {
+  if (prior.status === "sent") {
+    return {
+      status: "sent",
+      id: prior.id,
+      providerMessageId: prior.providerMessageId ?? undefined,
+      detail: "duplicate: already sent under this idempotency key",
+    };
+  }
+  if (
+    prior.status === "pending" &&
+    prior.claimedAt &&
+    now.getTime() - prior.claimedAt.getTime() < PENDING_STALE_MS
+  ) {
+    return {
+      status: "in_progress",
+      id: prior.id,
+      detail: "another attempt with this idempotency key is sending it",
+    };
+  }
+  return null;
 }
 
 function isUniqueViolation(err: unknown): boolean {

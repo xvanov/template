@@ -17,6 +17,7 @@ import { authFailure } from "@repo/security";
 import { verifyTwilioWebhook } from "@repo/sms";
 
 import { logUnrouted, queueInbound } from "@/lib/inbound-queue";
+import { WEBHOOK_LIMITS, webhookBody } from "@/lib/webhook-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,12 @@ const EMPTY_TWIML =
   '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
 
 export async function POST(req: Request) {
-  const params = Object.fromEntries(new URLSearchParams(await req.text()));
+  const raw = await webhookBody(req, {
+    name: "twilio",
+    maxBytes: WEBHOOK_LIMITS.small,
+  });
+  if (raw instanceof Response) return raw;
+  const params = Object.fromEntries(new URLSearchParams(raw));
   const url = new URL(req.url);
   const check = verifyTwilioWebhook({
     pathAndQuery: url.pathname + url.search,

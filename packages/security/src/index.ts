@@ -9,7 +9,9 @@
  *   sealSecret /
  *   openSecret         AES-256-GCM for third-party tokens at rest, key rotation
  *   constantTimeEqual  for comparing anything secret
+ *   readBodyLimited    a request body with a byte cap (webhooks, before HMAC work)
  */
+export { readBodyLimited, type LimitedBody } from "./body";
 export { clientIp } from "./client-ip";
 export { constantTimeEqual } from "./compare";
 export { closeRequestRedis, requestRedis } from "./redis";

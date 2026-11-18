@@ -20,19 +20,18 @@ import { genericInboundEmail, intakeGenericEmail } from "@repo/inbound";
 import { authFailure, verifyHmac } from "@repo/security";
 
 import { logUnrouted, queueInbound } from "@/lib/inbound-queue";
+import { WEBHOOK_LIMITS, webhookBody } from "@/lib/webhook-guard";
 
 export const dynamic = "force-dynamic";
 
-/** Base64 attachments included. Larger mail belongs in object storage first. */
-const MAX_BODY_BYTES = 15 * 1024 * 1024;
-
 export async function POST(req: Request) {
   const e = env();
-  if (Number(req.headers.get("content-length") ?? 0) > MAX_BODY_BYTES)
-    return Response.json({ error: "Too large" }, { status: 413 });
-  const raw = await req.text();
-  if (raw.length > MAX_BODY_BYTES)
-    return Response.json({ error: "Too large" }, { status: 413 });
+  // Base64 attachments included; larger mail belongs in object storage first.
+  const raw = await webhookBody(req, {
+    name: "email-inbound",
+    maxBytes: WEBHOOK_LIMITS.inboundEmail,
+  });
+  if (raw instanceof Response) return raw;
 
   const check = verifyHmac({
     payload: raw,

@@ -11,9 +11,14 @@
  *          address is a spam magnet. Plus-addressing works on top:
  *          `acme-k3x9p2mq+billing@...` routes like the bare address. Any other
  *          address can be routed by adding a row (e.g. support@yourdomain).
- *   sms    The number texted (To) if it has a row; otherwise the tenant that
- *          last texted the sender from this app (within 30 days): with one
- *          shared Twilio number that is who the person is replying to.
+ *   sms    The number texted (To) if it has a row: one Twilio number per
+ *          tenant is the safe multi-tenant setup. Otherwise, with one shared
+ *          number, the reply goes to the tenant that texted the sender from
+ *          this app within 30 days, ONLY if exactly one did. If two tenants
+ *          texted the same person, a reply cannot be attributed (it may be
+ *          about either; and "text a rival's customer to capture their
+ *          replies" must not work), so it is unrouted, logged, and the
+ *          operator is told (low priority, deduped).
  *
  * No match = the message is not stored (no tenant to show it to); the
  * webhook logs it and answers 200 so the provider does not retry forever.
@@ -22,6 +27,7 @@ import { randomBytes } from "node:crypto";
 
 import { db as defaultDb, type PrismaClient } from "@repo/db";
 import { env } from "@repo/env";
+import { notifyOperator } from "@repo/notify";
 import { parseRecipient } from "@repo/outbound";
 
 type Db = Pick<PrismaClient, "inboundRoute" | "outboundMessage">;
@@ -90,7 +96,9 @@ export async function routeSms(
   }
   const fromNumber = parseRecipient("sms", from);
   if (!fromNumber) return null;
-  const last = await client.outboundMessage.findFirst({
+  // Every tenant that texted this person recently; at most two are needed to
+  // know the answer is ambiguous.
+  const recent = await client.outboundMessage.findMany({
     where: {
       channel: "sms",
       recipient: fromNumber,
@@ -100,12 +108,28 @@ export async function routeSms(
         gte: new Date(Date.now() - SMS_REPLY_WINDOW_DAYS * 86_400_000),
       },
     },
-    orderBy: { createdAt: "desc" },
+    distinct: ["organizationId"],
     select: { organizationId: true },
+    take: 2,
   });
-  return last?.organizationId
-    ? { organizationId: last.organizationId, address: toNumber ?? to }
-    : null;
+  if (recent.length === 1 && recent[0]!.organizationId) {
+    return {
+      organizationId: recent[0]!.organizationId,
+      address: toNumber ?? to,
+    };
+  }
+  if (recent.length > 1) {
+    console.warn(
+      `[inbound] sms from a number several tenants texted, to shared number ${toNumber ?? to}: not routed (give each tenant its own number: an inbound_route row)`,
+    );
+    await notifyOperator({
+      title: "Inbound text could not be routed",
+      body: `A reply arrived on the shared number ${toNumber ?? to} from a number more than one tenant texted in the last ${SMS_REPLY_WINDOW_DAYS} days, so it was not delivered to any inbox. Give each tenant its own number (an inbound_route row) to route replies.`,
+      priority: "low",
+      dedupeKey: `inbound-sms-ambiguous:${toNumber ?? to}`,
+    });
+  }
+  return null;
 }
 
 /** `Acme Inc.` → `acme-inc`, at most 20 characters. */
@@ -130,6 +154,12 @@ function randomTag(length = 8): string {
 /**
  * The tenant's inbound email address, created on first call. Null when
  * INBOUND_EMAIL_DOMAIN is unset (inbound email is off).
+ *
+ * At most one per tenant, however many calls race: the generated route
+ * carries `autoForOrg` (unique). The insert is ON CONFLICT DO NOTHING
+ * (`skipDuplicates`), so a lost race or a random-address collision never
+ * raises inside the caller's transaction (which Postgres would then abort);
+ * we just read back what is there.
  */
 export async function ensureEmailAddress(
   organizationId: string,
@@ -137,42 +167,33 @@ export async function ensureEmailAddress(
 ): Promise<string | null> {
   const domain = env().INBOUND_EMAIL_DOMAIN;
   if (!domain) return null;
-  const existing = await client.inboundRoute.findFirst({
-    where: {
-      organizationId,
-      channel: "email",
-      address: { endsWith: `@${domain}` },
-    },
-    orderBy: { createdAt: "asc" },
-    select: { address: true },
-  });
+  const mine = () =>
+    client.inboundRoute.findUnique({
+      where: { autoForOrg: organizationId },
+      select: { address: true },
+    });
+  const existing = await mine();
   if (existing) return existing.address;
   const org = await client.organization.findUniqueOrThrow({
     where: { id: organizationId },
     select: { name: true },
   });
-  // A collision on 8 random characters is not going to happen, but a unique
-  // violation is retried rather than shown to the user.
   for (let attempt = 0; attempt < 3; attempt++) {
-    const address = `${slugPart(org.name)}-${randomTag()}@${domain}`;
-    try {
-      await client.inboundRoute.create({
-        data: { organizationId, channel: "email", address },
-      });
-      return address;
-    } catch (err) {
-      if ((err as { code?: string }).code !== "P2002") throw err;
-      // Maybe a concurrent first call won: use its address.
-      const raced = await client.inboundRoute.findFirst({
-        where: {
+    await client.inboundRoute.createMany({
+      data: [
+        {
           organizationId,
           channel: "email",
-          address: { endsWith: `@${domain}` },
+          address: `${slugPart(org.name)}-${randomTag()}@${domain}`,
+          autoForOrg: organizationId,
         },
-        select: { address: true },
-      });
-      if (raced) return raced.address;
-    }
+      ],
+      skipDuplicates: true,
+    });
+    // Ours, or the one a concurrent first call created. Null only if the
+    // random address collided with someone else's: try another.
+    const row = await mine();
+    if (row) return row.address;
   }
   throw new Error("Could not allocate an inbound address.");
 }

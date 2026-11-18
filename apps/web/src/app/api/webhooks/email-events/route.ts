@@ -32,6 +32,7 @@ import { parseRecipient, suppress } from "@repo/outbound";
 import { authFailure, verifyHmac, verifySvix } from "@repo/security";
 
 import { logUnrouted, queueInbound } from "@/lib/inbound-queue";
+import { WEBHOOK_LIMITS, webhookBody } from "@/lib/webhook-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +42,11 @@ const event = z.object({
 });
 
 export async function POST(req: Request) {
-  const raw = await req.text();
+  const raw = await webhookBody(req, {
+    name: "email-events",
+    maxBytes: WEBHOOK_LIMITS.small,
+  });
+  if (raw instanceof Response) return raw;
   return req.headers.has("svix-id") ? resend(req, raw) : generic(req, raw);
 }
 
