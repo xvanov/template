@@ -184,6 +184,13 @@ heal_collation() { # heal_collation <tag to start afterwards>
     return 0
   fi
   [ -n "$mismatched" ] || return 0
+  # Only the maintenance databases (no app tables): nothing the app reads is
+  # stale, so rebuild them with the app running.
+  if ! grep -qvxE 'postgres|template1' <<<"$mismatched"; then
+    collation_repair db_psql ||
+      log "⚠ could not rebuild the indexes of postgres/template1 (the app's database is fine) — see above"
+    return 0
+  fi
   log "the database's collation changed under the running app — stopping web + worker to rebuild indexes"
   compose stop "${APP_SERVICES[@]}" || true
   collation_repair db_psql ||
@@ -249,8 +256,13 @@ cmd_deploy() {
   tag="$(git rev-parse --short=12 HEAD)"
   cur="$(state_get CURRENT)"
 
+  # Heal the LIVE app first, before anything below can refuse or stop early
+  # (a commit marked FAILED, nothing to do): those must not block a repair.
+  if [ -n "$cur" ] && [ -n "$(container_of web)" ]; then
+    heal_collation "$cur"
+  fi
+
   if [ "$force" = 0 ] && [ "$tag" = "$cur" ] && [ -n "$(container_of web)" ]; then
-    heal_collation "$tag"
     log "already running $tag — nothing to do (--force to redeploy)"
     return 0
   fi

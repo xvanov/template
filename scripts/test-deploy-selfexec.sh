@@ -43,6 +43,8 @@ cat >"$TMP/work/scripts/deploy.sh" <<'STUB'
   echo "args=$*"
   echo "lock_held=${DEPLOY_LOCK_HELD:-}"
   [ -e /proc/$$/fd/9 ] && echo "fd9=open" || echo "fd9=closed"
+  # A second process must NOT get the deploy lock while this one runs.
+  if flock -n "$(dirname "$0")/../.deploy/lock" true; then echo "lock=free"; else echo "lock=held"; fi
 } >"$(dirname "$0")/../.deploy/stub-ran"
 STUB
 (cd "$TMP/work" && g commit -qam new && g push -q origin HEAD:main)
@@ -54,6 +56,7 @@ grep -q "continuing with its deploy.sh" <<<"$out" || fail "no hand-over logged: 
 [ -f .deploy/stub-ran ] || fail "the new deploy.sh never ran: $out"
 grep -qx "args=deploy --no-pull --force" .deploy/stub-ran || fail "wrong args: $(cat .deploy/stub-ran)"
 grep -qx "lock_held=1" .deploy/stub-ran || fail "lock not marked held"
+grep -qx "lock=held" .deploy/stub-ran || fail "the deploy lock was released across the re-exec: another deploy could start"
 if [ -d /proc/self/fd ]; then
   grep -qx "fd9=open" .deploy/stub-ran || fail "the deploy lock fd was not inherited"
 fi

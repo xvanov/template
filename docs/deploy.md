@@ -225,9 +225,11 @@ What protects you, in order:
    starts the previous tag again, on the checked database, and waits for it
    to be healthy; if even that fails, the script says **THE APP IS DOWN**
    and exits non-zero (the deploy unit's `OnFailure=` hook pages you).
-3. **The check runs on every deploy**, including "already running — nothing
-   to do" and `rollback`: one query; on a mismatch it stops the app, rebuilds
-   and starts it again.
+3. **The check runs on every deploy, first thing after the pull** — before a
+   commit marked FAILED is refused and before "already running — nothing to
+   do" — and on `rollback`: one query; on a mismatch it stops the app,
+   rebuilds and starts the live tag again. If only `postgres`/`template1`
+   differ (no app tables), they are rebuilt with the app running.
 4. **The `migrate` image runs the same guard**
    (`packages/db/prisma/ops/collation-guard.sql`) before `prisma migrate
 deploy`, so even a deploy script that predates all this cannot start the
@@ -247,8 +249,11 @@ the repair in CI.
 than these checks. **Every server must deploy the release with the checks
 first** (while still on `postgres:17-alpine`), then the image switch. A
 server that skips straight to the image switch with an older `deploy.sh` is
-still protected by step 4, but its old script recreates the database under the
-running app, which serves on stale indexes until migrate repairs them.
+only partly protected by step 4: its old script recreates the database under
+the running app, which then serves on stale indexes until migrate repairs
+them. And if that repair FAILS (duplicates already written), migrate fails,
+the old script reports "migration failed" and leaves the old app serving on
+the stale indexes — writing more bad rows — until a person intervenes.
 
 **By hand** — only if you cannot deploy the release with the checks first.
 Disable the auto-deploy timer before anything else
