@@ -14,6 +14,9 @@ make dev             # web :3200 + worker
 make mobile          # Expo dev server :8091 — scan with Expo Go
 make desktop         # Tauri desktop shell around the web app (needs Rust)
 make smoke           # THE GATE: production build, booted, driven in a browser
+make doctor          # is this machine ready? (read-only)
+make demo            # seeded demo workspace + web + worker, prints a login
+cd ml && uv run pytest   # the Python sidecar: ALWAYS through uv run
 ```
 
 ## Rules you cannot violate

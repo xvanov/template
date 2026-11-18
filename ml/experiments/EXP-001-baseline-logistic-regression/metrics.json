@@ -1,0 +1,52 @@
+{
+  "latest": {
+    "run_id": "exp-001-baseline",
+    "seconds": 0.055,
+    "train": {
+      "accuracy": 0.9681528662420382,
+      "precision": 0.9783783783783784,
+      "recall": 0.9427083333333334,
+      "f1": 0.960212201591512,
+      "logloss": 0.20461306497221182,
+      "n": 471.0
+    },
+    "val": {
+      "accuracy": 0.8062015503875969,
+      "precision": 0.7678571428571429,
+      "recall": 0.7818181818181819,
+      "f1": 0.7747747747747747,
+      "logloss": 0.38140637201809025,
+      "n": 129.0
+    },
+    "split": {
+      "file": "splits/toy.json",
+      "ids_sha256": "81a02e778aba1aa2eea84f68bfc298930c08536a57126bba12140bc21626c0e6",
+      "n_train": 471,
+      "n_val": 129
+    },
+    "config_sha256": "2ee4dd86859b87cbba2bdd6ade17db9cb0b069e1bd2091151d8fc4effbfb2a32",
+    "device": "cpu",
+    "git": {
+      "commit": "2423d525f8a0b6f2fe0d10fd61b1c1a651ec37ad",
+      "dirty": true
+    }
+  },
+  "runs": [
+    {
+      "run_id": "exp-001-baseline",
+      "val": {
+        "accuracy": 0.8062015503875969,
+        "precision": 0.7678571428571429,
+        "recall": 0.7818181818181819,
+        "f1": 0.7747747747747747,
+        "logloss": 0.38140637201809025,
+        "n": 129.0
+      },
+      "git": {
+        "commit": "2423d525f8a0b6f2fe0d10fd61b1c1a651ec37ad",
+        "dirty": true
+      },
+      "recorded_at": "2026-11-18T15:49:15+00:00"
+    }
+  ]
+}

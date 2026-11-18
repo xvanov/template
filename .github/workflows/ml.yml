@@ -1,0 +1,49 @@
+name: ML
+
+# The Python sidecar (ml/) in its own workflow, so the main CI never installs
+# Python. Runs only when ml/ or this file changes, or by hand. The worker's
+# side of the bridge (packages/jobs/src/ml.test.ts) runs in the main CI with
+# a fake child process; both read ml/contract/predict.example.json, so a
+# contract change is checked on both sides.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ml/**"
+      - ".github/workflows/ml.yml"
+  pull_request:
+    paths:
+      - "ml/**"
+      - ".github/workflows/ml.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ml:
+    name: ruff · pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ml
+    steps:
+      - uses: actions/checkout@v4
+      # Caches uv's package cache keyed on the lockfile: a warm run installs
+      # numpy, pytest and ruff from the cache in about a second.
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.7"
+          enable-cache: true
+          cache-dependency-glob: ml/uv.lock
+      # --frozen everywhere: CI installs exactly uv.lock and fails if
+      # pyproject.toml changed without re-locking (`uv lock`).
+      - run: uv sync --frozen
+      - run: uv run --frozen ruff check
+      - run: uv run --frozen ruff format --check
+      - run: uv run --frozen pytest

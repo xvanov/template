@@ -19,3 +19,10 @@ backups
 .env.*
 !.env.example
 *.log
+# ml/: a downloaded dataset or model weights must never ride along in a build
+# context. Copy what an image needs explicitly (ml/README.md, "Docker").
+ml/.venv
+ml/runs
+ml/models
+ml/data
+**/__pycache__

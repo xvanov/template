@@ -15,6 +15,7 @@
 import { z } from "zod";
 import { abandonStaleRuns, executeRun } from "@repo/agent";
 import { db } from "@repo/db";
+import { env } from "@repo/env";
 import { markInboundFailed, processInbound } from "@repo/inbound";
 import { runOperatorTick } from "@repo/notify";
 import {
@@ -26,6 +27,7 @@ import {
 import { ingestDocument, markIngestFailed, sweepStaleIngests } from "@repo/rag";
 import { reconcileSmsDelivery } from "@repo/sms";
 
+import { predictItems } from "./ml";
 import { enqueue } from "./queue";
 import {
   ask,
@@ -46,6 +48,14 @@ const schemas = {
   "agent.run": z.object({
     organizationId: z.string().min(1),
     runId: z.string().min(1),
+  }),
+
+  /**
+   * Example of the Python bridge (./ml.ts): score a tenant's open items with
+   * the toy model trained in ml/. Needs ML_ENABLED and `cd ml && uv run train`.
+   */
+  "ml.predict": z.object({
+    organizationId: z.string().min(1),
   }),
 
   /** Chunk + embed one document (packages/rag). Idempotent by content hash. */
@@ -194,6 +204,41 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
         });
       }
       return outcome;
+    },
+  },
+
+  "ml.predict": {
+    scope: "org",
+    schema: schemas["ml.predict"],
+    run: async ({ organizationId }) => {
+      // Off is an outcome, not a failure: no retries, no operator page.
+      if (!env().ML_ENABLED) return { skipped: "ML_ENABLED is off" };
+      const items = await db.item.findMany({
+        where: { organizationId, done: false },
+        orderBy: { createdAt: "desc" },
+        take: 200,
+        select: { id: true, title: true, notes: true },
+      });
+      if (items.length === 0) return { scored: 0 };
+      // "No model trained yet" comes back as ok:false: recorded, not retried.
+      // A crash or a timeout throws (MlProcessError) and the job retries.
+      const res = await predictItems(items);
+      if (!res.ok) {
+        console.warn(`[ml] predict org=${organizationId}: ${res.reason}`);
+        return { scored: 0, reason: res.reason };
+      }
+      const urgent = res.predictions.filter((p) => p.urgent).length;
+      console.log(
+        `[ml] predict org=${organizationId} model=${res.model.run_id} items=${res.predictions.length} urgent=${urgent}`,
+      );
+      // An example: the result is the job's return value. A real feature
+      // stores it (its own table, written in a transaction with the org in
+      // the where) and shows it in the app.
+      return {
+        scored: res.predictions.length,
+        urgent,
+        model: res.model.run_id,
+      };
     },
   },
 

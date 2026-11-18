@@ -64,3 +64,17 @@ web-build/
 /apps/desktop/src-tauri/gen/
 *.tauri.key
 *.tauri.key.pub
+
+# ml/ (the Python sidecar, ml/README.md): environments, run outputs, data and
+# model weights never go in git. Commit code, configs, splits/ and experiments/.
+/ml/.venv/
+/ml/runs/
+/ml/models/
+/ml/data/*
+!/ml/data/README.md
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+# Competition data and credentials, wherever they land (docs/hackathon.md).
+kaggle.json
