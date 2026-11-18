@@ -57,3 +57,10 @@ web-build/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# desktop (apps/desktop): Rust build output and tauri-generated schemas.
+# Updater signing keys never belong in the repo (see apps/desktop/README.md).
+/apps/desktop/src-tauri/target/
+/apps/desktop/src-tauri/gen/
+*.tauri.key
+*.tauri.key.pub

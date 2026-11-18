@@ -1,0 +1,16 @@
+{
+  "name": "desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop shell (Tauri 2) around the web app. Needs Rust; see README.md.",
+  "type": "module",
+  "scripts": {
+    "tauri": "node scripts/tauri.mjs",
+    "desktop:dev": "node scripts/tauri.mjs dev",
+    "desktop:build": "node scripts/tauri.mjs build",
+    "icons": "node scripts/tauri.mjs icon ../web/src/app/icon.svg -o src-tauri/icons"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.5"
+  }
+}

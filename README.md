@@ -9,6 +9,7 @@ storage already wired.
 apps/web         Next.js 16 (App Router) — the UI and the API
 apps/mobile      Expo 57 (expo-router + NativeWind) — iOS/Android via Expo Go
 apps/worker      BullMQ worker + cron schedules
+apps/desktop     Tauri 2 desktop shell (Windows/macOS/Linux) around the web app
 packages/api     tRPC routers — the single API surface, shared by both apps
 packages/db      Prisma + Postgres
 packages/auth    better-auth — email+password, Google OAuth, organizations
@@ -195,7 +196,8 @@ there is nothing extra to configure for the phone.
 
 1. Rename: `expo.scheme` + `APP_SCHEME`, `expo.name`/`slug` and the bundle
    identifiers in `apps/mobile/app.json`, the `<title>` in
-   `apps/web/src/app/layout.tsx`.
+   `apps/web/src/app/layout.tsx`, `productName`/`mainBinaryName`/`identifier` in
+   `apps/desktop/src-tauri/tauri.conf.json`.
 2. Replace the demo `Item` model with your domain. Keep its `organizationId`
    column and index shape; `packages/api/src/routers/items.ts` is the reference.
 3. Delete what you do not need — `packages/ai`, `packages/storage` and

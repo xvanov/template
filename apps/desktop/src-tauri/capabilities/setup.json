@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "setup",
+  "description": "The bundled setup page (ui/) may call the app's own commands, and nothing else. No capability names the app window: it loads the remote web app and gets no IPC at all (src/tests.rs proves both).",
+  "windows": ["setup"],
+  "permissions": [
+    "allow-get-state",
+    "allow-set-server",
+    "allow-retry",
+    "allow-set-notifications",
+    "allow-set-autostart"
+  ]
+}

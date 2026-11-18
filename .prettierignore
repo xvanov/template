@@ -1,2 +1,5 @@
 # Machine-written story files from the software factory.
 stories/
+# Rust build output and tauri-generated schemas (apps/desktop).
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/

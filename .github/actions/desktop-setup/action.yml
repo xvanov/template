@@ -1,0 +1,36 @@
+name: desktop-setup
+description: >-
+  Rust (with a build cache), the Tauri system packages on Linux, and ONLY the
+  desktop workspace's npm dependency (the Tauri CLI): `npm ci -w desktop`
+  installs 2 packages in ~2s instead of the whole monorepo.
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2.9.3
+      with:
+        workspaces: apps/desktop/src-tauri
+    - name: Tauri system packages (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+    # The bundler downloads NSIS and WiX from GitHub releases on first use;
+    # keep them between runs (those downloads have failed with 504s).
+    - name: Tauri bundler tools cache (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: ~\AppData\Local\tauri
+        key: tauri-tools-${{ runner.os }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+        restore-keys: tauri-tools-${{ runner.os }}-
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+    # --ignore-scripts: the root postinstall generates the Prisma client,
+    # which this workflow neither has nor needs.
+    - shell: bash
+      run: npm ci --workspace desktop --ignore-scripts --no-audit --fund=false

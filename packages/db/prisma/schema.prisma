@@ -608,6 +608,8 @@ model AgentRun {
   proposals AgentProposal[]
 
   @@index([organizationId, createdAt])
+  /// desktop.feed: "runs in this tenant that finished since the cursor".
+  @@index([organizationId, finishedAt])
   @@index([status, createdAt])
   @@map("agent_run")
 }
