@@ -69,6 +69,12 @@ export default function Items() {
         >
           <Text className="text-sm text-accent">This device</Text>
         </Pressable>
+        <Pressable
+          accessibilityRole="link"
+          onPress={() => router.push("/glasses")}
+        >
+          <Text className="text-sm text-accent">Glasses</Text>
+        </Pressable>
       </View>
 
       <View className="flex-row gap-2 px-5 pb-3">

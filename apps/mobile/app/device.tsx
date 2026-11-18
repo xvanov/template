@@ -1,7 +1,7 @@
 /**
  * What this phone can do, for testing on a real device: push registration
- * (and a test push through the server's outbound guard), and the glasses
- * slot. Most of it says "needs a development build" in Expo Go, on purpose.
+ * (and a test push through the server's outbound guard), and whether this
+ * build has the glasses SDK (the capture flow itself is app/glasses.tsx). Most of it says "needs a development build" in Expo Go, on purpose.
  */
 import { ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -112,7 +112,7 @@ export default function Device() {
             glasses.status === "available"
               ? "Available"
               : glasses.reason === "no_native_module"
-                ? "Not in this build"
+                ? "Not in this build (GLASSES_ENABLED)"
                 : "Not supported here"
           }
         />

@@ -191,7 +191,23 @@ export async function callOpenAiFamily(
     const result = await generate({
       model: chatModel(route),
       ...(req.system ? { system: req.system } : {}),
-      prompt: req.prompt,
+      ...(req.images?.length
+        ? {
+            messages: [
+              {
+                role: "user" as const,
+                content: [
+                  ...req.images.map((img) => ({
+                    type: "file" as const,
+                    data: img.data,
+                    mediaType: img.mediaType,
+                  })),
+                  { type: "text" as const, text: req.prompt },
+                ],
+              },
+            ],
+          }
+        : { prompt: req.prompt }),
       maxOutputTokens: req.maxOutputTokens,
       ...(req.timeoutMs
         ? { abortSignal: AbortSignal.timeout(req.timeoutMs) }

@@ -38,7 +38,7 @@ import { join } from "node:path";
 
 import { env } from "@repo/env";
 
-import { LlmProviderError } from "../errors";
+import { LlmConfigError, LlmProviderError } from "../errors";
 import type { Effort } from "../models";
 import type { TokenUsage } from "../pricing";
 import type { ProviderRequest, ProviderResult } from "./types";
@@ -339,6 +339,12 @@ export async function callCli(
   req: ProviderRequest,
   deps: CliDeps = {},
 ): Promise<ProviderResult> {
+  if (req.images?.length) {
+    // The CLI and the bridge take text on stdin; there is no image channel.
+    throw new LlmConfigError(
+      "cli/ models cannot take images: route this tier to an anthropic/ or OpenAI-family vision model.",
+    );
+  }
   const e = env();
   const timeoutMs = req.timeoutMs ?? e.CLAUDE_CLI_TIMEOUT_SECONDS * 1000;
   const model = req.route.model;

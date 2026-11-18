@@ -116,6 +116,33 @@ describe("local/ and stop reasons", () => {
     });
   });
 
+  it("sends images as image_url data parts alongside the text", async () => {
+    const sent = stubFetch(completion("a cat"));
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff]);
+    await callOpenAiFamily(
+      req("openai/gpt-4.1", {
+        prompt: "describe",
+        images: [{ data: jpeg, mediaType: "image/jpeg" }],
+      }),
+    );
+    const messages = sent[0]!.body.messages as {
+      role: string;
+      content: { type: string; text?: string; image_url?: { url: string } }[];
+    }[];
+    const user = messages.find((m) => m.role === "user")!;
+    expect(user.content).toEqual(
+      expect.arrayContaining([
+        { type: "text", text: "describe" },
+        expect.objectContaining({
+          type: "image_url",
+          image_url: expect.objectContaining({
+            url: `data:image/jpeg;base64,${Buffer.from(jpeg).toString("base64")}`,
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("maps length to max_tokens and content_filter to refusal", async () => {
     stubFetch(completion("partial", "length"));
     expect((await callOpenAiFamily(req("openai/gpt-4.1"))).stop).toBe(

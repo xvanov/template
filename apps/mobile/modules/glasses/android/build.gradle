@@ -1,0 +1,45 @@
+// The glasses module: a thin Expo wrapper over Meta's Wearables Device Access
+// Toolkit (DAT). Only linked when GLASSES_ENABLED=true (see
+// ../plugin/with-glasses.js, which otherwise excludes it from autolinking).
+//
+// The DAT is published to Maven Central (com.meta.wearable), so it needs no
+// token or extra repository. Its version and whether MockDeviceKit is
+// compiled in come from gradle.properties, written by the config plugin:
+//   glasses.datVersion=1.0.1
+//   glasses.mockDevice=true|false
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.glasses'
+version = '1.0.0'
+
+def datVersion = (findProperty('glasses.datVersion') ?: '1.0.1').toString()
+def mockDevice = (findProperty('glasses.mockDevice') ?: 'false').toString() == 'true'
+
+android {
+  namespace "expo.modules.glasses"
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+    // The DAT supports Android 10+ (API 29).
+    minSdkVersion Math.max(29, (rootProject.ext.has('minSdkVersion') ? rootProject.ext.get('minSdkVersion') : 29) as int)
+  }
+  sourceSets {
+    // MockDeviceKit (simulated glasses, phone camera as the feed) is a
+    // separate artifact; without it, a no-op twin of MockSupport compiles.
+    main.java.srcDirs += mockDevice ? 'src/mock/java' : 'src/nomock/java'
+  }
+}
+
+dependencies {
+  implementation "com.meta.wearable:mwdat-core:${datVersion}"
+  implementation "com.meta.wearable:mwdat-camera:${datVersion}"
+  if (mockDevice) {
+    implementation "com.meta.wearable:mwdat-mockdevice:${datVersion}"
+  }
+  implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
+  implementation "androidx.exifinterface:exifinterface:1.4.2"
+  implementation "androidx.activity:activity-ktx:1.10.1"
+}

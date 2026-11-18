@@ -8,6 +8,7 @@
 import {
   Bot,
   FileText,
+  Glasses,
   Inbox,
   LayoutDashboard,
   LogOut,
@@ -51,6 +52,7 @@ const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/app/inbox", label: "Inbox", icon: Inbox },
   { href: "/app/docs", label: "Documents", icon: FileText },
   { href: "/app/agent", label: "Agent", icon: Bot },
+  { href: "/app/glasses", label: "Glasses", icon: Glasses },
 ];
 
 function initials(name: string, email: string): string {

@@ -11,6 +11,14 @@
  *   EAS_PROJECT_ID       From `eas init`; needed for push tokens and EAS builds.
  *   EXPO_OWNER           Expo account or org that owns the project (optional).
  *
+ * Meta glasses (modules/glasses/README.md), all optional, all build-time:
+ *   GLASSES_ENABLED        Link the Meta Wearables SDK into the build.  false
+ *   GLASSES_META_APP_ID    Wearables Developer Center app id.           "0" (Developer Mode)
+ *   GLASSES_CLIENT_TOKEN   Its client token.                            "0" (Developer Mode)
+ *   GLASSES_MOCK_DEVICE    Compile MockDeviceKit (simulated glasses).   true
+ *   GLASSES_ANALYTICS_OPT_OUT  Opt out of Meta's SDK analytics.         true
+ *   GLASSES_DAT_VERSION    Device Access Toolkit version.               1.0.1
+ *
  * APP_SCHEME is load-bearing: the OAuth browser hop deep-links back on it, and
  * the server lists `<scheme>://` in better-auth's trustedOrigins. Both sides
  * read the same variable, so they cannot disagree.
@@ -128,9 +136,19 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         enableBackgroundPlayback: false,
       },
     ],
-    // The slot for smart-glasses support (modules/glasses/README.md). A no-op
-    // until a native SDK is dropped in.
-    "./modules/glasses/plugin/with-glasses.js",
+    // Meta glasses (modules/glasses/README.md). Off by default: the native
+    // module is then left out of autolinking and the build is unchanged.
+    [
+      "./modules/glasses/plugin/with-glasses.js",
+      {
+        enabled: process.env.GLASSES_ENABLED,
+        metaAppId: process.env.GLASSES_META_APP_ID,
+        clientToken: process.env.GLASSES_CLIENT_TOKEN,
+        mockDevice: process.env.GLASSES_MOCK_DEVICE,
+        analyticsOptOut: process.env.GLASSES_ANALYTICS_OPT_OUT,
+        datVersion: process.env.GLASSES_DAT_VERSION,
+      },
+    ],
   ],
   experiments: {
     typedRoutes: true,
