@@ -679,9 +679,20 @@ function main() {
     if (opts.git) {
       run("git", ["init", "-q", "-b", "main"], target);
       run("git", ["add", "-A"], target);
+      // A machine with no git identity (CI) still gets its first commit.
+      const who = spawnSync("git", ["config", "user.email"], { cwd: target });
+      const identity = who.stdout?.toString().trim()
+        ? []
+        : [
+            "-c",
+            "user.name=App template",
+            "-c",
+            "user.email=template@localhost",
+          ];
       run(
         "git",
         [
+          ...identity,
           "commit",
           "-q",
           "-m",
