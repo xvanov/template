@@ -40,6 +40,12 @@ exports[`enabled: Android AndroidManifest.xml 1`] = `
               "android:value": "true",
             },
           },
+          {
+            "$": {
+              "android:name": "com.meta.wearable.mwdat.CRASH_REPORTING_OPT_OUT",
+              "android:value": "true",
+            },
+          },
         ],
       },
     ],
@@ -106,6 +112,9 @@ exports[`enabled: iOS Info.plist 1`] = `
     },
     "AppLinkURLScheme": "apptemplate://",
     "ClientToken": "0",
+    "CrashReporting": {
+      "OptOut": true,
+    },
     "MetaAppID": "0",
     "TeamID": "$(DEVELOPMENT_TEAM)",
   },
@@ -135,4 +144,23 @@ exports[`enabled: iOS Podfile.properties.json raises (never lowers) the deployme
   "glasses.mockDevice": "true",
   "ios.deploymentTarget": "17.2",
 }
+`;
+
+exports[`enabled: one Fresco version (the DAT's fbcore vs React Native's) forces every com.facebook.fresco artifact, once 1`] = `
+"apply plugin: "expo-root-project"
+
+// glasses: one Fresco version (modules/glasses/plugin/with-glasses.js).
+// Meta's DAT pulls Fresco fbcore 3.7.0; mixing it with React
+// Native's other Fresco artifacts crashes at launch (NoSuchMethodError).
+allprojects {
+  configurations.configureEach {
+    resolutionStrategy.eachDependency { details ->
+      if (details.requested.group == "com.facebook.fresco") {
+        details.useVersion("3.7.0")
+        details.because("one Fresco version for React Native and the Meta DAT")
+      }
+    }
+  }
+}
+"
 `;

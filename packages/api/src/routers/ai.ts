@@ -34,8 +34,12 @@ const VISION_TYPES: readonly ImageInput["mediaType"][] = [
   "image/webp",
   "image/gif",
 ];
-/** Anthropic's per-image limit is 5 MB; phone/glasses JPEGs are well under. */
-export const MAX_DESCRIBE_BYTES = 5 * 1024 * 1024;
+/**
+ * Anthropic's per-image limit is 5 MB of BASE64, i.e. 3.75 MB of bytes. The
+ * phone shrinks photos to ≤ 1568 px (~0.5 MB) before upload, so this only
+ * bites on full-size files from elsewhere.
+ */
+export const MAX_DESCRIBE_BYTES = Math.floor((5 * 1024 * 1024 * 3) / 4);
 
 /**
  * Short, spoken-friendly, and never identifying people: the description may
@@ -146,24 +150,41 @@ export const aiRouter = createTRPCRouter({
       }
       if (asset.sizeBytes > MAX_DESCRIBE_BYTES) {
         throw new DomainRuleError(
-          "That photo is too large to describe (5 MB max).",
+          "That photo is too large to describe (3.75 MB max).",
         );
       }
       const data = await storage().get(asset.key);
-      const r = await ask({
-        purpose: "media.describe",
-        priority: "discretionary",
-        tier: "fast",
-        organizationId: ctx.organizationId,
-        userId: ctx.user.id,
-        system: DESCRIBE_SYSTEM,
-        prompt: input.question ?? "What is in this photo?",
-        images: [{ data, mediaType: mediaType as ImageInput["mediaType"] }],
-        maxOutputTokens: 400,
-        effort: "low",
-      });
+      let r;
+      try {
+        r = await ask({
+          purpose: "media.describe",
+          priority: "discretionary",
+          tier: "fast",
+          organizationId: ctx.organizationId,
+          userId: ctx.user.id,
+          system: DESCRIBE_SYSTEM,
+          prompt: input.question ?? "What is in this photo?",
+          images: [{ data, mediaType: mediaType as ImageInput["mediaType"] }],
+          maxOutputTokens: 400,
+          effort: "low",
+        });
+      } catch (err) {
+        // Like ai.ask: a cut-off description is still useful, labelled.
+        if (err instanceof LlmTruncatedError) {
+          return {
+            text: err.partialText,
+            truncated: true,
+            servedBy: null,
+            costUsd: err.costUsd,
+            costKnown: true,
+            latencyMs: null,
+          };
+        }
+        throw err;
+      }
       return {
         text: r.text,
+        truncated: false,
         servedBy: r.servedBy,
         costUsd: r.costUsd,
         costKnown: r.costKnown,

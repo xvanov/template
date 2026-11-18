@@ -42,13 +42,17 @@ describe("glance links", () => {
     await seed(a, "alpha");
     await seed(b, "bravo");
 
-    const link = await callerFor(a).glance.createLink({ name: "My glasses" });
+    const link = await callerFor(a).glance.createLink({
+      name: "My glasses",
+      showDetails: true,
+    });
     expect(link.secret).toMatch(/^gl_[A-Za-z0-9_-]{43}$/);
 
     const principal = await authenticateGlanceLink(db, link.secret);
     expect(principal).toMatchObject({
       organizationId: a.organizationId,
       userId: a.userId,
+      showDetails: true,
     });
     const snap = await glanceSnapshot(db, principal!.organizationId);
     expect(snap.approvals.count).toBe(1);
@@ -112,5 +116,41 @@ describe("glance links", () => {
 
     expect(await authenticateGlanceLink(db, "gl_short")).toBeNull();
     expect(await authenticateGlanceLink(db, `tk_${"x".repeat(43)}`)).toBeNull();
+  });
+
+  it("defaults to counts-only and 30 days; an expired link is refused", async () => {
+    const a = await createTenant("glance-expiry");
+    await seed(a, "charlie");
+    const link = await callerFor(a).glance.createLink({ name: "default" });
+    const row = await db.glanceLink.findUniqueOrThrow({
+      where: { id: link.id },
+    });
+    expect(row.showDetails).toBe(false);
+    const days =
+      (row.expiresAt!.getTime() - row.createdAt.getTime()) / 86_400_000;
+    expect(Math.round(days)).toBe(30);
+
+    const principal = await authenticateGlanceLink(db, link.secret);
+    expect(principal?.showDetails).toBe(false);
+    const counts = await glanceSnapshot(db, a.organizationId, {
+      details: false,
+    });
+    expect(counts.approvals).toEqual({ count: 1, rows: [] });
+    expect(JSON.stringify(counts)).not.toContain("charlie");
+
+    await db.glanceLink.updateMany({
+      where: { id: link.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    expect(await authenticateGlanceLink(db, link.secret)).toBeNull();
+
+    const forever = await callerFor(a).glance.createLink({
+      name: "forever",
+      expiresInDays: null,
+    });
+    expect(
+      (await db.glanceLink.findUniqueOrThrow({ where: { id: forever.id } }))
+        .expiresAt,
+    ).toBeNull();
   });
 });

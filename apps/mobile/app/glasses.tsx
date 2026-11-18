@@ -26,7 +26,9 @@ import {
   type PhotoSource,
   type SourceKind,
 } from "../lib/glasses/sources";
+import { discard, shrink } from "../lib/glasses/photo-files";
 import { speak, stopSpeaking } from "../lib/glasses/speak";
+import { mediaSource } from "../lib/media";
 import { trpc } from "../lib/trpc";
 import { uploadMedia } from "../lib/upload";
 import * as Glasses from "../modules/glasses";
@@ -57,7 +59,7 @@ export default function GlassesScreen() {
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{
-    uri: string;
+    source: { uri: string; headers?: Record<string, string> };
     description: string | null;
   } | null>(null);
   const aiEnabled = trpc.ai.enabled.useQuery();
@@ -103,6 +105,8 @@ export default function GlassesScreen() {
       const r = await captureAndDescribe(
         {
           capture: () => source.capture(),
+          shrink,
+          discard,
           upload: (file, onProgress) => uploadMedia(file, { onProgress }),
           ...(useAi
             ? {
@@ -118,12 +122,17 @@ export default function GlassesScreen() {
         },
         kind,
       );
-      setResult({ uri: r.photo.uri, description: r.description });
+      setResult({
+        source: mediaSource(r.mediaUrl),
+        description: r.description,
+      });
       void utils.media.list.invalidate();
     } catch (err) {
       if (err instanceof PipelineError && err.partial.photo) {
         setResult({
-          uri: err.partial.photo.uri,
+          source: err.partial.mediaUrl
+            ? mediaSource(err.partial.mediaUrl)
+            : { uri: err.partial.photo.uri },
           description: err.partial.description ?? null,
         });
       }
@@ -211,7 +220,7 @@ export default function GlassesScreen() {
           <View className="gap-2">
             <View className="aspect-[4/3] overflow-hidden rounded-xl bg-surface">
               <Image
-                source={{ uri: result.uri }}
+                source={result.source}
                 style={{ width: "100%", height: "100%" }}
                 contentFit="cover"
                 accessibilityLabel="The captured photo"

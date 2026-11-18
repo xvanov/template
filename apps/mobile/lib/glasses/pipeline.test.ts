@@ -16,7 +16,7 @@ function deps(over: Partial<PipelineDeps> = {}) {
     capture: async () => photo,
     upload: async (_file, onProgress) => {
       onProgress(1);
-      return { id: "m1" };
+      return { id: "m1", url: "/api/media/blob?key=k" };
     },
     onStep: (s, p) => steps.push(p === undefined ? s : `${s}:${p}`),
     ...over,
@@ -26,12 +26,20 @@ function deps(over: Partial<PipelineDeps> = {}) {
 
 describe("captureAndDescribe", () => {
   it("captures, uploads with a dated name, describes and speaks, in order", async () => {
-    const upload = jest.fn(async () => ({ id: "m1" }));
+    const upload = jest.fn(async () => ({
+      id: "m1",
+      url: "/api/media/blob?key=k",
+    }));
     const describe = jest.fn(async () => ({ text: "A red door." }));
     const speak = jest.fn(async () => {});
     const { d, steps } = deps({ upload, describe, speak });
     const r = await captureAndDescribe(d, "glasses", at);
-    expect(r).toEqual({ photo, mediaId: "m1", description: "A red door." });
+    expect(r).toEqual({
+      photo,
+      mediaId: "m1",
+      mediaUrl: "/api/media/blob?key=k",
+      description: "A red door.",
+    });
     expect(upload).toHaveBeenCalledWith(
       {
         uri: photo.uri,
@@ -71,7 +79,7 @@ describe("captureAndDescribe", () => {
   });
 
   it("a failed capture uploads nothing", async () => {
-    const upload = jest.fn(async () => ({ id: "x" }));
+    const upload = jest.fn(async () => ({ id: "x", url: "/x" }));
     const { d } = deps({
       capture: async () => {
         throw new Error("not connected");
@@ -89,6 +97,36 @@ describe("captureAndDescribe", () => {
     const { d } = deps({ describe: async () => ({ text: "  " }), speak });
     await captureAndDescribe(d);
     expect(speak).not.toHaveBeenCalled();
+  });
+});
+
+describe("shrink and discard", () => {
+  it("uploads the shrunk photo, then deletes both local files", async () => {
+    const small = { uri: "file:///small.jpg", mimeType: "image/jpeg" };
+    const discard = jest.fn();
+    const upload = jest.fn(async () => ({ id: "m2", url: "/u" }));
+    const { d } = deps({ shrink: async () => small, upload, discard });
+    const r = await captureAndDescribe(d);
+    expect(upload).toHaveBeenCalledWith(
+      expect.objectContaining({ uri: small.uri }),
+      expect.any(Function),
+    );
+    expect(discard).toHaveBeenCalledWith([photo.uri, small.uri]);
+    expect(r.photo).toBe(small);
+  });
+
+  it("keeps the local file when the upload fails (nothing else has it)", async () => {
+    const discard = jest.fn();
+    const { d } = deps({
+      upload: async () => {
+        throw new Error("offline");
+      },
+      discard,
+    });
+    await expect(captureAndDescribe(d)).rejects.toMatchObject({
+      step: "upload",
+    });
+    expect(discard).not.toHaveBeenCalled();
   });
 });
 

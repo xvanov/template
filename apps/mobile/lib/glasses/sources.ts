@@ -29,9 +29,11 @@ export interface PhotoSource {
 
 /** Which sources this build can offer, best first. */
 export function availableSources(): SourceKind[] {
-  return Glasses.availability().status === "available"
+  if (Glasses.availability().status !== "available") return ["phone"];
+  // MockDeviceKit is compiled only into development builds (eas.json).
+  return Glasses.getStatus()?.mockDeviceAvailable
     ? ["glasses", "simulated", "phone"]
-    : ["phone"];
+    : ["glasses", "phone"];
 }
 
 const phone: PhotoSource = {

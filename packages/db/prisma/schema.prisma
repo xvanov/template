@@ -232,6 +232,11 @@ model GlanceLink {
   prefix         String
   /// SHA-256 of the secret (`gl_` + 256 random bits); the secret is shown once.
   hash           String       @unique
+  /// False (default): counts only ("3 waiting"), never who or what. True:
+  /// also titles and senders, which then show on a see-through display.
+  showDetails    Boolean      @default(false)
+  /// Refused after this (null = never; the UI defaults to 30 days).
+  expiresAt      DateTime?
   lastUsedAt     DateTime?
   revokedAt      DateTime?
   createdAt      DateTime     @default(now())

@@ -17,6 +17,9 @@
       },
       "ios": {
         "simulator": false
+      },
+      "env": {
+        "GLASSES_MOCK_DEVICE": "true"
       }
     },
     "development-simulator": {
@@ -31,12 +34,18 @@
       "environment": "preview",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "GLASSES_MOCK_DEVICE": "false"
       }
     },
     "production": {
       "extends": "base",
       "environment": "production",
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "GLASSES_MOCK_DEVICE": "false"
+      }
     }
   },
   "submit": {

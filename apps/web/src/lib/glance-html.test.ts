@@ -5,6 +5,7 @@ import { ago, escapeHtml, renderGlancePage } from "./glance-html";
 const now = new Date("2026-11-18T12:00:00Z");
 const snapshot = {
   at: now.toISOString(),
+  details: true,
   approvals: {
     count: 7,
     rows: [
@@ -58,5 +59,25 @@ describe("helpers", () => {
   });
   it("escapeHtml covers attributes too", () => {
     expect(escapeHtml(`"'&`)).toBe("&quot;&#39;&amp;");
+  });
+});
+
+describe("counts-only links", () => {
+  it("show numbers and no rows", () => {
+    const html = renderGlancePage({
+      snapshot: {
+        ...snapshot,
+        details: false,
+        approvals: { count: 2, rows: [] },
+      },
+      appName: "Acme",
+      nonce: "n",
+      now,
+    });
+    expect(html).toContain(
+      "2 waiting for your approval. Details on your phone.",
+    );
+    expect(html).toContain("Inbox is clear.");
+    expect(html).not.toContain("<li");
   });
 });

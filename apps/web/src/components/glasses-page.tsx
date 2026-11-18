@@ -23,7 +23,15 @@ import {
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/states";
+import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
 
 /** Meta AI app deep link that adds a Web App to Display glasses. */
@@ -37,6 +45,8 @@ export function GlassesPage() {
   const utils = trpc.useUtils();
   const links = trpc.glance.links.useQuery();
   const [name, setName] = useState("My glasses");
+  const [expiry, setExpiry] = useState("30");
+  const [showDetails, setShowDetails] = useState(false);
   const [created, setCreated] = useState<{ name: string; url: string } | null>(
     null,
   );
@@ -72,7 +82,9 @@ export function GlassesPage() {
           <CardDescription>
             A read-only page of what needs you (approvals and unhandled inbox),
             sized for Meta Ray-Ban Display glasses. Anyone with the link can see
-            it, so treat it like a password; revoke it if it leaks.
+            it, so treat it like a password; revoke it if it leaks. By default
+            it shows counts only; titles and senders appear on a see-through
+            display, so turn them on only if that is fine where you wear it.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -80,7 +92,12 @@ export function GlassesPage() {
             className="flex flex-wrap items-end gap-3"
             onSubmit={(e) => {
               e.preventDefault();
-              if (name.trim()) create.mutate({ name: name.trim() });
+              if (name.trim())
+                create.mutate({
+                  name: name.trim(),
+                  expiresInDays: expiry === "never" ? null : Number(expiry),
+                  showDetails,
+                });
             }}
           >
             <div className="grid gap-1.5">
@@ -90,6 +107,28 @@ export function GlassesPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="glance-expiry">Expires</Label>
+              <Select value={expiry} onValueChange={setExpiry}>
+                <SelectTrigger id="glance-expiry" className="w-36">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="7">in 7 days</SelectItem>
+                  <SelectItem value="30">in 30 days</SelectItem>
+                  <SelectItem value="90">in 90 days</SelectItem>
+                  <SelectItem value="never">never</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2 pb-2">
+              <Switch
+                id="glance-details"
+                checked={showDetails}
+                onCheckedChange={setShowDetails}
+              />
+              <Label htmlFor="glance-details">Show titles and senders</Label>
             </div>
             <Button type="submit" disabled={create.isPending || !name.trim()}>
               <Glasses aria-hidden />
@@ -162,8 +201,18 @@ export function GlassesPage() {
                   <code className="font-mono text-xs text-muted-foreground">
                     {l.prefix}…
                   </code>
+                  <Badge variant="secondary">
+                    {l.showDetails ? "details" : "counts only"}
+                  </Badge>
                   {l.revokedAt ? (
                     <Badge variant="outline">revoked</Badge>
+                  ) : l.expiresAt && new Date(l.expiresAt) <= new Date() ? (
+                    <Badge variant="outline">expired</Badge>
+                  ) : null}
+                  {l.expiresAt && !l.revokedAt ? (
+                    <span className="text-xs text-muted-foreground">
+                      expires {format.date(l.expiresAt, "datetime")}
+                    </span>
                   ) : null}
                   <span className="text-xs text-muted-foreground">
                     {l.lastUsedAt

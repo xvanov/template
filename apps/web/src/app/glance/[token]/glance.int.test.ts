@@ -65,7 +65,11 @@ describe("/glance/[token]", () => {
         summary: "Approve the desk order",
       },
     });
-    const link = await caller(a).glance.createLink({ name: "glasses" });
+    const link = await caller(a).glance.createLink({
+      name: "glasses",
+      showDetails: true,
+    });
+    const countsOnly = await caller(a).glance.createLink({ name: "counts" });
 
     const res = await open(link.secret);
     expect(res.status).toBe(200);
@@ -77,6 +81,10 @@ describe("/glance/[token]", () => {
     const html = await res.text();
     expect(html).toContain("Approve the desk order");
     expect(html).not.toContain("secret plan of B");
+
+    const counts = await (await open(countsOnly.secret)).text();
+    expect(counts).toContain("1 waiting for your approval");
+    expect(counts).not.toContain("Approve the desk order");
   });
 
   it("answers an unknown and a revoked link the same way", async () => {

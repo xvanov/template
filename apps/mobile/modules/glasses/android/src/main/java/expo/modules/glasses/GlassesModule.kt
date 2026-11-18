@@ -113,8 +113,10 @@ class GlassesModule : Module() {
     AsyncFunction("enableMockDevice") Coroutine { usePhoneCamera: Boolean ->
       if (!MockSupport.AVAILABLE) return@Coroutine false
       ensureAndroidPermissions(if (usePhoneCamera) listOf(Manifest.permission.CAMERA) else emptyList())
-      MockSupport.enable(context, usePhoneCamera)
+      // Initialise first: MockDeviceKit initialises Wearables itself when it
+      // is not yet, and a second Wearables.initialize would then fail.
       ensureInitialized()
+      MockSupport.enable(context, usePhoneCamera)
       emitStatus()
       true
     }
@@ -247,7 +249,15 @@ class GlassesModule : Module() {
     if (!cameraPermissionGranted() && requestCameraPermission() != "granted") {
       throw GlassesException("ERR_GLASSES_PERMISSION_DENIED", "Camera access on the glasses was not granted.")
     }
-    if (camera == null) startSessionAndCamera()
+    if (camera == null) {
+      try {
+        startSessionAndCamera()
+      } catch (e: Exception) {
+        // Never leave a half-open session (or the capture LED) behind.
+        teardown()
+        throw e
+      }
+    }
     val name = session?.deviceInfo?.value?.name?.ifEmpty { null } ?: "Meta glasses"
     return mapOf("id" to name, "name" to name)
   }
@@ -315,11 +325,19 @@ class GlassesModule : Module() {
     streamState = "stopped"
   }
 
-  private fun disconnect() {
+  /** Stop the camera and session and forget them; safe to call any time. */
+  private fun teardown() {
     camera?.stop()
     session?.stop()
     session?.let { clearSession(it) }
+    camera = null
+    session = null
     sessionState = "idle"
+    streamState = "stopped"
+  }
+
+  private fun disconnect() {
+    teardown()
     emitStatus()
   }
 
@@ -332,10 +350,11 @@ class GlassesModule : Module() {
     val photo = stream.capturePhoto().fold({ it }, { error, _ -> captureError = error.description; null })
       ?: throw GlassesException("ERR_GLASSES_CAPTURE", captureError ?: "The photo was not taken.")
     return withContext(Dispatchers.IO) {
-      val bitmap = when (photo) {
+      val decoded = when (photo) {
         is PhotoData.Bitmap -> photo.bitmap
         is PhotoData.HEIC -> decodeHeic(photo.data)
       } ?: throw GlassesException("ERR_GLASSES_CAPTURE", "The photo could not be decoded.")
+      val bitmap = downscale(decoded)
       val dir = File(context.cacheDir, "glasses").apply { mkdirs() }
       val file = File(dir, "glasses-${System.currentTimeMillis()}.jpg")
       FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it) }
@@ -346,6 +365,22 @@ class GlassesModule : Module() {
         "height" to bitmap.height,
       )
     }
+  }
+
+  /**
+   * At most MAX_EDGE px on the long edge: what vision models look at anyway
+   * (Anthropic downsizes beyond ~1568 px), and a fraction of the upload.
+   */
+  private fun downscale(bitmap: Bitmap): Bitmap {
+    val long = maxOf(bitmap.width, bitmap.height)
+    if (long <= MAX_EDGE) return bitmap
+    val scale = MAX_EDGE.toFloat() / long
+    return Bitmap.createScaledBitmap(
+      bitmap,
+      (bitmap.width * scale).toInt().coerceAtLeast(1),
+      (bitmap.height * scale).toInt().coerceAtLeast(1),
+      true,
+    )
   }
 
   /** HEIC from the glasses carries its orientation in EXIF; apply it. */
@@ -366,6 +401,7 @@ class GlassesModule : Module() {
   private companion object {
     const val TAG = "Glasses"
     const val CONNECT_TIMEOUT_MS = 30_000L
-    const val JPEG_QUALITY = 85
+    const val JPEG_QUALITY = 80
+    const val MAX_EDGE = 1568
   }
 }

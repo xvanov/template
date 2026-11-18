@@ -76,7 +76,9 @@ export async function GET(
   if (limited) return limited;
 
   const nonce = randomBytes(16).toString("base64");
-  const snapshot = await glanceSnapshot(db, principal.organizationId);
+  const snapshot = await glanceSnapshot(db, principal.organizationId, {
+    details: principal.showDetails,
+  });
   return new Response(renderGlancePage({ snapshot, appName, nonce }), {
     headers: headers(nonce),
   });

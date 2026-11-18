@@ -26,18 +26,27 @@ const plugin = require("./with-glasses") as {
   ) => { type: string; key?: string; value?: string }[];
   excludeFromPodfile: (src: string) => string;
   excludeFromSettingsGradle: (src: string) => string;
+  alignFresco: (src: string, version: string) => string;
+  reactNativeFrescoVersion: (root: string) => string | null;
 };
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const withGlasses = require("./with-glasses") as (
+  config: Record<string, unknown>,
+  props: Record<string, unknown>,
+) => { mods: { ios: { infoPlist: (c: unknown) => Promise<unknown> } } };
 
-const ON = plugin.resolveOptions({ enabled: "true" });
+const ON = plugin.resolveOptions({ enabled: "true", mockDevice: "true" });
 
 describe("resolveOptions", () => {
-  it("is off by default, Developer Mode credentials, mock + opt-out on", () => {
+  it("is off by default: Developer Mode credentials, no mock, opted out of Meta's analytics and crash reports, no iOS", () => {
     expect(plugin.resolveOptions()).toEqual({
       enabled: false,
       metaAppId: "0",
       clientToken: "0",
-      mockDevice: true,
+      mockDevice: false,
       analyticsOptOut: true,
+      crashReportingOptOut: true,
+      iosExperimental: false,
       datVersion: "1.0.1",
     });
   });
@@ -65,6 +74,28 @@ describe("resolveOptions", () => {
 });
 
 describe("enabled: iOS", () => {
+  const run = (props: Record<string, unknown>) => {
+    const c = withGlasses(
+      { name: "x", slug: "x", scheme: "s" },
+      { enabled: "true", ...props },
+    );
+    return c.mods.ios.infoPlist({
+      ...c,
+      modResults: {},
+      modRequest: {
+        platform: "ios",
+        modName: "infoPlist",
+        projectRoot: process.cwd(),
+        introspect: false,
+      },
+    });
+  };
+
+  it("refuses an iOS build unless GLASSES_IOS_EXPERIMENTAL (the Swift is uncompiled)", async () => {
+    await expect(run({})).rejects.toThrow(/GLASSES_IOS_EXPERIMENTAL=1/);
+    await expect(run({ iosExperimental: "1" })).resolves.toBeTruthy();
+  });
+
   it("Info.plist", () => {
     const plist = plugin.applyInfoPlist(
       {
@@ -123,6 +154,22 @@ describe("enabled: Android", () => {
     );
     expect(kept.find((p) => p.key === "android.minSdkVersion")?.value).toBe(
       "31",
+    );
+  });
+});
+
+describe("enabled: one Fresco version (the DAT's fbcore vs React Native's)", () => {
+  const ROOT = 'apply plugin: "expo-root-project"\n';
+
+  it("forces every com.facebook.fresco artifact, once", () => {
+    const out = plugin.alignFresco(ROOT, "3.7.0");
+    expect(out).toMatchSnapshot();
+    expect(plugin.alignFresco(out, "3.7.0")).toBe(out);
+  });
+
+  it("reads React Native's Fresco version from its catalog", () => {
+    expect(plugin.reactNativeFrescoVersion(process.cwd())).toMatch(
+      /^\d+\.\d+\.\d+$/,
     );
   });
 });

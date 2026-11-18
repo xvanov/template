@@ -28,7 +28,9 @@ ships exactly what it did before, downloads nothing from Meta, and
    GLASSES_ENABLED=true
    # Developer Mode needs no credentials ("0"). For release channels / testers:
    # GLASSES_META_APP_ID=…   GLASSES_CLIENT_TOKEN=…   (Wearables Developer Center)
-   # GLASSES_MOCK_DEVICE=false   # drop MockDeviceKit from distributed builds
+   # GLASSES_MOCK_DEVICE=true    # simulated glasses; eas.json sets it for the
+   #                             # development profiles only (default off)
+   # GLASSES_IOS_EXPERIMENTAL=1  # iOS is refused without this (see below)
    ```
 
 2. Build a dev client (Expo Go can never load this module):
@@ -40,7 +42,14 @@ ships exactly what it did before, downloads nothing from Meta, and
    ```
 
    The plugin raises Android `minSdk` to 29 and the iOS deployment target to
-   17.2 (the DAT's minimums) only in this build.
+   17.2 (the DAT's minimums) only in this build, and forces every
+   `com.facebook.fresco` artifact to one version: the DAT's `mwdat-core` pulls
+   Fresco fbcore 3.7.0 while React Native ships 3.6.0, and the mix crashes at
+   launch with `NoSuchMethodError`.
+
+   **iOS is opt-in twice**: with the flag on, an iOS prebuild/build fails with
+   a message unless `GLASSES_IOS_EXPERIMENTAL=1`, because the Swift side has
+   never been compiled. Android needs nothing extra.
 
 3. On the phone: the **Meta AI app** (v292+ for DAT 1.0.1), the glasses paired
    in it, glasses firmware v128+, and **Developer Mode** on (Meta AI app →
@@ -50,10 +59,12 @@ ships exactly what it did before, downloads nothing from Meta, and
 
 ### Without glasses (hackathon path)
 
-- **Simulated glasses** (needs the GLASSES_ENABLED build, no hardware):
-  Meta's MockDeviceKit pairs a fake Ray-Ban Meta that is registered, permitted
-  and worn, with the **phone's back camera as the glasses' camera**. The real
-  DAT session/stream/capture code runs. `enableMockDevice()` in JS.
+- **Simulated glasses** (a GLASSES_ENABLED build with GLASSES_MOCK_DEVICE=true,
+  no hardware): Meta's MockDeviceKit pairs a fake Ray-Ban Meta that is
+  registered, permitted and worn, with the **phone's back camera as the
+  glasses' camera**. The real DAT session/stream/capture code runs.
+  `enableMockDevice()` in JS; the screen offers it only when
+  `getStatus().mockDeviceAvailable`. Kept out of preview/production builds.
 - **Phone camera** (any build, Expo Go included): `expo-image-picker` stands in
   for the glasses; upload → describe → speak is identical.
 
@@ -119,10 +130,20 @@ Simulator" Chrome extension (600×600, additive blending, D-pad).
   deletable) and, only if "Describe with AI" is on, to the configured LLM
   provider as a capped, `discretionary` call recorded in `llm_call`. Tell your
   users which provider sees their photos.
+- Photos are shrunk on the phone to ≤ 1568 px (JPEG 0.8) before upload, and
+  the local copies are deleted once uploaded. The server refuses to describe
+  anything over 3.75 MB (Anthropic's 5 MB base64 limit).
 - The SDK sends Meta usage analytics and crash reports unless opted out; this
-  template opts out of analytics by default (`GLASSES_ANALYTICS_OPT_OUT`).
+  template opts out of both by default (`GLASSES_ANALYTICS_OPT_OUT`,
+  `GLASSES_CRASH_REPORTING_OPT_OUT`).
 - A glance link is a password in a URL: `no-store`, `no-referrer`, `noindex`
-  are set, it is stored hashed, and it can be revoked at /app/glasses.
+  are set, it is stored hashed, and it can be revoked at /app/glasses. The
+  URL (secret included) can still land in **access logs** of anything in
+  between: a reverse proxy, a tunnel (Cloudflare, ngrok, Tailscale Funnel),
+  `next dev`'s request log. So links expire (30 days by default, chosen per
+  link) and show **counts only** by default ("3 waiting for approval"); titles
+  and senders are opt-in per link, because they also appear on a see-through
+  display in public.
 
 ## What is verified, and what is not (DAT 1.0.1, November 2026)
 
@@ -134,11 +155,20 @@ Verified here:
 - Android: the module compiles against the real DAT 1.0.1 artifacts and a
   full `assembleDebug` of the app succeeds with it linked (with and without
   MockDeviceKit). The default build does not link it.
+- **Android emulator, end to end** (API 35, release build, flag + mock on):
+  the app launches; "Simulated glasses" → Capture asks for camera and
+  nearby-devices permission, MockDeviceKit registers and streams (status
+  `registered · glasses: 1 · camera: streaming · simulated`), the photo
+  (480×640 from the emulator's virtual camera) uploads, `ai.describeImage`
+  sends it to an OpenAI-compatible vision endpoint (a local stub) as an image
+  part, the description shows and is spoken (Google TTS), a second capture
+  works, the cache holds no JPEGs afterwards, and Disconnect stops the stream.
 - The JS fallbacks, the pipeline and the server side (tests).
 
 Not verified (no device, no macOS):
 
-- **Anything on real glasses**, and the MockDeviceKit flow at runtime.
+- **Anything on real glasses** (registration through the Meta AI app, real
+  camera permission, Bluetooth/Wi-Fi transport, speakers on the glasses).
 - **iOS does not compile here**: `ios/` is written against the documented
   Swift API (docs + Meta's CameraAccess sample) but needs Xcode 26.4+ on
   macOS. Expect small fixes on the first build; keep it in step with Android.

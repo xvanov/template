@@ -628,7 +628,8 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   HTML string (`src/lib/glance-html.ts`, ~5 KB, a nonce'd inline script, no
   Next bundle) served by a route handler. Members create/revoke their own
   glance links at `/app/glasses` (`glance.*` procedures; a link reads only
-  `glanceSnapshot` for its org, is stored hashed, dies with membership).
+  `glanceSnapshot` for its org, is stored hashed, dies with membership,
+  expires (30 days by default) and shows counts only unless `showDetails`).
 
 ## Mobile (apps/mobile)
 
@@ -701,8 +702,12 @@ and `EXPO_PUBLIC_API_URL` as EAS environment variables per environment.
   takes `images`, cli/ refuses them) → `expo-speech` (plays through the
   glasses over Bluetooth). Sources: real glasses, Meta's MockDeviceKit
   (phone camera as the glasses' camera), or the phone camera (Expo Go).
-  Android is compiled against the real SDK; **iOS is unverified** (no Xcode
-  here). Display glasses get the web page `/glance/<gl_…>` (see UI above).
+  Android is compiled against the real SDK and the simulated-glasses flow was
+  run end to end on an emulator; **iOS is unverified** (no Xcode here), so an
+  iOS build with the flag is refused unless `GLASSES_IOS_EXPERIMENTAL=1`. The
+  flag-on Android build forces one Fresco version (the DAT pulls fbcore 3.7,
+  React Native 3.6: launch crash otherwise). MockDeviceKit only in eas.json's
+  development profiles. Display glasses get the web page `/glance/<gl_…>` (see UI above).
 
 ## Things that will bite you (all learned here, the hard way)
 

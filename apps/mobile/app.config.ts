@@ -15,8 +15,10 @@
  *   GLASSES_ENABLED        Link the Meta Wearables SDK into the build.  false
  *   GLASSES_META_APP_ID    Wearables Developer Center app id.           "0" (Developer Mode)
  *   GLASSES_CLIENT_TOKEN   Its client token.                            "0" (Developer Mode)
- *   GLASSES_MOCK_DEVICE    Compile MockDeviceKit (simulated glasses).   true
+ *   GLASSES_MOCK_DEVICE    Compile MockDeviceKit (simulated glasses).   false (eas.json: on for development)
  *   GLASSES_ANALYTICS_OPT_OUT  Opt out of Meta's SDK analytics.         true
+ *   GLASSES_CRASH_REPORTING_OPT_OUT  Opt out of its crash reports.      true
+ *   GLASSES_IOS_EXPERIMENTAL  Allow an iOS build (Swift unverified).    false
  *   GLASSES_DAT_VERSION    Device Access Toolkit version.               1.0.1
  *
  * APP_SCHEME is load-bearing: the OAuth browser hop deep-links back on it, and
@@ -146,6 +148,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         clientToken: process.env.GLASSES_CLIENT_TOKEN,
         mockDevice: process.env.GLASSES_MOCK_DEVICE,
         analyticsOptOut: process.env.GLASSES_ANALYTICS_OPT_OUT,
+        crashReportingOptOut: process.env.GLASSES_CRASH_REPORTING_OPT_OUT,
+        iosExperimental: process.env.GLASSES_IOS_EXPERIMENTAL,
         datVersion: process.env.GLASSES_DAT_VERSION,
       },
     ],

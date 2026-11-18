@@ -41,6 +41,8 @@ export const glanceRouter = createTRPCRouter({
         id: true,
         name: true,
         prefix: true,
+        showDetails: true,
+        expiresAt: true,
         lastUsedAt: true,
         revokedAt: true,
         createdAt: true,
@@ -49,7 +51,15 @@ export const glanceRouter = createTRPCRouter({
   ),
 
   createLink: memberOnly
-    .input(z.object({ name: z.string().trim().min(1).max(60) }))
+    .input(
+      z.object({
+        name: z.string().trim().min(1).max(60),
+        /** null = never expires. */
+        expiresInDays: z.number().int().min(1).max(365).nullable().default(30),
+        /** Titles and senders, not just counts. Off by default. */
+        showDetails: z.boolean().default(false),
+      }),
+    )
     .mutation(({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
         const active = await tx.glanceLink.count({
@@ -57,6 +67,7 @@ export const glanceRouter = createTRPCRouter({
             organizationId: ctx.organizationId,
             userId: ctx.user.id,
             revokedAt: null,
+            OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
           },
         });
         if (active >= MAX_ACTIVE_LINKS) {
@@ -73,12 +84,31 @@ export const glanceRouter = createTRPCRouter({
             name: input.name,
             prefix,
             hash,
+            showDetails: input.showDetails,
+            expiresAt:
+              input.expiresInDays === null
+                ? null
+                : new Date(Date.now() + input.expiresInDays * 86_400_000),
           },
-          select: { id: true, name: true, prefix: true, createdAt: true },
+          select: {
+            id: true,
+            name: true,
+            prefix: true,
+            showDetails: true,
+            expiresAt: true,
+            createdAt: true,
+          },
         });
         await ctx.audit(
           "glance_link.create",
-          { targetId: link.id, metadata: { name: link.name } },
+          {
+            targetId: link.id,
+            metadata: {
+              name: link.name,
+              showDetails: link.showDetails,
+              expiresAt: link.expiresAt?.toISOString() ?? null,
+            },
+          },
           tx,
         );
         // The only time the secret leaves the server.

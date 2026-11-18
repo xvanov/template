@@ -47,6 +47,11 @@ function rows(list: GlanceRow[], now: Date, empty: string): string {
     .join("")}</ul>`;
 }
 
+/** Counts-only links: a number, never who or what. */
+function summary(n: number, what: string, empty: string): string {
+  return `<p class="empty" tabindex="0">${n === 0 ? empty : `${n} ${what}. Details on your phone.`}</p>`;
+}
+
 const STYLE = `
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:#000;color:#f5f5f5;
@@ -110,11 +115,23 @@ export function renderGlancePage(opts: {
 </head><body><main>
 <section aria-label="Waiting for approval">
 <h1><span>Approvals</span>${count(s.approvals.count)}</h1>
-${rows(s.approvals.rows, now, "Nothing waiting for you.")}
+${
+  s.details
+    ? rows(s.approvals.rows, now, "Nothing waiting for you.")
+    : summary(
+        s.approvals.count,
+        "waiting for your approval",
+        "Nothing waiting for you.",
+      )
+}
 </section>
 <section aria-label="Inbox">
 <h1><span>Inbox</span>${count(s.inbox.unhandled)}</h1>
-${rows(s.inbox.rows, now, "Inbox is clear.")}
+${
+  s.details
+    ? rows(s.inbox.rows, now, "Inbox is clear.")
+    : summary(s.inbox.unhandled, "unhandled messages", "Inbox is clear.")
+}
 </section>
 <footer>${escapeHtml(appName)} · updated ${now.toISOString().slice(11, 16)} UTC</footer>
 </main>

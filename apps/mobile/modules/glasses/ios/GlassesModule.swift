@@ -22,6 +22,22 @@ private func fail(_ code: String, _ message: String) -> Exception {
   Exception(name: "GlassesException", description: message, code: code)
 }
 
+extension AnyListenerToken {
+  /// Retain the token (a released token stops listening).
+  func keep(in list: inout [AnyListenerToken]) { list.append(self) }
+}
+
+/// Cancel tokens off the caller's actor (`cancel()` is asynchronous).
+private func cancelTokens(_ tokens: [AnyListenerToken]) {
+  guard !tokens.isEmpty else { return }
+  Task { for token in tokens { await token.cancel() } }
+}
+
+/// How long a capture may take before it is abandoned.
+private let captureTimeoutSeconds: UInt64 = 20
+/// Long edge of saved photos: what vision models look at anyway.
+private let maxEdge: CGFloat = 1568
+
 /// `Wearables.configure()` once per process: the URL callback
 /// (GlassesAppDelegateSubscriber) can arrive before the module is first used.
 enum GlassesSDK {
@@ -41,11 +57,15 @@ public final class GlassesModule: Module {
 
   private var session: DeviceSession?
   private var camera: MWDATCamera.Camera?
-  private let sessionTokens = ListenerTokenBag()
-  private let streamTokens = ListenerTokenBag()
+  // Plain arrays, not ListenerTokenBag: the bag is an actor in DAT 1.0, and
+  // a token cancels when released anyway. cancelTokens() does it explicitly.
+  private var sessionTokens: [AnyListenerToken] = []
+  private var streamTokens: [AnyListenerToken] = []
   private var sessionState = "idle"
   private var streamState = "stopped"
   private var pendingPhoto: CheckedContinuation<PhotoData, Error>?
+  /// Which capture a timeout belongs to (a later capture is not its business).
+  private var captureSeq = 0
 
   public func definition() -> ModuleDefinition {
     Name("Glasses")
@@ -200,7 +220,15 @@ public final class GlassesModule: Module {
         throw fail("ERR_GLASSES_PERMISSION_DENIED", "Camera access on the glasses was not granted.")
       }
     }
-    if camera == nil { try await startSessionAndCamera() }
+    if camera == nil {
+      do {
+        try await startSessionAndCamera()
+      } catch {
+        // Never leave a half-open session (or the capture LED) behind.
+        await MainActor.run { self.teardown() }
+        throw error
+      }
+    }
     let name = session?.device?.nameOrId() ?? "Meta glasses"
     return ["id": name, "name": name]
   }
@@ -221,10 +249,10 @@ public final class GlassesModule: Module {
         if state == .stopped { self.clearSession(created) }
         self.emitStatus()
       }
-    }.store(in: sessionTokens)
+    }.keep(in: &sessionTokens)
     created.errorPublisher.listen { [weak self] error in
       Task { @MainActor in self?.emitError(error.localizedDescription) }
-    }.store(in: sessionTokens)
+    }.keep(in: &sessionTokens)
 
     do {
       try created.start()
@@ -248,16 +276,16 @@ public final class GlassesModule: Module {
         self?.streamState = "\(state)"
         self?.emitStatus()
       }
-    }.store(in: streamTokens)
+    }.keep(in: &streamTokens)
     stream.errorPublisher.listen { [weak self] error in
       Task { @MainActor in self?.emitError(error.localizedDescription) }
-    }.store(in: streamTokens)
+    }.keep(in: &streamTokens)
     stream.photoDataPublisher.listen { [weak self] photo in
       Task { @MainActor in
         self?.pendingPhoto?.resume(returning: photo)
         self?.pendingPhoto = nil
       }
-    }.store(in: streamTokens)
+    }.keep(in: &streamTokens)
     stream.start()
   }
 
@@ -285,22 +313,35 @@ public final class GlassesModule: Module {
   @MainActor
   private func clearSession(_ stopped: DeviceSession) {
     guard session === stopped else { return }
-    sessionTokens.clear()
-    streamTokens.clear()
+    forget()
+  }
+
+  /// Drop the session and camera, release listeners, fail a pending capture.
+  private func forget() {
+    cancelTokens(sessionTokens + streamTokens)
+    sessionTokens = []
+    streamTokens = []
     camera = nil
     session = nil
     streamState = "stopped"
+    failPendingPhoto("The glasses disconnected before the photo arrived.")
+  }
+
+  private func failPendingPhoto(_ message: String) {
+    pendingPhoto?.resume(throwing: fail("ERR_GLASSES_CAPTURE", message))
+    pendingPhoto = nil
+  }
+
+  /// Stop the camera and session and forget them; safe to call any time.
+  private func teardown() {
+    camera?.stop()
+    session?.stop()
+    forget()
+    sessionState = "idle"
   }
 
   private func disconnect() {
-    camera?.stop()
-    session?.stop()
-    sessionTokens.clear()
-    streamTokens.clear()
-    camera = nil
-    session = nil
-    sessionState = "idle"
-    streamState = "stopped"
+    teardown()
     emitStatus()
   }
 
@@ -317,14 +358,27 @@ public final class GlassesModule: Module {
           return
         }
         self.pendingPhoto = cont
+        self.captureSeq += 1
+        let seq = self.captureSeq
         // false = the capture did not start, so no photo will arrive.
         if !stream.capturePhoto(format: .jpeg) {
           self.pendingPhoto = nil
           cont.resume(throwing: fail("ERR_GLASSES_CAPTURE", "The photo was not taken."))
+          return
+        }
+        // A photo that never arrives must not hang the caller forever.
+        Task { @MainActor [weak self] in
+          try? await Task.sleep(nanoseconds: captureTimeoutSeconds * 1_000_000_000)
+          guard let self, self.captureSeq == seq else { return }
+          self.failPendingPhoto("The glasses did not send the photo in time.")
         }
       }
     }
-    guard let image = UIImage(data: photo.data), let jpeg = image.jpegData(compressionQuality: 0.85) else {
+    guard let original = UIImage(data: photo.data) else {
+      throw fail("ERR_GLASSES_CAPTURE", "The photo could not be decoded.")
+    }
+    let image = downscale(original)
+    guard let jpeg = image.jpegData(compressionQuality: 0.8) else {
       throw fail("ERR_GLASSES_CAPTURE", "The photo could not be decoded.")
     }
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("glasses", isDirectory: true)
@@ -337,5 +391,18 @@ public final class GlassesModule: Module {
       "width": Int(image.size.width * image.scale),
       "height": Int(image.size.height * image.scale),
     ]
+  }
+
+  private func downscale(_ image: UIImage) -> UIImage {
+    let size = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+    let long = max(size.width, size.height)
+    guard long > maxEdge else { return image }
+    let factor = maxEdge / long
+    let target = CGSize(width: (size.width * factor).rounded(), height: (size.height * factor).rounded())
+    let format = UIGraphicsImageRendererFormat.default()
+    format.scale = 1
+    return UIGraphicsImageRenderer(size: target, format: format).image { _ in
+      image.draw(in: CGRect(origin: .zero, size: target))
+    }
   }
 }

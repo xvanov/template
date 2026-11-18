@@ -6,6 +6,8 @@ CREATE TABLE "glance_link" (
     "name" TEXT NOT NULL,
     "prefix" TEXT NOT NULL,
     "hash" TEXT NOT NULL,
+    "showDetails" BOOLEAN NOT NULL DEFAULT false,
+    "expiresAt" TIMESTAMP(3),
     "lastUsedAt" TIMESTAMP(3),
     "revokedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

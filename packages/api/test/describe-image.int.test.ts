@@ -11,6 +11,7 @@ import { callerFor } from "./caller";
 
 const BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
 const asked: Record<string, unknown>[] = [];
+let truncate = false;
 
 vi.mock("@repo/storage", () => ({
   storage: () => ({ get: async () => BYTES }),
@@ -21,6 +22,7 @@ vi.mock("@repo/ai", async (importOriginal) => {
     ...real,
     ask: async (opts: Record<string, unknown>) => {
       asked.push(opts);
+      if (truncate) throw new real.LlmTruncatedError("A mug on a", 0.002);
       return {
         text: "A mug on a desk.",
         servedBy: "anthropic/test",
@@ -71,7 +73,8 @@ describe("ai.describeImage", () => {
     const a = await createTenant("describe-types");
     const pdf = await photo(a, "application/pdf");
     const heic = await photo(a, "image/heic");
-    const huge = await photo(a, "image/png", 6 * 1024 * 1024);
+    // 4 MB: under 5 MB, but its base64 is over Anthropic's 5 MB limit.
+    const huge = await photo(a, "image/png", 4 * 1024 * 1024);
     asked.length = 0;
     for (const asset of [pdf, heic, huge]) {
       await expect(
@@ -79,5 +82,18 @@ describe("ai.describeImage", () => {
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     }
     expect(asked).toHaveLength(0);
+  });
+
+  it("returns a cut-off description labelled as truncated", async () => {
+    const a = await createTenant("describe-truncated");
+    const jpeg = await photo(a, "image/jpeg");
+    truncate = true;
+    try {
+      expect(
+        await callerFor(a).ai.describeImage({ mediaId: jpeg.id }),
+      ).toMatchObject({ text: "A mug on a", truncated: true });
+    } finally {
+      truncate = false;
+    }
   });
 });

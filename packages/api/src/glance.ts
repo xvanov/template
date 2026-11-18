@@ -11,8 +11,14 @@
  *
  * A link can do exactly one thing: read `glanceSnapshot` for its
  * organization, as its creator. It is not an API key and is never accepted
- * anywhere else. It stops working when revoked, or when its creator is no
- * longer a member of the organization (checked on every request).
+ * anywhere else. It stops working when revoked, when it expires (default 30
+ * days), or when its creator is no longer a member of the organization
+ * (checked on every request).
+ *
+ * By default a link shows COUNTS only ("3 waiting for approval"), never who
+ * or what: the display is see-through and the URL is a bearer secret that can
+ * end up in proxy logs. Titles and senders are opt-in per link
+ * (`showDetails`), the same principle as the push notifications.
  */
 import { createHash, randomBytes } from "node:crypto";
 import type { PrismaClient } from "@repo/db";
@@ -44,11 +50,12 @@ export interface GlancePrincipal {
   linkId: string;
   organizationId: string;
   userId: string;
+  showDetails: boolean;
 }
 
 /**
- * The link's principal, or null for an unknown, malformed or revoked link, or
- * one whose creator has left the organization. One answer for all of them.
+ * The link's principal, or null for an unknown, malformed, revoked or expired
+ * link, or one whose creator has left the organization. One answer for all.
  */
 export async function authenticateGlanceLink(
   db: PrismaClient,
@@ -62,10 +69,13 @@ export async function authenticateGlanceLink(
       organizationId: true,
       userId: true,
       revokedAt: true,
+      expiresAt: true,
+      showDetails: true,
       lastUsedAt: true,
     },
   });
   if (!link || link.revokedAt) return null;
+  if (link.expiresAt && link.expiresAt.getTime() <= Date.now()) return null;
   const member = await db.member.findUnique({
     where: {
       organizationId_userId: {
@@ -90,6 +100,7 @@ export async function authenticateGlanceLink(
     linkId: link.id,
     organizationId: link.organizationId,
     userId: link.userId,
+    showDetails: link.showDetails,
   };
 }
 
@@ -110,6 +121,8 @@ export interface GlanceRow {
 export interface GlanceSnapshot {
   /** ISO time the snapshot was taken (server clock). */
   at: string;
+  /** False: counts only, and every `rows` is empty. */
+  details: boolean;
   approvals: { count: number; rows: GlanceRow[] };
   inbox: { unhandled: number; rows: GlanceRow[] };
 }
@@ -130,20 +143,23 @@ function clip(s: string | null | undefined, max = MAX_TEXT): string | null {
 export async function glanceSnapshot(
   db: PrismaClient,
   organizationId: string,
+  opts: { details: boolean } = { details: true },
 ): Promise<GlanceSnapshot> {
+  // Counts-only never even reads the rows.
+  const take = opts.details ? MAX_ROWS : 0;
   const [approvalCount, approvals, unhandled, inbound] = await Promise.all([
     db.agentProposal.count({ where: { organizationId, status: "pending" } }),
     db.agentProposal.findMany({
       where: { organizationId, status: "pending" },
       orderBy: { createdAt: "desc" },
-      take: MAX_ROWS,
+      take,
       select: { id: true, summary: true, createdAt: true },
     }),
     db.inboundMessage.count({ where: { organizationId, handledAt: null } }),
     db.inboundMessage.findMany({
       where: { organizationId, handledAt: null },
       orderBy: { createdAt: "desc" },
-      take: MAX_ROWS,
+      take,
       select: {
         id: true,
         channel: true,
@@ -156,6 +172,7 @@ export async function glanceSnapshot(
   ]);
   return {
     at: new Date().toISOString(),
+    details: opts.details,
     approvals: {
       count: approvalCount,
       rows: approvals.map((p) => ({

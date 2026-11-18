@@ -3,7 +3,8 @@
  * test (pipeline.test.ts), not a device test:
  *
  *   capture (glasses, simulated glasses, or the phone camera)
- *     → upload into the media library (the same path as the Photos screen)
+ *     → shrink (≤ 1568 px, JPEG 0.8: ./photo-files.ts)
+ *     → upload into the media library, then delete the local copies (the same path as the Photos screen)
  *     → optionally describe it with AI (ai.describeImage: discretionary,
  *       capped, priced into llm_call)
  *     → optionally speak the description (expo-speech; it plays through the
@@ -19,10 +20,14 @@ export type PipelineStep = "capture" | "upload" | "describe" | "speak";
 
 export interface PipelineDeps {
   capture(): Promise<GlassesPhoto>;
+  /** Make the photo upload-sized. Omit to upload as captured. */
+  shrink?(photo: GlassesPhoto): Promise<GlassesPhoto>;
   upload(
     file: LocalFile,
     onProgress: (fraction: number) => void,
-  ): Promise<{ id: string }>;
+  ): Promise<{ id: string; url: string }>;
+  /** Delete local files once uploaded (best effort, never throws). */
+  discard?(uris: string[]): void;
   /** Omit to skip the AI step. */
   describe?(mediaId: string): Promise<{ text: string }>;
   /** Omit to skip speaking. */
@@ -33,6 +38,8 @@ export interface PipelineDeps {
 export interface PipelineResult {
   photo: GlassesPhoto;
   mediaId: string;
+  /** The uploaded photo (its local file is gone once uploaded). */
+  mediaUrl: string;
   description: string | null;
 }
 
@@ -79,7 +86,11 @@ export async function captureAndDescribe(
     }
   };
 
-  const photo = await step("capture", {}, deps.capture);
+  const captured = await step("capture", {}, deps.capture);
+  const shrink = deps.shrink;
+  const photo = shrink
+    ? await step("upload", { photo: captured }, () => shrink(captured))
+    : captured;
   const asset = await step("upload", { photo }, () =>
     deps.upload(
       {
@@ -90,9 +101,11 @@ export async function captureAndDescribe(
       (p) => deps.onStep?.("upload", p),
     ),
   );
+  deps.discard?.([captured.uri, photo.uri]);
   const done: PipelineResult = {
     photo,
     mediaId: asset.id,
+    mediaUrl: asset.url,
     description: null,
   };
   const describe = deps.describe;
