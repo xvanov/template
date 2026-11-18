@@ -8,17 +8,21 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "demo:seed": "tsx src/demo/seed.ts",
+    "ml:predict": "tsx src/ml-predict.ts"
   },
   "dependencies": {
     "@repo/ai": "*",
     "@repo/db": "*",
     "@repo/env": "*",
     "@repo/jobs": "*",
+    "@repo/rag": "*",
     "tsx": "^4.20.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "better-auth": "^1.6.25",
     "eslint": "^9.39.5",
     "typescript": "~6.0.3",
     "vitest": "^4.1.10"

@@ -33,6 +33,8 @@ packages/outbound  the outbound guard: every outbound message passes it and is l
 packages/notify  operator alerts (ntfy push, else email, else console), deduped + digested
 packages/security  rate limiting, cron/webhook auth, AES-GCM sealing of stored secrets
 packages/env   the validated environment — import `env()`, never `process.env`
+ml/            Python sidecar (uv, NOT an npm workspace): training, experiments, the
+               worker bridge, vLLM serving scripts. ml/README.md. Its own CI: ml.yml
 ```
 
 ## First run
@@ -48,6 +50,13 @@ once `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are set; email/password always wo
 
 Ports are non-default so this coexists with other projects:
 **web 3200 · postgres 5442 · redis 6389 · expo 8091**.
+
+`make doctor` checks the machine (read-only, ~1 s); `make demo` brings up
+infra, migrates, seeds a demo workspace (login printed) and runs web + worker
+on 127.0.0.1 (`DEMO_HOST` to expose). The seed resets only a workspace and
+account it created (marked in the org's `metadata`) and refuses a database
+that is not on this machine (`DEMO_ALLOW_REMOTE_DB=1`).
+docs/hackathon.md is the clone-to-demo path and the judging-day checklist.
 
 ## The gates — run these before claiming anything works
 
@@ -101,6 +110,33 @@ test in `apps/web/e2e` is in the gate automatically. **Nothing is "done" until i
 this same script (`.github/workflows/ci.yml`) — change the script, never
 re-inline its steps in the workflow.
 
+## ML sidecar (ml/)
+
+A uv project (Python 3.12, numpy only at runtime) next to the npm workspaces,
+never inside them: `make test`/`make smoke` and the Docker images need no
+Python. **Always `uv run <script>`** (`uv run train`, `uv run pytest`), never a
+bare `python`/`pip`: `uv run` syncs from `uv.lock`, so everyone runs the same
+versions; add dependencies with `uv add` and commit `uv.lock`. Gates for it:
+`cd ml && uv run ruff check && uv run ruff format --check && uv run pytest`
+(~2 s, offline), and `.github/workflows/ml.yml` runs them on ml/ changes.
+
+- **Experiments**: read `ml/experiments/REGISTRY.md` before trying an idea;
+  `uv run exp new "<title>" --hypothesis "..."` scaffolds `EXP-<n>-<slug>/`
+  and registers it; `uv run train --exp EXP-<n>`; record the verdict with
+  `uv run exp set`. Negative results stay, with the reason.
+- **The split is fixed**: `ml/splits/*.json` (committed) is checked on every
+  load; a changed dataset refuses rather than re-splitting. `--resplit` only on
+  purpose.
+- **Bridge**: the worker spawns `uv run --project ml --frozen --no-dev predict`
+  per job in its own process group (JSON stdin/stdout; a timeout kills the
+  whole group; child env = PATH/HOME + uv's settings, `CHILD_ENV_ALLOWLIST`),
+  off unless `ML_ENABLED`. Example job `ml.predict`; contract in
+  `ml/contract/predict.example.json`, tested from both languages. Big models
+  are not run this way: serve them with `ml/serve/vllm.sh` and call them as
+  `local/<model>` through packages/ai.
+- Data, runs and model weights never go in git (`ml/data`, `ml/runs` ignored,
+  and kept out of Docker build contexts by `.dockerignore`).
+
 ## Production
 
 One Docker host, documented in `docs/deploy.md`: `docker-compose.prod.yml`
@@ -108,7 +144,8 @@ plus `scripts/deploy.sh` (`deploy`/`rollback`/`status`), `scripts/backup.sh`,
 `scripts/restore.sh`, and the systemd templates in `ops/systemd/`.
 `make test-ops` runs the migration-guard unit test, the deploy self-exec
 test, a real reproduction of collation corruption and its repair, and a
-backup/restore round trip (about 30s). `make lint` shellchecks every script.
+backup/restore round trip (about 30s). `make lint` shellchecks every script
+(`scripts/`, `scripts/lib/`, `ml/serve/`: `SHELL_SCRIPTS` in the Makefile).
 
 ## Architecture rules (a reviewer should reject violations)
 

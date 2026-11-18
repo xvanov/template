@@ -18,3 +18,11 @@ export {
   type JobLike,
 } from "./worker";
 export { SCHEDULES, registerSchedules } from "./schedules";
+export {
+  MlProcessError,
+  predictItems,
+  predictResponse,
+  runJsonProcess,
+  type PredictItem,
+  type PredictResponse,
+} from "./ml";

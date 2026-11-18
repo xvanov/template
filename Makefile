@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-.PHONY: help setup dev web mobile mobile-dev-client worker desktop desktop-build up inbox stack down test typecheck lint lint-sh smoke e2e test-ops deploy db-migrate db-seed db-reset studio clean
+.PHONY: help setup doctor demo freeze dev web mobile mobile-dev-client worker desktop desktop-build up inbox stack down test typecheck lint lint-sh smoke e2e test-ops deploy db-migrate db-seed db-reset studio clean
 
 help: ## show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -10,6 +10,15 @@ help: ## show this help
 
 setup: ## one-command bootstrap: .env, deps, docker infra, migrate, seed
 	@bash scripts/setup.sh
+
+doctor: ## check this machine is ready (tools, .env, ports, services, uv, GPU); read-only
+	@bash scripts/doctor.sh
+
+demo: ## infra + migrate + seed a demo workspace + web and worker; prints URL and login
+	@bash scripts/demo.sh
+
+freeze: ## pre-submission snapshot: gates, SUBMISSION.md, tag (refuses a dirty tree)
+	@bash scripts/freeze.sh
 
 dev: ## run web + worker (infra must be up: make up)
 	@npm run dev
@@ -58,7 +67,7 @@ lint: ## eslint across all workspaces + shellcheck the scripts
 	@npm run lint
 	@$(MAKE) --no-print-directory lint-sh
 
-SHELL_SCRIPTS := scripts/*.sh scripts/lib/*.sh
+SHELL_SCRIPTS := scripts/*.sh scripts/lib/*.sh ml/serve/*.sh
 SHELLCHECK_IMAGE := koalaman/shellcheck:v0.10.0
 # A local shellcheck if there is one, else the pinned image. CI sets
 # SHELLCHECK_DOCKER=1 so it runs the same version as everyone else. With

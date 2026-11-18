@@ -69,6 +69,24 @@ const serverSchema = z.object({
   /** Jobs the worker runs in parallel. Bounded so a typo cannot fork-bomb Redis. */
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(5),
 
+  // ── ML sidecar (ml/, packages/jobs/src/ml.ts) ───────────────────────────
+  /**
+   * Lets the worker run the Python model in ml/ (the `ml.predict` job), as a
+   * child process: `uv run --project <ML_PROJECT_DIR> predict`. Off by
+   * default: nothing in the app needs Python unless this is on, and the
+   * Docker images carry none (ml/README.md says how to add it).
+   */
+  ML_ENABLED: bool(false),
+  /** The ml/ project directory. Unset = <repo>/ml, found from this source tree. */
+  ML_PROJECT_DIR: z.preprocess(blankIsUnset, z.string().optional()),
+  /** The uv binary. */
+  ML_UV_BIN: z.preprocess(blankIsUnset, z.string().default("uv")),
+  /** A prediction that takes longer is killed and the job fails (and retries). */
+  ML_TIMEOUT_SECONDS: z.preprocess(
+    blankIsUnset,
+    z.coerce.number().int().min(1).max(3600).default(120),
+  ),
+
   BETTER_AUTH_SECRET: z
     .string()
     .min(

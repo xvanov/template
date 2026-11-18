@@ -1,0 +1,16 @@
+{
+  "request": {
+    "items": [
+      { "id": "a", "title": "Roof leak over the kitchen, fix today", "notes": null },
+      { "id": "b", "title": "Someday: explore a newsletter idea", "notes": "maybe" }
+    ]
+  },
+  "response": {
+    "ok": true,
+    "model": { "run_id": "run-20261118-120000-ab12", "kind": "toy-logreg" },
+    "predictions": [
+      { "id": "a", "score": 0.9731, "urgent": true },
+      { "id": "b", "score": 0.0412, "urgent": false }
+    ]
+  }
+}

@@ -19,6 +19,7 @@ packages/domain  domain functions shared by the API and the agent's tools
 packages/jobs    job registry, queue, schedules
 packages/storage local disk or any S3-compatible bucket
 packages/env     the validated environment
+ml               Python sidecar (uv): training, experiments, vLLM serving
 ```
 
 ## Quickstart
@@ -47,6 +48,10 @@ the Expo dev server), so the phone talks to the same backend as the browser.
 Expo Go covers sign-in, items, photo upload and dictation. Push notifications
 (and native modules) need a development build from EAS: `cd apps/mobile && npx
 eas init && npx eas build --profile development`. See "Mobile" in CLAUDE.md.
+
+Want a demo with data in it instead? `make demo` seeds a workspace and prints
+a login that works at once. `make doctor` says what is missing on a new
+machine. Hackathon? Start at [docs/hackathon.md](docs/hackathon.md).
 
 ## Everything else
 

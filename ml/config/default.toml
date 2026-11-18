@@ -1,0 +1,32 @@
+# Base configuration. Precedence (later wins):
+#   these defaults < this file (or --config FILE) < ML__SECTION__KEY env vars < --set section.key=value
+# Relative paths resolve against ml/ (or $ML_ROOT), never the shell's cwd.
+seed = 42
+
+[data]
+# "toy" is the built-in synthetic dataset (item titles -> urgent or not).
+dataset = "toy"
+n_samples = 600
+val_fraction = 0.2
+# The fixed train/val split. COMMIT it: that is what makes it fixed for everyone.
+split_file = "splits/toy.json"
+
+[train]
+epochs = 300
+learning_rate = 3.0
+l2 = 0.001
+# Hash buckets for words + bigrams (fewer = more collisions between words).
+features = 4096
+# Write the status file every N epochs (plus a time-based heartbeat).
+status_every = 25
+
+[device]
+# auto | cuda | mps | cpu
+prefer = "auto"
+# true = refuse to start without a GPU (a clear message, not a traceback).
+require_gpu = false
+min_gpu_memory_gb = 0.0
+
+[paths]
+runs = "runs"
+data = "data"
