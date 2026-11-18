@@ -8,22 +8,22 @@ const nextConfig: NextConfig = {
   // Workspace packages ship TypeScript source, not build output — one less
   // build step, and edits are picked up instantly by the dev server.
   transpilePackages: [
-    "@repo/agent",
-    "@repo/ai",
+    "@repo/agent", // @module:agent
+    "@repo/ai", // @module:ai
     "@repo/api",
     "@repo/auth",
     "@repo/db",
     "@repo/domain",
     "@repo/email",
     "@repo/env",
-    "@repo/inbound",
+    "@repo/inbound", // @module:inbound
     "@repo/jobs",
     "@repo/notify",
     "@repo/outbound",
-    "@repo/push-mobile",
-    "@repo/rag",
+    "@repo/push-mobile", // @module:push-mobile
+    "@repo/rag", // @module:rag
     "@repo/security",
-    "@repo/sms",
+    "@repo/sms", // @module:sms
     "@repo/storage",
   ],
 

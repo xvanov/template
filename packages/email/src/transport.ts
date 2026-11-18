@@ -149,7 +149,7 @@ export type ResendClient = Pick<Resend, "emails">;
 
 /** A fake for tests: the SDK surface, plus how to "download" a signed URL. */
 export type FakeResend = ResendClient & {
-  download?: (url: string) => Promise<Uint8Array>;
+  download?: (url: string) => Promise<Uint8Array>; // @module:inbound
 };
 
 let resendClient: ResendClient | undefined;
@@ -205,6 +205,7 @@ async function sendViaResend(
   return { providerMessageId: data.id };
 }
 
+// @module:inbound
 // ── Resend inbound (read side) ────────────────────────────────────────────
 
 export interface ReceivedEmail {
@@ -295,3 +296,4 @@ export async function downloadReceivedAttachment(
   if (bytes.byteLength > maxBytes) throw new Error("Attachment too large.");
   return bytes;
 }
+// @end

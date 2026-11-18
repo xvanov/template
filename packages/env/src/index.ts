@@ -69,6 +69,7 @@ const serverSchema = z.object({
   /** Jobs the worker runs in parallel. Bounded so a typo cannot fork-bomb Redis. */
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(5),
 
+  // @module:ml
   // ── ML sidecar (ml/, packages/jobs/src/ml.ts) ───────────────────────────
   /**
    * Lets the worker run the Python model in ml/ (the `ml.predict` job), as a
@@ -86,6 +87,7 @@ const serverSchema = z.object({
     blankIsUnset,
     z.coerce.number().int().min(1).max(3600).default(120),
   ),
+  // @end
 
   BETTER_AUTH_SECRET: z
     .string()
@@ -145,6 +147,7 @@ const serverSchema = z.object({
       .regex(/^whsec_[A-Za-z0-9+/=]+$/, "must be the whsec_... signing secret")
       .optional(),
   ),
+  // @module:inbound
   /**
    * The domain inbound email arrives on (MX pointed at Resend, or at whatever
    * calls /api/webhooks/email-inbound), e.g. `in.example.com`. Each tenant gets
@@ -161,7 +164,9 @@ const serverSchema = z.object({
       )
       .optional(),
   ),
+  // @end
 
+  // @module:sms
   // ── SMS (packages/sms, Twilio) ─────────────────────────────────────────
   // Off unless OUTBOUND_SMS_ENABLED. Read only by packages/sms/src/transport.ts.
   TWILIO_ACCOUNT_SID: z.preprocess(blankIsUnset, z.string().optional()),
@@ -180,6 +185,7 @@ const serverSchema = z.object({
    * from the request (behind a proxy the app sees an internal host).
    */
   TWILIO_WEBHOOK_BASE_URL: optionalUrl,
+  // @end
 
   /**
    * URL of a local dev mail inbox (Mailpit). When set, the "confirm your email"
@@ -208,7 +214,7 @@ const serverSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
 
-  APP_SCHEME: z.string().default("apptemplate"),
+  APP_SCHEME: z.string().default("apptemplate"), // @module:mobile
 
   // ── Display formatting (apps/web/src/lib/format.ts) ────────────────────
   // How money, dates and numbers are shown to users. Server-side defaults for
@@ -257,6 +263,7 @@ const serverSchema = z.object({
    */
   APP_VERSION: z.preprocess(blankIsUnset, z.string().optional()),
 
+  // @module:ai
   // ── LLM (packages/ai) ───────────────────────────────────────────────────
   // A model is a `provider/model` string: anthropic/…, openai/…, azure/<deployment>,
   // openrouter/…, deepseek/…, local/… (LLM_BASE_URL), cli/… (Claude Code).
@@ -373,9 +380,10 @@ const serverSchema = z.object({
       .min(32, "must be at least 32 chars (openssl rand -hex 32)")
       .optional(),
   ),
+  // @end
 
   // ── Outbound messages (packages/outbound) ──────────────────────────────
-  // Every email/SMS/push passes ONE guard. See CLAUDE.md "Outbound messages".
+  // Every email/SMS/push passes ONE guard. See docs/guide.md "Outbound messages".
 
   /**
    * Safe mode: only allowlisted recipients get real messages; everyone else is
@@ -414,11 +422,13 @@ const serverSchema = z.object({
    * default: it reaches real phones, through Expo's and Apple's/Google's servers.
    */
   OUTBOUND_MOBILE_PUSH_ENABLED: bool(false),
+  // @module:push-mobile
   /**
    * Expo access token, only if "enhanced push security" is on for the Expo
    * project. Read only by packages/push-mobile/src/transport.ts.
    */
   EXPO_ACCESS_TOKEN: z.preprocess(blankIsUnset, z.string().optional()),
+  // @end
   /** Global kill switch. A runtime switch also exists (`npm run outbound:freeze`). */
   OUTBOUND_FROZEN: bool(false),
   /** Volume caps (fixed windows in Redis). Over the cap = blocked, not queued. */
@@ -438,7 +448,7 @@ const serverSchema = z.object({
   // ── Operator notifications (packages/notify) ───────────────────────────
   // Alerts for whoever RUNS the app (a job failed for good, a tenant hit the AI
   // cap). Push via ntfy when NTFY_TOPIC is set, else email to OPERATOR_EMAIL,
-  // else the console. See CLAUDE.md "Operator notifications".
+  // else the console. See docs/guide.md "Operator notifications".
 
   /** ntfy server. Self-host it, or use the public one with a long random topic. */
   NTFY_URL: z.preprocess(
@@ -480,6 +490,7 @@ const serverSchema = z.object({
       ),
   ),
 
+  // @module:agent
   // ── Agents (packages/agent) and the MCP endpoint ───────────────────────
   /** Which LLM tier agent runs use (LLM_MODEL_FAST / LLM_MODEL / LLM_MODEL_SMART). */
   AGENT_TIER: z.preprocess(
@@ -495,6 +506,7 @@ const serverSchema = z.object({
   AGENT_MAX_COST_USD: z.coerce.number().positive().default(0.5),
   /** Requests per minute per API key on /api/mcp. */
   MCP_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(120),
+  // @end
 
   // ── Security helpers (packages/security) ───────────────────────────────
   /** Bearer secret for HTTP cron endpoints. Unset in production = every call refused. */
@@ -530,14 +542,14 @@ export const serverEnvKeys = Object.keys(
 ) as (keyof ServerEnv)[];
 
 /**
- * Optional URL settings that are present but BLANK (`OPENAI_BASE_URL=`, as
- * copied from .env.example) are removed from the environment, so "blank"
- * means "unset" for every reader — not only for env(). Third-party SDKs read
- * some of these themselves at import time: `@ai-sdk/openai` builds a default
- * provider from OPENAI_BASE_URL when the module loads, and throws "baseURL
- * must be a non-empty string" on a blank one, which took the production
- * server down at boot. Runs when this module is first evaluated, so it must
- * be imported before such SDKs (packages/ai/src/providers/openai.ts does).
+ * Optional URL settings that are present but BLANK (`SOME_URL=`, as copied
+ * from .env.example) are removed from the environment, so "blank" means
+ * "unset" for every reader — not only for env(). Third-party SDKs read some
+ * of these themselves at import time: `@ai-sdk/openai` builds a default
+ * provider from its base-URL variable when the module loads, and throws
+ * "baseURL must be a non-empty string" on a blank one, which took the
+ * production server down at boot. Runs when this module is first evaluated,
+ * so it must be imported before such SDKs.
  */
 export function dropBlankOptionalUrls(
   target: Record<string, string | undefined> = process.env,

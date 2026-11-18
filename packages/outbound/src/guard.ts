@@ -29,7 +29,7 @@
  * call `deliver` with their raw transport as the callback and DO NOT export
  * that transport. The callback receives the PARSED recipient and must send to
  * exactly that, and the row id, which a provider that supports it is given as
- * its idempotency key. See the "Outbound messages" section of CLAUDE.md.
+ * its idempotency key. See the "Outbound messages" section of docs/guide.md.
  *
  * Idempotency: an attempt with an `idempotencyKey` reuses the row of an
  * earlier attempt with the same key IN THE SAME TENANT (keys are namespaced
@@ -120,11 +120,16 @@ export type Transport = (
   meta: SendMeta,
 ) => Promise<ProviderReceipt>;
 
+type GuardTable =
+  | "outboundMessage"
+  // @module:push-mobile
+  | "pushDevice"
+  // @end
+  | "appSetting"
+  | "outboundSuppression";
+
 export interface GuardDeps {
-  db: Pick<
-    PrismaClient,
-    "outboundMessage" | "appSetting" | "outboundSuppression" | "pushDevice"
-  >;
+  db: Pick<PrismaClient, GuardTable>;
   /** Counter store for the volume caps. Default: Redis (memory under test). */
   store?: CounterStore;
   config: GuardConfig;
@@ -496,13 +501,16 @@ async function recipientFacts(
   ) {
     return {};
   }
+  // Without the app's device table (no push-mobile module) no token has an owner.
+  const facts: RecipientFacts = { deviceOwnerEmail: null };
+  // @module:push-mobile
   const device = await db.pushDevice.findUnique({
     where: { token: attempt.recipient },
     select: { user: { select: { email: true, emailVerified: true } } },
   });
-  return {
-    deviceOwnerEmail: device?.user.emailVerified ? device.user.email : null,
-  };
+  if (device?.user.emailVerified) facts.deviceOwnerEmail = device.user.email;
+  // @end
+  return facts;
 }
 
 /** `attempt.recipient` is already parsed. */

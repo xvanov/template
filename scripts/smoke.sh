@@ -143,17 +143,29 @@ export BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-smoke-gate-secret-not-for-produ
 
 # Nothing the gate writes may outlive it or land in the dev tree: logs and
 # uploaded files go to a fresh temp dir (absolute, so every process agrees on
-# it — see STORAGE_LOCAL_DIR in CLAUDE.md). The LLM is forced OFF whatever the
-# dev .env says: the gate must not spend money or depend on a third party, and
-# the worker's summary job has a deterministic no-LLM path. Operator
-# notifications go to the console only: a dev .env with NTFY_TOPIC or
-# OPERATOR_EMAIL must not buzz a real phone every time the gate runs.
+# it — see STORAGE_LOCAL_DIR in docs/guide.md). Operator notifications go to
+# the console only: a dev .env with NTFY_TOPIC or OPERATOR_EMAIL must not buzz
+# a real phone every time the gate runs.
 SMOKE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/smoke-$(basename "$ROOT").XXXXXX")"
 WEB_LOG="${SMOKE_TMP}/web.log"
 WORKER_LOG="${SMOKE_TMP}/worker.log"
 export STORAGE_DRIVER=local STORAGE_LOCAL_DIR="${SMOKE_TMP}/storage"
-export LLM_ENABLED=false LLM_API_KEY=""
 export NTFY_TOPIC="" OPERATOR_EMAIL=""
+# @module:ai
+# The LLM is forced OFF whatever the dev .env says: the gate must not spend
+# money or depend on a third party, and the worker's jobs have a deterministic
+# no-LLM path.
+export LLM_ENABLED=false LLM_API_KEY=""
+# @end
+# @module:inbound
+# A fixed throwaway inbound domain, so the journey can create an address and
+# post to it.
+export INBOUND_EMAIL_DOMAIN=inbound.smoke.test
+# @end
+# @module:sms
+# Blank, so the journey can prove the Twilio webhooks fail closed in production.
+export TWILIO_AUTH_TOKEN=""
+# @end
 
 # Refuse to run against a server we did not start. Otherwise a stale process
 # left on this port answers the health check and the gate reports on the wrong
@@ -216,10 +228,9 @@ echo "→ booting the built app on :${PORT}"
 # mail (auth mail to the address being signed up) still arrives, while any
 # other mail to these throwaway addresses would be blocked and logged.
 #
-# Inbound email gets a fixed throwaway domain so the journey can create an
-# address and post to it. EMAIL_TRANSPORT=smtp and SMS off whatever .env says:
-# the gate must never reach Resend or Twilio. Their webhook secrets are blanked
-# so the journey can prove those webhooks fail closed in production.
+# EMAIL_TRANSPORT=smtp and SMS off whatever .env says: the gate must never
+# reach Resend or Twilio. The Resend webhook secret is blanked so the journey
+# can prove that webhook fails closed in production.
 #
 # NOTE the override names: `.env` was sourced above with `set -a`, so SMTP_PORT
 # and MAILPIT_URL are ALREADY exported. A `${SMTP_PORT:-1036}` default would
@@ -232,8 +243,7 @@ REQUIRE_EMAIL_VERIFICATION=true \
 DEV_MAIL_INBOX_URL="" \
 OUTBOUND_SAFE_MODE=true OUTBOUND_SAFE_RECIPIENTS="" OUTBOUND_FROZEN=false \
 CRON_SECRET="$SMOKE_CRON_SECRET" EMAIL_WEBHOOK_SECRET="$SMOKE_WEBHOOK_SECRET" \
-INBOUND_EMAIL_DOMAIN=inbound.smoke.test EMAIL_TRANSPORT=smtp OUTBOUND_SMS_ENABLED=false \
-TWILIO_AUTH_TOKEN="" RESEND_WEBHOOK_SECRET="" \
+EMAIL_TRANSPORT=smtp OUTBOUND_SMS_ENABLED=false RESEND_WEBHOOK_SECRET="" \
   node "${STANDALONE}/server.js" > "$WEB_LOG" 2>&1 &
 SERVER_PID=$!
 

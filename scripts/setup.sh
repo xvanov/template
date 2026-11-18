@@ -56,6 +56,7 @@ if grep -q '^STORAGE_LOCAL_DIR="\{0,1\}[^/"]' .env; then
   warn "STORAGE_LOCAL_DIR is relative, so web and worker use different folders. To share one: set STORAGE_LOCAL_DIR=\"${ROOT}/storage\" in .env and move apps/web/storage/* there."
 fi
 
+# @module:mobile
 # The phone cannot reach "localhost" — point it at this machine on the LAN.
 LAN_IP="$( (hostname -I 2>/dev/null || ipconfig getifaddr en0 2>/dev/null || true) | awk '{print $1}')"
 if [ -n "${LAN_IP:-}" ]; then
@@ -70,6 +71,7 @@ if [ -n "${LAN_IP:-}" ]; then
 else
   warn "could not detect a LAN IP; set EXPO_PUBLIC_API_URL by hand for phone testing"
 fi
+# @end
 
 bold "3/5  dependencies"
 npm install --no-audit --fund=false
@@ -96,7 +98,11 @@ cat <<'EOF'
 
     make dev        web on http://localhost:3200 + the background worker
     make inbox      the local mail inbox (sign-up confirmation links land here)
-    make mobile     Expo dev server — scan the QR code with Expo Go
+EOF
+# @module:mobile
+echo "    make mobile     Expo dev server — scan the QR code with Expo Go"
+# @end
+cat <<'EOF'
     make smoke      boot a production build and drive the real user journey
     make test       unit tests
 

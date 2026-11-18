@@ -68,7 +68,7 @@ collation_repair() { # collation_repair <psql-fn>
 
   Merge or delete the extra rows, then run the check again (deploy.sh,
   make up, or bash scripts/lib/collation.sh). Restoring the last dump taken
-  before the image change is the other way out (docs/deploy.md).
+  before the image change is the other way out (docs/guide.md, "collation").
 EOF
       return 1
     fi

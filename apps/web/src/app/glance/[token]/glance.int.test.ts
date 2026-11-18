@@ -49,20 +49,18 @@ describe("/glance/[token]", () => {
   it("renders the link's own organization, with no-store and no-referrer", async () => {
     const a = await createTenant("glance-route-a");
     const b = await createTenant("glance-route-b");
-    await db.agentProposal.create({
+    await db.item.create({
       data: {
         organizationId: b.organizationId,
-        tool: "items_create",
-        input: {},
-        summary: "secret plan of B",
+        title: "secret plan of B",
+        createdById: b.userId,
       },
     });
-    await db.agentProposal.create({
+    await db.item.create({
       data: {
         organizationId: a.organizationId,
-        tool: "items_create",
-        input: {},
-        summary: "Approve the desk order",
+        title: "Approve the desk order",
+        createdById: a.userId,
       },
     });
     const link = await caller(a).glance.createLink({
@@ -83,7 +81,7 @@ describe("/glance/[token]", () => {
     expect(html).not.toContain("secret plan of B");
 
     const counts = await (await open(countsOnly.secret)).text();
-    expect(counts).toContain("1 waiting for your approval");
+    expect(counts).toContain("1 open items");
     expect(counts).not.toContain("Approve the desk order");
   });
 

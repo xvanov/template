@@ -16,15 +16,19 @@ make demo            # setup if needed, infra, migrations, demo data, web + work
 ```
 
 `make demo` prints the URL and a login (`demo@example.com` / `demo-password`)
-that works at once: no sign-up, no email round trip. The workspace has items,
-a handbook indexed for search ("warranty", "reschedule"), and a customer email
-in the inbox. It all works with the AI off. Ctrl-C stops it; running it again
-RESETS the demo workspace (its items, documents and inbox go back to the
+that works at once: no sign-up, no email round trip. The workspace has:
+
+- items, and the background jobs that ran
+- a handbook indexed for search ("warranty", "reschedule") <!-- @module:rag -->
+- a customer email in the inbox <!-- @module:inbound -->
+
+It all works with the AI off. Ctrl-C stops it; running it again
+RESETS the demo workspace (its content goes back to the
 seeded content). The seed only touches a workspace and an account it created
 itself, and only in a database on this machine: it refuses an existing real
 account with the demo email.
 
-**Then make it yours** (CLAUDE.md, "Starting a real app from this template"):
+**Then make it yours** (docs/guide.md, "Renaming and trimming"):
 
 1. Rename `Item` to your thing (keep `organizationId` and the index shape).
 2. Change `apps/worker/src/demo/data.ts` so the demo tells YOUR story.
@@ -56,7 +60,7 @@ plus `DB_PORT`/`DATABASE_URL` etc. in `.env`; `make doctor` flags a mismatch.
 
 - [ ] Rehearse the demo end to end, out loud, with a timer. Then cut it by a third.
 - [ ] Record a screen capture of the full demo as the fallback for a dead network.
-- [ ] Deploy (docs/deploy.md), or run the demo from a laptop; know which. For
+- [ ] Deploy, or run the demo from a laptop; know which. For
       a public URL, do NOT seed the demo account: create a real one. Keep
       `OUTBOUND_SAFE_MODE` strict (the default in production) so the demo cannot
       email or text a real person.

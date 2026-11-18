@@ -32,7 +32,11 @@ const MAX_PER_KIND = 20;
 
 export interface DesktopEvent {
   key: string;
-  kind: "proposal" | "inbound" | "agent_run";
+  kind:
+    | "item"
+    | "proposal" // @module:agent
+    | "agent_run" // @module:agent
+    | "inbound"; // @module:inbound
   title: string;
   body: string;
   /** ISO time it happened; the events are returned oldest first. */
@@ -72,50 +76,89 @@ export const desktopRouter = createTRPCRouter({
         const window = { gt: new Date(sinceMs - OVERLAP_MS), lte: now };
         const organizationId = ctx.organizationId;
 
-        const [proposals, inbound, runs] = await Promise.all([
-          ctx.db.agentProposal.findMany({
-            where: { organizationId, status: "pending", createdAt: window },
-            orderBy: { createdAt: "desc" },
-            take: MAX_PER_KIND,
-            select: { id: true, summary: true, createdAt: true },
-          }),
-          ctx.db.inboundMessage.findMany({
-            where: { organizationId, createdAt: window },
-            orderBy: { createdAt: "desc" },
-            take: MAX_PER_KIND,
-            select: {
-              id: true,
-              channel: true,
-              fromAddress: true,
-              subject: true,
-              createdAt: true,
-            },
-          }),
-          // Only the runs YOU started: a teammate's finished run is not news.
-          ctx.db.agentRun.findMany({
-            where: {
-              organizationId,
-              createdById: ctx.user.id,
-              status: { in: ["completed", "failed"] },
-              finishedAt: window,
-            },
-            orderBy: { finishedAt: "desc" },
-            take: MAX_PER_KIND,
-            select: { id: true, goal: true, status: true, finishedAt: true },
-          }),
-        ]);
+        const events: DesktopEvent[] = [];
+        const recent = {
+          orderBy: { createdAt: "desc" },
+          take: MAX_PER_KIND,
+        } as const;
 
-        const events: DesktopEvent[] = [
-          ...proposals.map((p) => ({
+        // Items a teammate added: yours are not news.
+        const items = await ctx.db.item.findMany({
+          ...recent,
+          where: {
+            organizationId,
+            createdById: { not: ctx.user.id },
+            createdAt: window,
+          },
+          select: { id: true, title: true, createdAt: true },
+        });
+        for (const i of items) {
+          events.push({
+            key: `item:${i.id}`,
+            kind: "item",
+            title: "New item",
+            body: clip(i.title),
+            at: i.createdAt.toISOString(),
+          });
+        }
+
+        // @module:agent
+        const proposals = await ctx.db.agentProposal.findMany({
+          ...recent,
+          where: { organizationId, status: "pending", createdAt: window },
+          select: { id: true, summary: true, createdAt: true },
+        });
+        for (const p of proposals) {
+          events.push({
             key: `proposal:${p.id}`,
-            kind: "proposal" as const,
+            kind: "proposal",
             title: "Waiting for your approval",
             body: clip(p.summary),
             at: p.createdAt.toISOString(),
-          })),
-          ...inbound.map((m) => ({
+          });
+        }
+        // Only the runs YOU started: a teammate's finished run is not news.
+        const runs = await ctx.db.agentRun.findMany({
+          where: {
+            organizationId,
+            createdById: ctx.user.id,
+            status: { in: ["completed", "failed"] },
+            finishedAt: window,
+          },
+          orderBy: { finishedAt: "desc" },
+          take: MAX_PER_KIND,
+          select: { id: true, goal: true, status: true, finishedAt: true },
+        });
+        for (const r of runs) {
+          events.push({
+            key: `agent_run:${r.id}:${r.status}`,
+            kind: "agent_run",
+            title:
+              r.status === "completed"
+                ? "Agent run finished"
+                : "Agent run failed",
+            body: clip(r.goal),
+            at: (r.finishedAt ?? now).toISOString(),
+          });
+        }
+        // @end
+
+        // @module:inbound
+        const inbound = await ctx.db.inboundMessage.findMany({
+          ...recent,
+          where: { organizationId, createdAt: window },
+          select: {
+            id: true,
+            channel: true,
+            fromAddress: true,
+            subject: true,
+            createdAt: true,
+          },
+        });
+        for (const m of inbound) {
+          events.push({
             key: `inbound:${m.id}`,
-            kind: "inbound" as const,
+            kind: "inbound",
             title: m.channel === "sms" ? "New text message" : "New email",
             body: clip(
               m.subject
@@ -123,18 +166,10 @@ export const desktopRouter = createTRPCRouter({
                 : `From ${m.fromAddress}`,
             ),
             at: m.createdAt.toISOString(),
-          })),
-          ...runs.map((r) => ({
-            key: `agent_run:${r.id}:${r.status}`,
-            kind: "agent_run" as const,
-            title:
-              r.status === "completed"
-                ? "Agent run finished"
-                : "Agent run failed",
-            body: clip(r.goal),
-            at: (r.finishedAt ?? now).toISOString(),
-          })),
-        ];
+          });
+        }
+        // @end
+
         events.sort((a, b) => a.at.localeCompare(b.at));
         return { cursor, events };
       },

@@ -3,7 +3,7 @@
  * organization's snapshot, is managed only by its creator, is stored hashed,
  * and stops working when revoked or when the creator leaves the org.
  */
-import { randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto"; // @module:inbound
 import { describe, expect, it } from "vitest";
 import { db } from "@repo/db";
 import { createTenant, type TestTenant } from "@repo/db/testing";
@@ -12,6 +12,14 @@ import { authenticateGlanceLink, glanceSnapshot } from "../src/glance";
 import { callerFor } from "./caller";
 
 async function seed(t: TestTenant, label: string) {
+  await db.item.create({
+    data: {
+      organizationId: t.organizationId,
+      title: `Desk for ${label}`,
+      createdById: t.userId,
+    },
+  });
+  // @module:agent
   await db.agentProposal.create({
     data: {
       organizationId: t.organizationId,
@@ -22,6 +30,8 @@ async function seed(t: TestTenant, label: string) {
       summary: `Create item ${label}`,
     },
   });
+  // @end
+  // @module:inbound
   await db.inboundMessage.create({
     data: {
       organizationId: t.organizationId,
@@ -33,7 +43,13 @@ async function seed(t: TestTenant, label: string) {
       subject: `Hello from ${label}`,
     },
   });
+  // @end
 }
+
+const section = (
+  snap: Awaited<ReturnType<typeof glanceSnapshot>>,
+  key: string,
+) => snap.sections.find((s) => s.key === key)!;
 
 describe("glance links", () => {
   it("a link reads its own organization's snapshot and nobody else's", async () => {
@@ -55,13 +71,19 @@ describe("glance links", () => {
       showDetails: true,
     });
     const snap = await glanceSnapshot(db, principal!.organizationId);
-    expect(snap.approvals.count).toBe(1);
-    expect(snap.approvals.rows[0]!.title).toBe("Create item alpha");
-    expect(snap.inbox.unhandled).toBe(1);
-    expect(snap.inbox.rows[0]).toMatchObject({
+    expect(section(snap, "items").count).toBe(1);
+    expect(section(snap, "items").rows[0]!.title).toBe("Desk for alpha");
+    // @module:agent
+    expect(section(snap, "approvals").count).toBe(1);
+    expect(section(snap, "approvals").rows[0]!.title).toBe("Create item alpha");
+    // @end
+    // @module:inbound
+    expect(section(snap, "inbox").count).toBe(1);
+    expect(section(snap, "inbox").rows[0]).toMatchObject({
       title: "alpha@customer.test",
       detail: "Hello from alpha",
     });
+    // @end
     expect(JSON.stringify(snap)).not.toContain("bravo");
 
     // The signed-in view is the same data, also scoped.
@@ -135,7 +157,7 @@ describe("glance links", () => {
     const counts = await glanceSnapshot(db, a.organizationId, {
       details: false,
     });
-    expect(counts.approvals).toEqual({ count: 1, rows: [] });
+    expect(section(counts, "items")).toMatchObject({ count: 1, rows: [] });
     expect(JSON.stringify(counts)).not.toContain("charlie");
 
     await db.glanceLink.updateMany({

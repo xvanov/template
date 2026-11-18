@@ -285,6 +285,64 @@ describe("checkMobilePushReceipts: nothing waits forever, nothing is starved", (
 });
 
 describe("notifyAppEvent", () => {
+  it("pushes a teammate's new item to everyone else with a device, generic text only", async () => {
+    process.env.OUTBOUND_SAFE_MODE = "false";
+    resetEnvCache();
+    const t = await createTenant("mp-item");
+    await device(t);
+    const item = await db.item.create({
+      data: {
+        organizationId: t.organizationId,
+        title: "Call ACME about the overdue invoice",
+        createdById: t.userId,
+      },
+    });
+    // Its creator is not told about their own item.
+    expect(
+      await notifyAppEvent(t.organizationId, { kind: "item", id: item.id }),
+    ).toMatchObject({ users: 0, sent: 0 });
+
+    const mate = await db.user.create({
+      data: {
+        name: "Mate",
+        email: `mate-${randomBytes(4).toString("hex")}@x.test`,
+      },
+    });
+    const theirs = await db.item.create({
+      data: {
+        organizationId: t.organizationId,
+        title: "Call ACME about the overdue invoice",
+        createdById: mate.id,
+      },
+    });
+    const r = await notifyAppEvent(t.organizationId, {
+      kind: "item",
+      id: theirs.id,
+    });
+    expect(r).toMatchObject({ users: 1, sent: 1 });
+    expect(JSON.stringify(sent)).not.toContain("ACME");
+  });
+
+  it("does nothing for another tenant's item", async () => {
+    process.env.OUTBOUND_SAFE_MODE = "false";
+    resetEnvCache();
+    const a = await createTenant("mp-item-a");
+    const b = await createTenant("mp-item-b");
+    await device(b);
+    const item = await db.item.create({
+      data: {
+        organizationId: a.organizationId,
+        title: "x",
+        createdById: a.userId,
+      },
+    });
+    expect(
+      await notifyAppEvent(b.organizationId, { kind: "item", id: item.id }),
+    ).toMatchObject({ skipped: "not found", sent: 0 });
+    expect(sent).toEqual([]);
+  });
+
+  // @module:agent
   it("pushes a pending proposal to the user it was made for, generic text only", async () => {
     process.env.OUTBOUND_SAFE_MODE = "false";
     resetEnvCache();
@@ -343,4 +401,5 @@ describe("notifyAppEvent", () => {
     ).toMatchObject({ skipped: "not pending", sent: 0 });
     expect(sent).toEqual([]);
   });
+  // @end
 });

@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { vi } from "vitest"; // @module:rag
 
 const marked: unknown[] = [];
+// @module:rag
 vi.mock("@repo/rag", () => ({
   ingestDocument: vi.fn(),
   sweepStaleIngests: vi.fn(),
@@ -8,10 +10,12 @@ vi.mock("@repo/rag", () => ({
     marked.push([job, err.message]);
   },
 }));
+// @end
 
 const { finalFailureHook } = await import("./worker");
 
 describe("finalFailureHook", () => {
+  // @module:rag
   it("lets docs.ingest mark its document failed once retries are used up", async () => {
     await finalFailureHook(
       {
@@ -26,6 +30,7 @@ describe("finalFailureHook", () => {
       [{ organizationId: "o", documentId: "d" }, "db down"],
     ]);
   });
+  // @end
 
   it("ignores jobs without a hook, unknown names and invalid payloads", async () => {
     marked.length = 0;
@@ -37,10 +42,12 @@ describe("finalFailureHook", () => {
       { id: "3", name: "nope", data: {}, attemptsMade: 1 },
       new Error("x"),
     );
+    // @module:rag
     await finalFailureHook(
       { id: "4", name: "docs.ingest", data: { bad: 1 }, attemptsMade: 3 },
       new Error("x"),
     );
+    // @end
     expect(marked).toEqual([]);
   });
 });

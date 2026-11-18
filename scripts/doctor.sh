@@ -141,7 +141,9 @@ if [ "$ENV_OK" = 1 ]; then
   if listening 127.0.0.1 "$web"; then info "port $web (web) is in use: your dev server, or something else?"
   else pass "port $web (web) is free"; fi
 fi
+# @module:mobile
 if listening 127.0.0.1 8091; then info "port 8091 (Expo) is in use"; else pass "port 8091 (Expo) is free"; fi
+# @end
 
 # ── ml/ (Python sidecar) ──────────────────────────────────────────────────
 if [ -d ml ]; then

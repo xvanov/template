@@ -2,7 +2,7 @@
 
 Entry point for AGENTS.md-aware tools (OpenCode, Codex, Cursor, …).
 
-**Read `CLAUDE.md` first — it is the full brief and it is short.** It covers the
+**Read `CLAUDE.md` first, then `docs/guide.md`** — the full brief: the
 layout, the one-command bootstrap, the gates, the architecture rules, and the
 list of things that have already bitten someone here.
 
@@ -11,12 +11,12 @@ list of things that have already bitten someone here.
 ```bash
 ./scripts/setup.sh   # .env + deps + postgres/redis + migrations (idempotent)
 make dev             # web :3200 + worker
-make mobile          # Expo dev server :8091 — scan with Expo Go
-make desktop         # Tauri desktop shell around the web app (needs Rust)
+make mobile          # Expo dev server :8091 — scan with Expo Go # @module:mobile
+make desktop         # Tauri desktop shell around the web app (needs Rust) # @module:desktop
 make smoke           # THE GATE: production build, booted, driven in a browser
-make doctor          # is this machine ready? (read-only)
-make demo            # seeded demo workspace + web + worker, prints a login
-cd ml && uv run pytest   # the Python sidecar: ALWAYS through uv run
+make doctor          # is this machine ready? (read-only) # @module:hackathon
+make demo            # seeded demo workspace + web + worker, prints a login # @module:hackathon
+cd ml && uv run pytest   # the Python sidecar: ALWAYS through uv run # @module:ml
 ```
 
 ## Rules you cannot violate
@@ -37,5 +37,6 @@ cd ml && uv run pytest   # the Python sidecar: ALWAYS through uv run
    trusted origins and the upload allow-list are all configurable — configure
    them for the test, keep them on in production.
 
-Ports: **web 3200 · postgres 5442 · redis 6389 · expo 8091** (non-default so this
-coexists with other projects on the same machine).
+Ports: **web 3200 · postgres 5442 · redis 6389** (non-default so this coexists
+with other projects on the same machine).
+Expo: **8091**. <!-- @module:mobile -->

@@ -1,10 +1,10 @@
 /**
- * File bytes to the server's /api/media/* routes (CLAUDE.md rule 1), with
+ * File bytes to the server's /api/media/* routes (docs/guide.md rule 1), with
  * progress. The session cookie goes along by hand: React Native has no
  * cookie jar (same as the tRPC link in app/_layout.tsx).
  *
  *   const asset = await uploadMedia(photo, { onProgress: setProgress });
- *   const { text } = await transcribeAudio(recording);
+ *   const { text } = await transcribeAudio(recording); // @module:ai
  *
  * Native: expo-file-system's upload task. It streams the file from disk in
  * native code (no copy of a 10 MB photo in JS memory), reports progress, and
@@ -118,6 +118,7 @@ export function uploadMedia(
   });
 }
 
+// @module:ai
 /** A recording to text. Not stored on the server. */
 export function transcribeAudio(
   file: LocalFile,
@@ -130,3 +131,4 @@ export function transcribeAudio(
     fields: { ...rest.fields, ...(language ? { language } : {}) },
   });
 }
+// @end

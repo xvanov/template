@@ -1,5 +1,5 @@
 /**
- * push.*: device registration is per tenant and per user (the CLAUDE.md
+ * push.*: device registration is per tenant and per user (the docs/guide.md
  * org-isolation pattern), idempotent, and a token moves to whoever registers
  * it last (one install, one owner).
  */
@@ -134,6 +134,7 @@ describe("push devices", () => {
     );
   });
 
+  // @module:agent
   it("agent.proposal (what a proposal push opens) is org-scoped", async () => {
     const a = await createTenant("push-open-a");
     const b = await createTenant("push-open-b");
@@ -156,4 +157,5 @@ describe("push devices", () => {
       callerFor(b).agent.proposal({ id: p.id }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+  // @end
 });

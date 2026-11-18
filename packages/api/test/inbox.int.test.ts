@@ -1,6 +1,6 @@
 /**
  * The inbox router: a tenant sees, opens and handles only its own inbound
- * messages (the CLAUDE.md org-isolation pattern), and never receives the
+ * messages (the docs/guide.md org-isolation pattern), and never receives the
  * stored HTML.
  */
 import { randomBytes } from "node:crypto";

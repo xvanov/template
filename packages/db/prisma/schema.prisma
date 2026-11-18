@@ -37,14 +37,14 @@ model User {
   invitations    Invitation[]
   items          Item[]
   mediaAssets    MediaAsset[]
-  agentRuns      AgentRun[]
-  apiKeys        ApiKey[]
-  reviewed       AgentProposal[]  @relation("ProposalReviewer")
-  proposed       AgentProposal[]  @relation("ProposalProposer")
-  documents      Document[]
-  handledInbound InboundMessage[]
-  pushDevices    PushDevice[]
-  glanceLinks    GlanceLink[]
+  agentRuns      AgentRun[] // @module:agent
+  apiKeys        ApiKey[] // @module:agent
+  reviewed       AgentProposal[]  @relation("ProposalReviewer") // @module:agent
+  proposed       AgentProposal[]  @relation("ProposalProposer") // @module:agent
+  documents      Document[] // @module:rag
+  handledInbound InboundMessage[] // @module:inbound
+  pushDevices    PushDevice[] // @module:push-mobile
+  glanceLinks    GlanceLink[] // @module:glasses
 
   @@map("user")
 }
@@ -120,16 +120,16 @@ model Organization {
   auditEvents   AuditEvent[]
   outbound      OutboundMessage[]
   suppressed    OutboundSuppression[]
-  agentRuns     AgentRun[]
-  agentSteps    AgentStep[]
-  proposals     AgentProposal[]
-  apiKeys       ApiKey[]
-  documents     Document[]
-  docChunks     DocumentChunk[]
-  inbound       InboundMessage[]
-  inboundRoutes InboundRoute[]
-  pushDevices   PushDevice[]
-  glanceLinks   GlanceLink[]
+  agentRuns     AgentRun[] // @module:agent
+  agentSteps    AgentStep[] // @module:agent
+  proposals     AgentProposal[] // @module:agent
+  apiKeys       ApiKey[] // @module:agent
+  documents     Document[] // @module:rag
+  docChunks     DocumentChunk[] // @module:rag
+  inbound       InboundMessage[] // @module:inbound
+  inboundRoutes InboundRoute[] // @module:inbound
+  pushDevices   PushDevice[] // @module:push-mobile
+  glanceLinks   GlanceLink[] // @module:glasses
 
   @@map("organization")
 }
@@ -186,6 +186,7 @@ model Item {
   @@map("item")
 }
 
+// @module:push-mobile
 /// One app install that can receive mobile push (Expo push token), registered
 /// by the signed-in user under their ACTIVE organization (push.register).
 ///
@@ -216,7 +217,9 @@ model PushDevice {
   @@index([organizationId, userId])
   @@map("push_device")
 }
+// @end
 
+// @module:glasses
 /// A read-only link for a glanceable view (/glance/<secret>), e.g. a web app
 /// on Meta Ray-Ban Display glasses, where signing in is impractical. Acts as
 /// its creator in its organization, ONLY for the glance snapshot; stops
@@ -244,6 +247,7 @@ model GlanceLink {
   @@index([organizationId, userId])
   @@map("glance_link")
 }
+// @end
 
 /// A blob in packages/storage. The row is the source of truth for metadata;
 /// `key` is the driver-agnostic object key.
@@ -260,12 +264,13 @@ model MediaAsset {
   uploadedById   String?
   uploadedBy     User?        @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
   createdAt      DateTime     @default(now())
-  documents      Document[]
+  documents      Document[] // @module:rag
 
   @@index([organizationId, createdAt])
   @@map("media_asset")
 }
 
+// @module:rag
 /// A searchable document (packages/rag): text the tenant uploaded, or a
 /// text-like file in storage. Indexed into document_chunk by the
 /// `docs.ingest` job; re-ingesting unchanged content is a no-op (contentHash).
@@ -339,7 +344,9 @@ model DocumentChunk {
   @@index([embedding], map: "document_chunk_embedding_hnsw_idx")
   @@map("document_chunk")
 }
+// @end
 
+// @module:ai
 /// Every LLM call, priced. This is the seam that makes spend auditable per
 /// org and per feature instead of a single opaque provider invoice.
 model LlmCall {
@@ -381,6 +388,7 @@ model LlmCall {
   @@index([purpose, createdAt])
   @@map("llm_call")
 }
+// @end
 
 /// Background-job observability. The queue is Redis (ephemeral); this table
 /// is the durable record of what ran, so a job that vanishes is visible.
@@ -483,7 +491,7 @@ model OutboundMessage {
   deliveryUpdatedAt DateTime?
   createdAt         DateTime         @default(now())
   finishedAt        DateTime?
-  repliesReceived   InboundMessage[]
+  repliesReceived   InboundMessage[] // @module:inbound
 
   @@unique([idempotencyScope, idempotencyKey])
   @@index([organizationId, createdAt])
@@ -511,6 +519,7 @@ model OutboundSuppression {
   @@map("outbound_suppression")
 }
 
+// @module:inbound
 /// A message that ARRIVED (packages/inbound): an email to one of the org's
 /// inbound addresses, or an SMS to the app's number. Org-scoped: written only
 /// once the recipient address routed to a tenant (see InboundRoute).
@@ -583,6 +592,7 @@ model InboundRoute {
   @@index([organizationId])
   @@map("inbound_route")
 }
+// @end
 
 /// Operator notifications (packages/notify): alerts for whoever RUNS the app,
 /// never shown to a tenant. Every call to notifyOperator writes one row, sent
@@ -637,6 +647,7 @@ model AppSetting {
 
 // ─────────────────────── AGENTS, PROPOSALS, API KEYS ─────────────────────
 
+// @module:agent
 /// One agent run (packages/agent): a goal, worked on by a model with tools,
 /// in the worker. The trace is its `steps`; anything it wanted to CHANGE is an
 /// AgentProposal waiting for a human.
@@ -671,7 +682,7 @@ model AgentRun {
   proposals AgentProposal[]
 
   @@index([organizationId, createdAt])
-  /// desktop.feed: "runs in this tenant that finished since the cursor".
+  /// "runs in this tenant that finished since a cursor" (the desktop feed).
   @@index([organizationId, finishedAt])
   @@index([status, createdAt])
   @@map("agent_run")
@@ -772,3 +783,4 @@ model ApiKey {
   @@index([organizationId, createdAt])
   @@map("api_key")
 }
+// @end

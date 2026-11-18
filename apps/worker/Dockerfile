@@ -33,7 +33,7 @@ COPY --from=prune /app/out/full/packages/db/prisma/schema.prisma ./packages/db/p
 RUN npm ci --no-audit --fund=false
 
 # ── migrate: the one-shot `prisma migrate deploy` image ─────────────────────
-# Used by docker-compose.prod.yml's `migrate` service. The Prisma CLI is a dev
+# Used by the production compose file's `migrate` service. The Prisma CLI is a dev
 # dependency, which the runtime image below prunes away, so migrations run from
 # the full install instead (it shares this file's cached `npm ci` layer, so it
 # costs no extra install). Build it with `--target migrate`.

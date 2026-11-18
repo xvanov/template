@@ -1,0 +1,453 @@
+{
+  "$comment": "The template's modules, read by scripts/new-app.mjs. template/README.md explains every field and the @module: markers.",
+  "templateOnly": [
+    "CLAUDE.md",
+    "README.md",
+    "template/",
+    "scripts/new-app.mjs",
+    "scripts/new-app.sh",
+    "scripts/new-app.test.mjs",
+    "scripts/test-profiles.sh",
+    "scripts/check-profiles.sh",
+    ".github/workflows/profiles.yml"
+  ],
+  "sharedPaths": [
+    {
+      "path": "apps/mobile/app/device.tsx",
+      "when": "push-mobile|glasses"
+    }
+  ],
+  "envJson": ["apps/mobile/eas.json"],
+  "leftoverIgnore": [
+    "packages/evals/fixtures/",
+    "packages/evals/golden/",
+    "packages/evals/baselines/",
+    "packages/rag/test/",
+    "packages/api/test/docs.int.test.ts"
+  ],
+  "templateLeftovers": [
+    "scripts/new-app",
+    "test-profiles\\.sh",
+    "check-profiles\\.sh",
+    "template/modules\\.json",
+    "@module:"
+  ],
+  "modules": {
+    "core": {
+      "description": "web (Next.js + tRPC API), worker, Postgres/Prisma, auth + orgs, jobs, storage, outbound email guard, operator alerts, UI kit, smoke gate"
+    },
+    "ops": {
+      "description": "production on one Docker host: deploy/rollback, backup/restore, collation repair test, systemd units, docs/deploy.md",
+      "paths": [
+        "docker-compose.prod.yml",
+        ".env.deploy.example",
+        "docs/deploy.md",
+        "scripts/deploy.sh",
+        "scripts/backup.sh",
+        "scripts/restore.sh",
+        "scripts/lib/prod.sh",
+        "scripts/lib/migration-guard.sh",
+        "scripts/test-backup-restore.sh",
+        "scripts/test-collation.sh",
+        "scripts/test-deploy-selfexec.sh",
+        "scripts/test-migration-guard.sh",
+        "ops/systemd/app-backup.service",
+        "ops/systemd/app-backup.timer",
+        "ops/systemd/app-deploy.service",
+        "ops/systemd/app-deploy.timer",
+        "ops/systemd/app-failure@.service"
+      ],
+      "leftovers": [
+        "scripts/deploy\\.sh",
+        "scripts/backup\\.sh",
+        "docker-compose\\.prod",
+        "docs/deploy\\.md",
+        "make test-ops",
+        "\\.env\\.deploy"
+      ]
+    },
+    "ai": {
+      "description": "LLM calls by provider/model (Anthropic, OpenAI, Azure, local, Claude Code), priced and capped per tenant; transcription",
+      "paths": [
+        "packages/ai/",
+        "scripts/claude-bridge/",
+        "ops/systemd/claude-bridge.service",
+        "packages/api/src/routers/ai.ts",
+        "packages/api/test/describe-image.int.test.ts",
+        "apps/web/src/app/api/media/transcribe/",
+        "apps/web/src/app/api/media/transcribe.int.test.ts",
+        "apps/mobile/components/dictate-button.tsx"
+      ],
+      "tables": ["llm_call"],
+      "npmDeps": {
+        "apps/mobile/package.json": ["expo-audio"]
+      },
+      "scripts": {
+        "package.json": ["ai:live"]
+      },
+      "env": [
+        "LLM_BASE_URL",
+        "LLM_API_KEY",
+        "LLM_MODEL",
+        "LLM_INPUT_COST_PER_MTOK",
+        "LLM_OUTPUT_COST_PER_MTOK",
+        "LLM_ENABLED",
+        "LLM_MODEL_FAST",
+        "LLM_MODEL_SMART",
+        "LLM_EMBEDDING_MODEL",
+        "LLM_EFFORT",
+        "LLM_DAILY_CAP_USD",
+        "LLM_PRICES",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_API_VERSION",
+        "OPENROUTER_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "CLAUDE_BIN",
+        "CLAUDE_CLI_TIMEOUT_SECONDS",
+        "CLAUDE_BRIDGE_URL",
+        "CLAUDE_BRIDGE_KEY",
+        "LLM_TRANSCRIBE_MODEL",
+        "LLM_TRANSCRIBE_BASE_URL",
+        "LLM_TRANSCRIBE_COST_PER_MINUTE"
+      ],
+      "leftovers": [
+        "@repo/ai\\b",
+        "\\bllmCall\\b",
+        "\\bLlmCall\\b",
+        "\\bllm_call\\b",
+        "claude-bridge",
+        "trpc\\.ai\\.",
+        "/api/media/transcribe"
+      ]
+    },
+    "agent": {
+      "description": "agent runs in the worker; write tools become proposals a person approves; org API keys + MCP endpoint",
+      "requires": ["ai"],
+      "paths": [
+        "packages/agent/",
+        "packages/api/src/routers/agent.ts",
+        "packages/api/src/routers/api-keys.ts",
+        "packages/api/src/mcp.ts",
+        "packages/api/src/api-keys.ts",
+        "packages/api/test/agent.int.test.ts",
+        "apps/web/src/app/api/mcp/",
+        "apps/web/src/app/app/agent/",
+        "apps/web/src/components/agent-page.tsx",
+        "apps/web/src/components/api-keys-panel.tsx",
+        "apps/web/e2e/agent.spec.ts",
+        "apps/mobile/app/proposal/",
+        "packages/db/prisma/migrations/20261117170640_agent_proposals_api_keys/",
+        "packages/db/prisma/migrations/20261118030000_agent_run_finished_index/"
+      ],
+      "tables": ["agent_run", "agent_step", "agent_proposal", "api_key"],
+      "env": [
+        "AGENT_TIER",
+        "AGENT_MAX_STEPS",
+        "AGENT_MAX_COST_USD",
+        "MCP_RATE_LIMIT_PER_MINUTE"
+      ],
+      "leftovers": [
+        "@repo/agent\\b",
+        "\\bagentRun\\b",
+        "\\bagentProposal\\b",
+        "\\bAgentRun\\b",
+        "\\bAgentProposal\\b",
+        "\\bapi_key\\b",
+        "/api/mcp",
+        "/app/agent",
+        "trpc\\.agent\\.",
+        "trpc\\.apiKeys\\.",
+        "\\bApiKeyIdentity\\b",
+        "\\.apiKey\\b"
+      ]
+    },
+    "rag": {
+      "description": "documents: chunk, embed (pgvector) + Postgres full-text, hybrid search, cited answers; /app/docs",
+      "requires": ["ai"],
+      "paths": [
+        "packages/rag/",
+        "packages/api/src/routers/docs.ts",
+        "packages/api/test/docs.int.test.ts",
+        "packages/agent/src/tools/docs.ts",
+        "apps/web/src/app/app/docs/",
+        "apps/web/src/components/docs-page.tsx",
+        "apps/web/e2e/docs.spec.ts",
+        "packages/db/prisma/migrations/20261117231835_rag_documents/"
+      ],
+      "tables": ["document", "document_chunk"],
+      "leftovers": [
+        "@repo/rag\\b",
+        "\\bdocumentChunk\\b",
+        "\\bdocument_chunk\\b",
+        "/app/docs",
+        "trpc\\.docs\\.",
+        "docs\\.ingest"
+      ]
+    },
+    "evals": {
+      "description": "eval harness: golden sets, graders, retrieval metrics, baselines (npm run eval)",
+      "requires": ["rag"],
+      "paths": ["packages/evals/"],
+      "scripts": {
+        "package.json": ["eval"]
+      },
+      "leftovers": ["@repo/evals\\b", "npm run eval"]
+    },
+    "inbound": {
+      "description": "email that ARRIVES: routed to a tenant, stored, processed by the worker; /app/inbox",
+      "paths": [
+        "packages/inbound/",
+        "packages/api/src/routers/inbox.ts",
+        "packages/api/test/inbox.int.test.ts",
+        "apps/web/src/app/app/inbox/",
+        "apps/web/src/components/inbox-page.tsx",
+        "apps/web/src/app/api/webhooks/email-inbound/",
+        "apps/web/src/lib/inbound-queue.ts",
+        "apps/web/e2e/inbox.spec.ts",
+        "apps/mobile/app/inbox/"
+      ],
+      "tables": ["inbound_message", "inbound_route"],
+      "env": ["INBOUND_EMAIL_DOMAIN"],
+      "leftovers": [
+        "@repo/inbound\\b",
+        "\\binboundMessage\\b",
+        "\\binboundRoute\\b",
+        "\\binbound_message\\b",
+        "/app/inbox",
+        "trpc\\.inbox\\.",
+        "inbound\\.process",
+        "email-inbound",
+        "fetchReceivedEmail",
+        "downloadReceivedAttachment",
+        "\\binboundEmail\\b",
+        "\\bReceivedEmail\\b"
+      ]
+    },
+    "sms": {
+      "description": "SMS by Twilio through the outbound guard; texts that arrive land in the inbox; STOP/START",
+      "requires": ["inbound"],
+      "paths": [
+        "packages/sms/",
+        "packages/inbound/src/sms.ts",
+        "apps/web/src/app/api/webhooks/twilio/",
+        "apps/web/e2e/sms.spec.ts"
+      ],
+      "env": [
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_FROM_NUMBER",
+        "TWILIO_WEBHOOK_BASE_URL"
+      ],
+      "leftovers": [
+        "@repo/sms\\b",
+        "/api/webhooks/twilio",
+        "sms\\.reconcile",
+        "\\bsendSms\\b"
+      ]
+    },
+    "mobile": {
+      "description": "Expo app (expo-router + NativeWind) on the same API: sign-in, items, photos; Expo Go or EAS builds",
+      "paths": ["apps/mobile/"],
+      "scripts": {
+        "package.json": ["dev:mobile", "dev:mobile:dev-client"]
+      },
+      "env": [
+        "EXPO_PUBLIC_API_URL",
+        "APP_SCHEME",
+        "MOBILE_APP_NAME",
+        "MOBILE_APP_SLUG",
+        "MOBILE_BUNDLE_ID",
+        "EAS_PROJECT_ID",
+        "EXPO_OWNER",
+        "EXPO_PUBLIC_DEV_MAIL_INBOX_URL"
+      ],
+      "turboTasks": ["mobile#lint"],
+      "leftovers": ["apps/mobile", "@better-auth/expo", "make mobile"],
+      "npmDeps": {
+        "packages/auth/package.json": ["@better-auth/expo"]
+      }
+    },
+    "push-mobile": {
+      "description": "push notifications to the mobile app (Expo push → APNs/FCM) through the outbound guard",
+      "requires": ["mobile"],
+      "paths": [
+        "packages/push-mobile/",
+        "packages/api/src/routers/push.ts",
+        "packages/api/test/push.int.test.ts",
+        "apps/mobile/lib/push.ts",
+        "apps/mobile/lib/use-push.ts",
+        "apps/mobile/components/push-registrar.tsx",
+        "packages/db/prisma/migrations/20261118120000_push_device/",
+        "apps/mobile/lib/push-route.ts",
+        "apps/mobile/lib/push-route.test.ts"
+      ],
+      "tables": ["push_device"],
+      "npmDeps": {
+        "apps/mobile/package.json": ["expo-notifications", "expo-device"]
+      },
+      "env": ["EXPO_ACCESS_TOKEN"],
+      "leftovers": [
+        "@repo/push-mobile\\b",
+        "\\bpushDevice\\b",
+        "\\bpush_device\\b",
+        "\\bqueueAppPush\\b",
+        "push\\.receipts",
+        "push\\.notify",
+        "expo-notifications"
+      ]
+    },
+    "glasses": {
+      "description": "Meta glasses: native module slot in the mobile app, capture → describe → speak, Display glance page",
+      "requires": ["mobile", "ai"],
+      "paths": [
+        "apps/mobile/modules/glasses/",
+        "apps/mobile/app/glasses.tsx",
+        "apps/mobile/lib/glasses/",
+        "apps/web/src/app/app/glasses/",
+        "apps/web/src/components/glasses-page.tsx",
+        "apps/web/src/app/glance/",
+        "apps/web/src/lib/glance-html.ts",
+        "apps/web/src/lib/glance-html.test.ts",
+        "apps/web/e2e/glance.spec.ts",
+        "packages/api/src/glance.ts",
+        "packages/api/src/routers/glance.ts",
+        "packages/api/test/glance.int.test.ts",
+        "packages/db/prisma/migrations/20261118150000_glance_link/",
+        "apps/mobile/app/+native-intent.tsx"
+      ],
+      "tables": ["glance_link"],
+      "npmDeps": {
+        "apps/mobile/package.json": ["expo-speech", "expo-image-manipulator"]
+      },
+      "env": [
+        "GLASSES_ENABLED",
+        "GLASSES_META_APP_ID",
+        "GLASSES_CLIENT_TOKEN",
+        "GLASSES_MOCK_DEVICE",
+        "GLASSES_IOS_EXPERIMENTAL",
+        "GLASSES_ANALYTICS_OPT_OUT",
+        "GLASSES_CRASH_REPORTING_OPT_OUT",
+        "GLASSES_DAT_VERSION"
+      ],
+      "leftovers": [
+        "\\bglanceLink\\b",
+        "\\bglance_link\\b",
+        "modules/glasses",
+        "/app/glasses",
+        "trpc\\.glance\\."
+      ]
+    },
+    "desktop": {
+      "description": "Tauri 2 desktop shell (Windows/macOS/Linux) around the deployed web app; its own CI workflow",
+      "paths": [
+        "apps/desktop/",
+        "packages/api/src/routers/desktop.ts",
+        "packages/api/test/desktop.int.test.ts",
+        ".github/workflows/desktop.yml",
+        ".github/actions/desktop-setup/"
+      ],
+      "leftovers": [
+        "apps/desktop",
+        "make desktop",
+        "desktop\\.feed",
+        "tauri",
+        "\\bTauri\\b"
+      ]
+    },
+    "ml": {
+      "description": "Python sidecar (uv): training, experiments, vLLM serving; the worker's ml.predict bridge",
+      "paths": [
+        "ml/",
+        ".github/workflows/ml.yml",
+        "packages/jobs/src/ml.ts",
+        "packages/jobs/src/ml.test.ts",
+        "apps/worker/src/ml-predict.ts"
+      ],
+      "scripts": {
+        "apps/worker/package.json": ["ml:predict"]
+      },
+      "env": [
+        "ML_ENABLED",
+        "ML_PROJECT_DIR",
+        "ML_UV_BIN",
+        "ML_TIMEOUT_SECONDS"
+      ],
+      "leftovers": [
+        "ml\\.predict",
+        "predictItems",
+        "uv run (train|predict|exp|pytest)",
+        "\\bml/",
+        "cd ml\\b"
+      ]
+    },
+    "hackathon": {
+      "description": "make doctor / demo / freeze, a seeded demo workspace, docs/hackathon.md",
+      "paths": [
+        "scripts/doctor.sh",
+        "scripts/demo.sh",
+        "scripts/freeze.sh",
+        "docs/hackathon.md",
+        "apps/worker/src/demo/"
+      ],
+      "scripts": {
+        "apps/worker/package.json": ["demo:seed"]
+      },
+      "leftovers": [
+        "make doctor",
+        "make demo",
+        "make freeze",
+        "docs/hackathon\\.md",
+        "demo:seed"
+      ]
+    }
+  },
+  "profiles": {
+    "full": {
+      "description": "everything: the template itself",
+      "modules": [
+        "ops",
+        "ai",
+        "agent",
+        "rag",
+        "evals",
+        "inbound",
+        "sms",
+        "mobile",
+        "push-mobile",
+        "glasses",
+        "desktop",
+        "ml",
+        "hackathon"
+      ]
+    },
+    "web": {
+      "description": "browser-only app with production deploy; no AI, mobile, desktop or Python",
+      "modules": ["ops"]
+    },
+    "web-ai": {
+      "description": "web + AI: LLM calls, agent with approvals + MCP, document search, evals",
+      "modules": ["ops", "ai", "agent", "rag", "evals"]
+    },
+    "mobile": {
+      "description": "web + the Expo mobile app with push notifications",
+      "modules": ["ops", "mobile", "push-mobile"]
+    },
+    "desktop": {
+      "description": "web + the Tauri desktop shell",
+      "modules": ["ops", "desktop"]
+    },
+    "glasses": {
+      "description": "web + mobile + AI + the Meta glasses module",
+      "modules": ["ops", "ai", "mobile", "push-mobile", "glasses"]
+    },
+    "hackathon": {
+      "description": "fast start: web + AI (agent, docs, evals) + Python ML + doctor/demo/freeze; no production deploy kit",
+      "modules": ["ai", "agent", "rag", "evals", "ml", "hackathon"]
+    }
+  }
+}

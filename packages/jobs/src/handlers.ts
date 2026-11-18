@@ -13,22 +13,25 @@
  *             `organizationId`, and the worker rejects payloads that carry one.
  */
 import { z } from "zod";
-import { abandonStaleRuns, executeRun } from "@repo/agent";
+import { abandonStaleRuns, executeRun } from "@repo/agent"; // @module:agent
 import { db } from "@repo/db";
-import { env } from "@repo/env";
-import { markInboundFailed, processInbound } from "@repo/inbound";
+import { env } from "@repo/env"; // @module:ml
+import { markInboundFailed, processInbound } from "@repo/inbound"; // @module:inbound
 import { runOperatorTick } from "@repo/notify";
+// @module:push-mobile
 import {
   checkMobilePushReceipts,
   mobilePushEnabled,
   notifyAppEvent,
   type AppEvent,
 } from "@repo/push-mobile";
-import { ingestDocument, markIngestFailed, sweepStaleIngests } from "@repo/rag";
-import { reconcileSmsDelivery } from "@repo/sms";
+// @end
+import { ingestDocument, markIngestFailed, sweepStaleIngests } from "@repo/rag"; // @module:rag
+import { reconcileSmsDelivery } from "@repo/sms"; // @module:sms
 
-import { predictItems } from "./ml";
-import { enqueue } from "./queue";
+import { predictItems } from "./ml"; // @module:ml
+import { enqueue } from "./queue"; // @module:push-mobile|inbound
+// @module:ai
 import {
   ask,
   LlmBudgetExceededError,
@@ -36,6 +39,7 @@ import {
   llmEnabled,
   LlmUnpricedError,
 } from "@repo/ai";
+// @end
 
 const schemas = {
   /** Demo job: summarise a tenant's open items with the LLM. */
@@ -44,12 +48,15 @@ const schemas = {
     userId: z.string().optional(),
   }),
 
+  // @module:agent
   /** Execute one agent run (packages/agent). Started by `agent.start`. */
   "agent.run": z.object({
     organizationId: z.string().min(1),
     runId: z.string().min(1),
   }),
+  // @end
 
+  // @module:ml
   /**
    * Example of the Python bridge (./ml.ts): score a tenant's open items with
    * the toy model trained in ml/. Needs ML_ENABLED and `cd ml && uv run train`.
@@ -57,7 +64,9 @@ const schemas = {
   "ml.predict": z.object({
     organizationId: z.string().min(1),
   }),
+  // @end
 
+  // @module:rag
   /** Chunk + embed one document (packages/rag). Idempotent by content hash. */
   "docs.ingest": z.object({
     organizationId: z.string().min(1),
@@ -65,7 +74,9 @@ const schemas = {
     /** Rebuild even if the content hash says nothing changed. */
     force: z.boolean().optional(),
   }),
+  // @end
 
+  // @module:inbound
   /**
    * Finish an inbound message the webhook stored (packages/inbound): fetch
    * its content, attachments into storage, thread it. Idempotent.
@@ -74,7 +85,9 @@ const schemas = {
     organizationId: z.string().min(1),
     inboundMessageId: z.string().min(1),
   }),
+  // @end
 
+  // @module:push-mobile
   /**
    * Push "something wants you" to the app (packages/push-mobile): a pending
    * proposal or a new inbound message. Queued by `queueAppPush`; one job per
@@ -83,15 +96,22 @@ const schemas = {
    */
   "push.notify": z.object({
     organizationId: z.string().min(1),
-    kind: z.enum(["proposal", "inbound"]),
+    kind: z.enum([
+      "item",
+      "proposal", // @module:agent
+      "inbound", // @module:inbound
+    ]),
     id: z.string().min(1),
   }),
 
   /** Expo push receipts: record delivery, disable uninstalled devices (every 15 min). */
   "push.receipts": z.object({}),
+  // @end
 
+  // @module:sms
   /** Ask Twilio about texts whose delivery status never arrived (every 30 min). */
   "sms.reconcile": z.object({}),
+  // @end
 
   /** Demo scheduled job: prune soft state and log a heartbeat. */
   "maintenance.nightly": z.object({}),
@@ -147,40 +167,17 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
         select: { title: true, notes: true },
       });
       if (items.length === 0) return { summary: "Nothing open." };
-      const fallback = (why: string) => ({
-        summary: `${items.length} open items (${why}).`,
-      });
-      if (!llmEnabled("fast")) return fallback("LLM disabled");
-
-      let result;
-      try {
-        result = await ask({
-          purpose: "items.summarize",
-          tier: "fast",
-          // A summary is nice to have: it stops at the tenant's daily cap.
-          priority: "discretionary",
-          organizationId,
-          userId,
-          maxOutputTokens: 2048,
-          effort: "low",
-          system: "You summarise task lists in two sentences. Be concrete.",
-          prompt: items
-            .map((i) => `- ${i.title}${i.notes ? `: ${i.notes}` : ""}`)
-            .join("\n"),
-        });
-      } catch (err) {
-        // Expected states, not failures: the job still produces a summary.
-        if (err instanceof LlmBudgetExceededError)
-          return fallback("daily AI budget reached");
-        if (err instanceof LlmUnpricedError)
-          return fallback("AI model has no price configured");
-        if (err instanceof LlmDisabledError) return fallback("LLM disabled");
-        throw err;
-      }
-      return { summary: result.text, costUsd: result.costUsd };
+      let result: { summary: string; costUsd?: number } = {
+        summary: `${items.length} open items.`,
+      };
+      // @module:ai
+      result = await summarizeWithLlm(items, organizationId, userId);
+      // @end
+      return result;
     },
   },
 
+  // @module:agent
   "agent.run": {
     scope: "org",
     schema: schemas["agent.run"],
@@ -188,6 +185,7 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     // and a redelivered job finds the run already claimed: no double runs.
     run: async (payload) => {
       const outcome = await executeRun(payload);
+      // @module:push-mobile
       // Its proposals wait for a person: tell their phone.
       const pending = await db.agentProposal.findMany({
         where: {
@@ -203,10 +201,13 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
           id: p.id,
         });
       }
+      // @end
       return outcome;
     },
   },
+  // @end
 
+  // @module:ml
   "ml.predict": {
     scope: "org",
     schema: schemas["ml.predict"],
@@ -241,7 +242,9 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
       };
     },
   },
+  // @end
 
+  // @module:rag
   "docs.ingest": {
     scope: "org",
     schema: schemas["docs.ingest"],
@@ -255,43 +258,54 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     // retries: the document must not stay "indexing" forever.
     onFinalFailure: (payload, err) => markIngestFailed(payload, err),
   },
+  // @end
 
+  // @module:inbound
   "inbound.process": {
     scope: "org",
     schema: schemas["inbound.process"],
     run: async (payload) => {
       const result = await processInbound(payload);
+      // @module:push-mobile
       if (result.status === "processed") {
         await queueAppPush(payload.organizationId, {
           kind: "inbound",
           id: payload.inboundMessageId,
         });
       }
+      // @end
       return result;
     },
     // Retries used up (Resend unreachable for minutes, storage down): the
     // row shows "failed" and why, instead of "received" forever.
     onFinalFailure: (payload, err) => markInboundFailed(payload, err),
   },
+  // @end
 
+  // @module:push-mobile
   "push.notify": {
     scope: "org",
     schema: schemas["push.notify"],
     run: ({ organizationId, kind, id }) =>
       notifyAppEvent(organizationId, { kind, id }),
   },
+  // @end
 
+  // @module:push-mobile
   "push.receipts": {
     scope: "system",
     schema: schemas["push.receipts"],
     run: () => checkMobilePushReceipts(),
   },
+  // @end
 
+  // @module:sms
   "sms.reconcile": {
     scope: "system",
     schema: schemas["sms.reconcile"],
     run: () => reconcileSmsDelivery(),
   },
+  // @end
 
   "maintenance.nightly": {
     scope: "system",
@@ -320,22 +334,28 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     scope: "system",
     schema: schemas["operator.digest"],
     // Due-ness is decided inside (NOTIFY_DIGEST_TIMES in APP_TIMEZONE): most
-    // ticks retry nothing and find no digest due. The same tick fails documents
-    // stuck in indexing for over an hour, and agent
-    // runs a dead worker left "running" (past runCutoffMs()), so a stuck run
-    // shows as failed within ~15 minutes of its cutoff, not the next night.
+    // ticks retry nothing and find no digest due. The same tick sweeps up work
+    // a lost job left in flight, so it shows as failed within ~15 minutes, not
+    // the next night.
     run: async () => {
+      // @module:agent
+      // Agent runs a dead worker left "running" (past runCutoffMs()).
       const abandonedAgentRuns = await abandonStaleRuns(db);
-      // Same idea for documents a lost docs.ingest job left "indexing".
+      // @end
+      // @module:rag
+      // Documents a lost docs.ingest job left "indexing" for over an hour.
       const abandonedIngests = await sweepStaleIngests();
-      // ...and inbound messages whose job was never queued (Redis was down
+      // @end
+      // @module:inbound
+      // Inbound messages whose job was never queued (Redis was down
       // when the webhook stored them).
       const requeuedInbound = await requeueStuckInbound();
+      // @end
       return {
         ...(await runOperatorTick()),
-        abandonedAgentRuns,
-        abandonedIngests,
-        requeuedInbound,
+        abandonedAgentRuns, // @module:agent
+        abandonedIngests, // @module:rag
+        requeuedInbound, // @module:inbound
       };
     },
   },
@@ -354,6 +374,46 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
   },
 };
 
+// @module:ai
+/** The LLM half of items.summarize. AI off or over budget is an outcome, not a failure. */
+async function summarizeWithLlm(
+  items: { title: string; notes: string | null }[],
+  organizationId: string,
+  userId: string | undefined,
+): Promise<{ summary: string; costUsd?: number }> {
+  const fallback = (why: string) => ({
+    summary: `${items.length} open items (${why}).`,
+  });
+  if (!llmEnabled("fast")) return fallback("LLM disabled");
+  try {
+    const result = await ask({
+      purpose: "items.summarize",
+      tier: "fast",
+      // A summary is nice to have: it stops at the tenant's daily cap.
+      priority: "discretionary",
+      organizationId,
+      userId,
+      maxOutputTokens: 2048,
+      effort: "low",
+      system: "You summarise task lists in two sentences. Be concrete.",
+      prompt: items
+        .map((i) => `- ${i.title}${i.notes ? `: ${i.notes}` : ""}`)
+        .join("\n"),
+    });
+    return { summary: result.text, costUsd: result.costUsd };
+  } catch (err) {
+    // Expected states, not failures: the job still produces a summary.
+    if (err instanceof LlmBudgetExceededError)
+      return fallback("daily AI budget reached");
+    if (err instanceof LlmUnpricedError)
+      return fallback("AI model has no price configured");
+    if (err instanceof LlmDisabledError) return fallback("LLM disabled");
+    throw err;
+  }
+}
+// @end
+
+// @module:push-mobile
 /**
  * Queue a mobile push about an event (push.notify). Never throws: a push is
  * a courtesy, and the work that produced the event (an agent run, an inbound
@@ -385,7 +445,9 @@ export async function queueAppPush(
     );
   }
 }
+// @end
 
+// @module:inbound
 /**
  * Inbound messages still "received" 10 minutes after arriving: their
  * `inbound.process` job was never queued or was lost. Queue them again; the
@@ -414,6 +476,7 @@ async function requeueStuckInbound(): Promise<number> {
   }
   return stuck.length;
 }
+// @end
 
 export function isJobName(name: string): name is JobName {
   return name in handlers;

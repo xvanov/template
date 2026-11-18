@@ -22,9 +22,11 @@ import {
   TOOLS,
   toolSpec,
 } from "@repo/agent";
-import { enqueue, queueAppPush } from "@repo/jobs";
+import { enqueue } from "@repo/jobs";
+import { queueAppPush } from "@repo/jobs"; // @module:push-mobile
 
 import { ConflictError, NotFoundError } from "../errors";
+import { afterItemCreated } from "../item-events";
 import { createTRPCRouter, orgProcedure, rateLimited } from "../trpc";
 
 const id = z.string().min(1).max(64);
@@ -269,26 +271,35 @@ export const agentRouter = createTRPCRouter({
         input: input.input,
         audit: ctx.audit,
       });
+      // @module:push-mobile
       // From an MCP client, the key's owner is not looking at the app: push.
       // (A proposal you just made yourself in the app needs no push.)
       if (ctx.apiKey) {
         await queueAppPush(ctx.organizationId, { kind: "proposal", id: p.id });
       }
+      // @end
       return p;
     }),
 
   /** Apply a proposal, optionally with an edited input (re-validated). */
   approve: orgProcedure
     .input(z.object({ id, input: z.unknown().optional() }))
-    .mutation(({ ctx, input }) =>
-      approveProposal(ctx.db, {
+    .mutation(async ({ ctx, input }) => {
+      const r = await approveProposal(ctx.db, {
         organizationId: ctx.organizationId,
         proposalId: input.id,
         reviewerId: ctx.user.id,
         ...(input.input !== undefined ? { editedInput: input.input } : {}),
         audit: ctx.audit,
-      }),
-    ),
+      });
+      // The same follow-up as an item created in the app (item-events.ts).
+      if (r.status === "applied" && r.tool === "items_create") {
+        const created = r.result as { id?: unknown } | null;
+        if (typeof created?.id === "string")
+          await afterItemCreated(ctx.organizationId, created.id);
+      }
+      return r;
+    }),
 
   reject: orgProcedure
     .input(z.object({ id, reason: z.string().trim().max(500).optional() }))

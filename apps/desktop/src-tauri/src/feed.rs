@@ -19,7 +19,7 @@ pub const INTERVAL: Duration = Duration::from_secs(30);
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct Event {
     pub key: String,
-    /// "proposal" | "inbound" | "agent_run" (anything else: a generic label).
+    /// "item" | "proposal" | "inbound" | "agent_run" (anything else: a generic label).
     #[serde(default)]
     pub kind: String,
     pub title: String,
@@ -63,6 +63,7 @@ pub fn notes(events: &[&Event], details: bool, app: &str) -> Vec<Note> {
                 list[0].title.clone()
             } else {
                 match kind {
+                    "item" => format!("{n} new items"),
                     "proposal" => format!("{n} approvals waiting"),
                     "inbound" => format!("{n} new messages"),
                     "agent_run" => format!("{n} agent runs finished"),

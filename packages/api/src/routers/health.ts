@@ -6,7 +6,7 @@
  * container healthcheck both call it.
  */
 import { connection } from "@repo/jobs";
-import { llmEnabled } from "@repo/ai";
+import { llmEnabled } from "@repo/ai"; // @module:ai
 import { env } from "@repo/env";
 
 import { createTRPCRouter, publicProcedure } from "../trpc";
@@ -41,7 +41,7 @@ export const healthRouter = createTRPCRouter({
       version: resolveVersion(),
       checks,
       features: {
-        llm: llmEnabled(),
+        llm: llmEnabled(), // @module:ai
         storage: env().STORAGE_DRIVER,
       },
     };

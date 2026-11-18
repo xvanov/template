@@ -7,7 +7,7 @@
  *
  * A write here only records the document as `pending`. Chunking and
  * embedding are slow and can fail, so the caller enqueues `docs.ingest`
- * after the transaction commits (CLAUDE.md rule 5).
+ * after the transaction commits (docs/guide.md rule 5).
  */
 import type { Prisma } from "@repo/db";
 import {

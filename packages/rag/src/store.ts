@@ -2,7 +2,7 @@
  * Every query that touches `document_chunk.embedding` or `.tsv` — the two
  * columns Prisma cannot read — lives here, and nowhere else.
  *
- * Rules (the raw-SQL edition of CLAUDE.md rule 2):
+ * Rules (the raw-SQL edition of docs/guide.md rule 2):
  *  - `organizationId` is a parameter of every function and is in EVERY
  *    WHERE clause, including the joins. There is no "by id" helper.
  *  - Only tagged templates (`$queryRaw\`...${x}\``): every value is a bind

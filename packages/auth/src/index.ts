@@ -16,7 +16,7 @@
  * real BETTER_AUTH_SECRET and DATABASE_URL. An image should build once and run
  * in any environment.
  */
-import { expo } from "@better-auth/expo";
+import { expo } from "@better-auth/expo"; // @module:mobile
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { organization } from "better-auth/plugins";
@@ -30,7 +30,7 @@ import { redisRateLimitStorage } from "./rate-limit-storage";
 /**
  * Inferred from `build`, not annotated as `ReturnType<typeof betterAuth>`:
  * betterAuth's return type is parameterised by the exact options object, and the
- * generic form loses the plugin-derived endpoints (organization, expo).
+ * generic form loses the plugin-derived endpoints (organization, ...).
  */
 type AuthInstance = ReturnType<typeof build>;
 
@@ -48,11 +48,13 @@ function build() {
   const trustedOrigins = [
     e.APP_URL,
     e.BETTER_AUTH_URL ?? e.APP_URL,
+    // @module:mobile
     // Expo deep link back into the native app after the OAuth browser hop.
     `${e.APP_SCHEME}://`,
     // Expo dev server, for a phone on the same wifi.
     "http://localhost:8091",
     "exp://",
+    // @end
     ...(e.TRUSTED_ORIGINS?.split(",").map((s) => s.trim()) ?? []),
   ].filter((origin): origin is string => Boolean(origin));
 
@@ -220,9 +222,11 @@ function build() {
           },
         },
       }),
+      // @module:mobile
       // MUST stay last: the Expo plugin wraps responses so the native client can
       // pull the session cookie out of the deep-link callback.
       expo(),
+      // @end
     ],
   });
 }

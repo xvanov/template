@@ -129,9 +129,10 @@ describe("readBodyLimited", () => {
       method: "POST",
       body,
       headers,
-      // @ts-expect-error Node's fetch needs this for a stream body
+      // Node's fetch needs this for a stream body (cast below: whether
+      // RequestInit declares it depends on the installed @types).
       duplex: "half",
-    });
+    } as RequestInit);
 
   it("reads a body within the cap", async () => {
     expect(await readBodyLimited(req("héllo"), 100)).toEqual({

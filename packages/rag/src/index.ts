@@ -7,7 +7,7 @@
  *   answerQuestion(inTx, who, question)                      // answer or "unknown"
  *
  * Keyword search works with the AI off; embeddings make it hybrid. See
- * CLAUDE.md, "Documents and search".
+ * docs/guide.md, "Documents and search".
  */
 export {
   chunkText,

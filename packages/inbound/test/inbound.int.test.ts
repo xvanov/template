@@ -21,7 +21,7 @@ import { storage } from "@repo/storage";
 import {
   ensureEmailAddress,
   handleInboundSms,
-  handleResendEvent,
+  handleResendReceived,
   handleSmsStatus,
   intakeGenericEmail,
   processInbound,
@@ -297,7 +297,7 @@ describe("dedupe and processing", () => {
       emails: { receiving: { get, attachments: { list: vi.fn() } } },
     } as unknown as FakeResend);
 
-    const outcome = await handleResendEvent({
+    const intake = await handleResendReceived({
       type: "email.received",
       data: {
         email_id: emailId,
@@ -307,57 +307,22 @@ describe("dedupe and processing", () => {
         subject: "Re: your quote",
       },
     });
-    if (outcome.kind !== "inbound" || outcome.intake.outcome === "unrouted")
-      throw new Error(`not stored: ${JSON.stringify(outcome)}`);
+    if (!intake || intake.outcome === "unrouted")
+      throw new Error(`not stored: ${JSON.stringify(intake)}`);
     await processInbound({
       organizationId: a.organizationId,
-      inboundMessageId: outcome.intake.id,
+      inboundMessageId: intake.id,
     });
     expect(get).toHaveBeenCalledWith(emailId);
     expect(
       await db.inboundMessage.findUniqueOrThrow({
-        where: { id: outcome.intake.id },
+        where: { id: intake.id },
       }),
     ).toMatchObject({
       provider: "resend",
       text: "Looks good.",
       messageIdHeader: "<abc@customer.test>",
       inReplyTo: "<x@y>",
-    });
-  });
-
-  it("Resend: a permanent bounce marks our message and suppresses the address; a transient one only marks it", async () => {
-    const a = await createTenant("in-bounce");
-    const ours = await sentEmail(a.organizationId);
-    const row = await db.outboundMessage.findUniqueOrThrow({
-      where: { id: ours.id },
-    });
-    const event = (type: string) => ({
-      type: "email.bounced",
-      data: {
-        email_id: row.providerMessageId!,
-        to: [row.recipient],
-        bounce: { type, subType: "General", message: "mailbox does not exist" },
-      },
-    });
-
-    await handleResendEvent(event("Transient"));
-    expect(await findSuppression("email", row.recipient, null)).toBeNull();
-
-    expect(await handleResendEvent(event("Permanent"))).toMatchObject({
-      kind: "delivery",
-      status: "bounced",
-      matched: 1,
-      suppressed: true,
-    });
-    expect(
-      await db.outboundMessage.findUniqueOrThrow({ where: { id: ours.id } }),
-    ).toMatchObject({
-      deliveryStatus: "bounced",
-      deliveryDetail: "Permanent: General: mailbox does not exist",
-    });
-    expect(await findSuppression("email", row.recipient, null)).toMatchObject({
-      organizationId: null,
     });
   });
 });

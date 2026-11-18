@@ -24,11 +24,11 @@ export default async function Home() {
           App template
         </p>
         <h1 className="mt-2 text-4xl font-semibold tracking-tight">
-          One backend. Web and phone.
+          One backend, already running.
         </h1>
         <p className="mt-3 text-base text-muted-foreground">
-          Next.js + Expo sharing a typed tRPC API, Prisma/Postgres, better-auth,
-          a Redis worker, LLM plumbing and file storage — all wired and running.
+          A typed tRPC API, Prisma/Postgres, better-auth, a Redis worker and
+          file storage — all wired and running.
         </p>
       </div>
 
@@ -45,14 +45,16 @@ export default async function Home() {
         <CardContent>
           <ol className="list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
             <li>
-              Sign in, then exercise items, the AI box, an upload and a
-              background job on the dashboard.
+              Sign in, then exercise items, an upload and a background job on
+              the dashboard.
             </li>
+            {/* @module:mobile */}
             <li>
               Run the same thing on your phone:{" "}
               <code className="font-mono">make mobile</code> and scan the QR
               code with Expo Go.
             </li>
+            {/* @end */}
             <li>
               Rename the demo <code className="font-mono">Item</code> model to
               your own domain and delete what you do not need.

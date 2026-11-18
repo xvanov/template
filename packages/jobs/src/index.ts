@@ -1,7 +1,7 @@
 export { QUEUE_NAME, connection, queue, enqueue, closeQueue } from "./queue";
 export {
   handlers,
-  queueAppPush,
+  queueAppPush, // @module:push-mobile
   type JobEntry,
   type JobName,
   type JobPayloads,
@@ -18,6 +18,7 @@ export {
   type JobLike,
 } from "./worker";
 export { SCHEDULES, registerSchedules } from "./schedules";
+// @module:ml
 export {
   MlProcessError,
   predictItems,
@@ -26,3 +27,4 @@ export {
   type PredictItem,
   type PredictResponse,
 } from "./ml";
+// @end

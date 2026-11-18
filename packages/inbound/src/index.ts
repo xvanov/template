@@ -6,8 +6,7 @@
  * The webhooks (apps/web/src/app/api/webhooks/*) verify signatures and call
  * the handlers here; nothing here trusts a request on its own.
  */
-export { handleResendEvent, intakeGenericEmail, resendEvent } from "./email";
-export type { ResendEvent, ResendOutcome } from "./email";
+export { handleResendReceived, intakeGenericEmail } from "./email";
 export { intakeInbound } from "./intake";
 export type { InboundEnvelope, InboundProvider, IntakeResult } from "./intake";
 export {

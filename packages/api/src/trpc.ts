@@ -32,6 +32,7 @@ export interface CreateContextOptions {
   headers: Headers;
 }
 
+// @module:agent
 /**
  * Set when the caller is a machine with an org API key (the MCP endpoint),
  * not a browser session. See ./api-keys.ts: such a caller acts AS the member
@@ -41,20 +42,21 @@ export interface ApiKeyIdentity {
   id: string;
   canWrite: boolean;
 }
+// @end
 
 export interface TRPCContextShape {
   db: typeof db;
   session: Awaited<ReturnType<typeof auth.api.getSession>>;
   headers: Headers;
-  /** Absent/null for a browser session. */
-  apiKey?: ApiKeyIdentity | null;
+  /** Absent/null for a browser session. */ // @module:agent
+  apiKey?: ApiKeyIdentity | null; // @module:agent
 }
 
 export async function createTRPCContext(
   opts: CreateContextOptions,
 ): Promise<TRPCContextShape> {
   const session = await auth.api.getSession({ headers: opts.headers });
-  return { db, session, headers: opts.headers, apiKey: null };
+  return { db, session, headers: opts.headers };
 }
 
 export type TRPCContext = Awaited<ReturnType<typeof createTRPCContext>>;
@@ -163,6 +165,7 @@ export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
 
 export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   const organizationId = await resolveOrganizationId(ctx.db, ctx.session);
+  // @module:agent
   // An API key is bound to ONE organization. resolveOrganizationId falls back
   // to the user's first membership when they left the active org; for a
   // browser that is a convenience, for a key it would be a cross-tenant leak.
@@ -175,6 +178,7 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
       message: "This API key's creator is no longer a member of its workspace.",
     });
   }
+  // @end
   if (!organizationId) {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -302,24 +306,29 @@ function withAudit<C extends TRPCContext & { user: { id: string } }>(
       action,
       targetType: opts.targetType ?? action.split(".")[0] ?? action,
       targetId: opts.targetId,
-      metadata: viaApiKey(opts.metadata, ctx.apiKey),
+      metadata: auditMetadata(opts.metadata, ctx),
       ip: clientIp(ctx.headers),
       userAgent: ctx.headers.get("user-agent"),
     });
   return { ...ctx, organizationId, audit };
 }
 
-/** A change made through an API key says which key, in its audit metadata. */
-function viaApiKey(
+/** The audit metadata; a change made through an API key says which key. */
+function auditMetadata(
   metadata: Prisma.InputJsonValue | undefined,
-  apiKey: ApiKeyIdentity | null | undefined,
+  ctx: TRPCContextShape,
 ): Prisma.InputJsonValue | undefined {
-  if (!apiKey) return metadata;
-  if (metadata === undefined) return { apiKeyId: apiKey.id };
-  if (typeof metadata === "object" && !Array.isArray(metadata)) {
-    return { ...metadata, apiKeyId: apiKey.id };
+  // @module:agent
+  const apiKey = ctx.apiKey;
+  if (apiKey) {
+    if (metadata === undefined) return { apiKeyId: apiKey.id };
+    if (typeof metadata === "object" && !Array.isArray(metadata)) {
+      return { ...metadata, apiKeyId: apiKey.id };
+    }
+    return { value: metadata, apiKeyId: apiKey.id };
   }
-  return { value: metadata, apiKeyId: apiKey.id };
+  // @end
+  return metadata;
 }
 
 /**

@@ -141,9 +141,15 @@ cat <<EOF
   Demo is up:  $URL
   Sign in:     $EMAIL  /  $PASSWORD
 
-  Try:  Dashboard → the items, and the background jobs that ran
-        Documents → search "warranty" or "reschedule"
-        Inbox → a customer asking to move a visit · /design for the UI kit
+  Try:  Dashboard → the items, and the background jobs that ran · /design for the UI kit
+EOF
+# @module:rag
+echo '        Documents → search "warranty" or "reschedule"'
+# @end
+# @module:inbound
+echo "        Inbox → a customer asking to move a visit"
+# @end
+cat <<EOF
   Mail: http://localhost:${MAIL_UI_PORT:-8035}   Logs: logs/demo-web.log, logs/demo-worker.log
 
   Ctrl-C stops the web app and the worker (Postgres/Redis keep running: make down).

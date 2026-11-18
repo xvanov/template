@@ -82,9 +82,10 @@ describe("/api/media/transcribe", () => {
           "content-type": "multipart/form-data; boundary=x",
         },
         body: stream,
-        // @ts-expect-error Node's fetch needs this for a stream body
+        // Node's fetch needs this for a stream body (cast below: whether
+        // RequestInit declares it depends on the installed @types).
         duplex: "half",
-      }),
+      } as RequestInit),
     );
     expect(res.status).toBe(413);
     expect(sent).toBeLessThan(30); // stopped reading near the 20 MB cap

@@ -8,12 +8,12 @@ const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   // No mail library or ntfy call in the web app: send through @repo/email /
-  // @repo/notify (CLAUDE.md rule 8).
+  // @repo/notify (docs/guide.md rule 8).
   ...outboundBoundary({
     mail: "__none__",
     push: "__none__",
-    sms: "__none__",
-    mobilePush: "__none__",
+    sms: "__none__", // @module:sms
+    mobilePush: "__none__", // @module:push-mobile
   }),
   // src/components/ui is vendored shadcn/ui: keep it close to upstream so
   // `shadcn add`/diff stay easy. The React Compiler rules (react-hooks v6+)

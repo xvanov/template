@@ -4,7 +4,7 @@
 #
 # A systemd --user unit, so `claude` runs as the user who is logged in to
 # Claude Code. Install (replace @APP_DIR@ and @APP_NAME@ as for the other
-# units in this directory, see docs/deploy.md):
+# units in this directory):
 #
 #   openssl rand -hex 32 | sed 's/^/CLAUDE_BRIDGE_KEY=/' > ~/.config/@APP_NAME@-bridge.env
 #   echo CLAUDE_BRIDGE_HOST=$(tailscale ip -4) >> ~/.config/@APP_NAME@-bridge.env

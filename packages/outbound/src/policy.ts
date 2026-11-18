@@ -92,7 +92,7 @@ export interface OutboundAttempt {
 /**
  * What the guard learned about a recipient from the database, for the
  * safe-mode check. mobile_push only: the account the device token is
- * registered to (push_device → user), looked up by the guard itself from the
+ * registered to (its device row → user), looked up by the guard itself from the
  * token, never taken from the caller.
  */
 export interface RecipientFacts {

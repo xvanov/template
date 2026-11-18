@@ -118,13 +118,26 @@ export interface GlanceRow {
   at: string;
 }
 
+/** One block of the page: a heading, a count, and (with details) its rows. */
+export interface GlanceSection {
+  key: string;
+  /** The heading ("Open items"). */
+  label: string;
+  count: number;
+  /** Counts-only wording: "3 open items" (`${count} ${noun}`). */
+  noun: string;
+  /** What an empty section says. */
+  empty: string;
+  /** Newest first; empty when the link is counts-only. */
+  rows: GlanceRow[];
+}
+
 export interface GlanceSnapshot {
   /** ISO time the snapshot was taken (server clock). */
   at: string;
   /** False: counts only, and every `rows` is empty. */
   details: boolean;
-  approvals: { count: number; rows: GlanceRow[] };
-  inbox: { unhandled: number; rows: GlanceRow[] };
+  sections: GlanceSection[];
 }
 
 function clip(s: string | null | undefined, max = MAX_TEXT): string | null {
@@ -135,10 +148,10 @@ function clip(s: string | null | undefined, max = MAX_TEXT): string | null {
 }
 
 /**
- * What wants a human in this organization: proposals waiting for approval and
- * the newest unhandled inbound messages. Org-scoped reads only; the same data
- * the desktop shell notifies about (routers/desktop.ts), as current state
- * rather than a change feed.
+ * What wants a human in this organization, as current state: open items,
+ * proposals waiting for approval, the newest unhandled inbound messages
+ * (whichever of those this app has). Org-scoped reads only; the same things
+ * the desktop shell notifies about, as state rather than a change feed.
  */
 export async function glanceSnapshot(
   db: PrismaClient,
@@ -147,22 +160,68 @@ export async function glanceSnapshot(
 ): Promise<GlanceSnapshot> {
   // Counts-only never even reads the rows.
   const take = opts.details ? MAX_ROWS : 0;
-  const [approvalCount, approvals, unhandled, inbound] = await Promise.all([
-    db.agentProposal.count({ where: { organizationId, status: "pending" } }),
+  const sections: GlanceSection[] = [];
+
+  const openItems = { organizationId, done: false };
+  const [itemCount, items] = await Promise.all([
+    db.item.count({ where: openItems }),
+    db.item.findMany({
+      where: openItems,
+      orderBy: { createdAt: "desc" },
+      take,
+      select: { id: true, title: true, createdAt: true },
+    }),
+  ]);
+  sections.push({
+    key: "items",
+    label: "Open items",
+    count: itemCount,
+    noun: "open items",
+    empty: "Nothing open.",
+    rows: items.map((i) => ({
+      id: i.id,
+      title: clip(i.title) ?? "Item",
+      detail: null,
+      at: i.createdAt.toISOString(),
+    })),
+  });
+
+  // @module:agent
+  const pending = { organizationId, status: "pending" };
+  const [approvalCount, approvals] = await Promise.all([
+    db.agentProposal.count({ where: pending }),
     db.agentProposal.findMany({
-      where: { organizationId, status: "pending" },
+      where: pending,
       orderBy: { createdAt: "desc" },
       take,
       select: { id: true, summary: true, createdAt: true },
     }),
-    db.inboundMessage.count({ where: { organizationId, handledAt: null } }),
+  ]);
+  sections.push({
+    key: "approvals",
+    label: "Approvals",
+    count: approvalCount,
+    noun: "waiting for your approval",
+    empty: "Nothing waiting for you.",
+    rows: approvals.map((p) => ({
+      id: p.id,
+      title: clip(p.summary) ?? "Proposal",
+      detail: null,
+      at: p.createdAt.toISOString(),
+    })),
+  });
+  // @end
+
+  // @module:inbound
+  const unhandledWhere = { organizationId, handledAt: null };
+  const [unhandled, inbound] = await Promise.all([
+    db.inboundMessage.count({ where: unhandledWhere }),
     db.inboundMessage.findMany({
-      where: { organizationId, handledAt: null },
+      where: unhandledWhere,
       orderBy: { createdAt: "desc" },
       take,
       select: {
         id: true,
-        channel: true,
         fromAddress: true,
         subject: true,
         snippet: true,
@@ -170,26 +229,20 @@ export async function glanceSnapshot(
       },
     }),
   ]);
-  return {
-    at: new Date().toISOString(),
-    details: opts.details,
-    approvals: {
-      count: approvalCount,
-      rows: approvals.map((p) => ({
-        id: p.id,
-        title: clip(p.summary) ?? "Proposal",
-        detail: null,
-        at: p.createdAt.toISOString(),
-      })),
-    },
-    inbox: {
-      unhandled,
-      rows: inbound.map((m) => ({
-        id: m.id,
-        title: clip(m.fromAddress, 40) ?? "Unknown sender",
-        detail: clip(m.subject) ?? clip(m.snippet),
-        at: m.createdAt.toISOString(),
-      })),
-    },
-  };
+  sections.push({
+    key: "inbox",
+    label: "Inbox",
+    count: unhandled,
+    noun: "unhandled messages",
+    empty: "Inbox is clear.",
+    rows: inbound.map((m) => ({
+      id: m.id,
+      title: clip(m.fromAddress, 40) ?? "Unknown sender",
+      detail: clip(m.subject) ?? clip(m.snippet),
+      at: m.createdAt.toISOString(),
+    })),
+  });
+  // @end
+
+  return { at: new Date().toISOString(), details: opts.details, sections };
 }

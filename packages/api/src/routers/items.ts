@@ -27,6 +27,7 @@ import {
 } from "@repo/domain";
 import { enqueue } from "@repo/jobs";
 
+import { afterItemCreated } from "../item-events";
 import { createTRPCRouter, orgProcedure, rateLimited } from "../trpc";
 
 export const itemsRouter = createTRPCRouter({
@@ -60,11 +61,13 @@ export const itemsRouter = createTRPCRouter({
 
   create: orgProcedure
     .input(createItemInput)
-    .mutation(({ ctx, input }) =>
-      ctx.db.$transaction((tx) =>
+    .mutation(async ({ ctx, input }) => {
+      const item = await ctx.db.$transaction((tx) =>
         createItem(tx, actor(ctx), input, (a, o) => ctx.audit(a, o, tx)),
-      ),
-    ),
+      );
+      await afterItemCreated(ctx.organizationId, item.id);
+      return item;
+    }),
 
   setDone: orgProcedure
     .input(setItemDoneInput)

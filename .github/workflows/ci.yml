@@ -60,6 +60,13 @@ jobs:
           path: .turbo/cache
           key: turbo-static-${{ runner.os }}-${{ github.sha }}
           restore-keys: turbo-static-${{ runner.os }}-
+      # @module:template
+      # Every profile of scripts/new-app.sh still generates (markers, leftovers,
+      # migration trimming), and web's trimmed migrations match its schema. ~4s.
+      - run: bash scripts/check-profiles.sh
+        env:
+          CHECK_DB_URL: postgresql://postgres:postgres@localhost:5432
+      # @end
       - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
@@ -67,19 +74,21 @@ jobs:
       - if: always()
         run: find .turbo/cache -type f -mtime +14 -delete 2>/dev/null || true
 
-  # ── production ops scripts ────────────────────────────────────────────
-  # shellcheck + the migration guard's unit test + a real backup → restore round trip (scripts/backup.sh and
-  # restore.sh against a throwaway Postgres from docker-compose.prod.yml). No
-  # Node install; runs in parallel with the other jobs, so it adds nothing to
-  # the wall-clock time of a PR. The deploy/rollback path is NOT run here: it
-  # needs full image builds and is proven by hand (docs/deploy.md).
+  # ── shell scripts (+ production ops scripts) ──────────────────────────
+  # shellcheck, at the same pinned version as local.
+  # With the ops module: the migration guard's unit test + a real backup → # @module:ops
+  # restore round trip (scripts/backup.sh and restore.sh against a throwaway # @module:ops
+  # Postgres from docker-compose.prod.yml). The deploy/rollback path is NOT # @module:ops
+  # run here: it needs full image builds and is proven by hand (docs/deploy.md). # @module:ops
+  # No Node install; runs in parallel with the other jobs, so it adds nothing
+  # to the wall-clock time of a PR.
   ops:
     name: ops scripts (shellcheck · backup/restore)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make lint-sh SHELLCHECK_DOCKER=1 # same pinned version as local
-      - run: make test-ops
+      - run: make lint-sh SHELLCHECK_DOCKER=1
+      - run: make test-ops # @module:ops
 
   # ── the gate that matters: does the built app actually run? ───────────
   # This job runs scripts/smoke.sh — the SAME script as `make smoke` and the

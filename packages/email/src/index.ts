@@ -26,26 +26,34 @@ import { env } from "@repo/env";
 import { deliver, type DeliveryResult } from "@repo/outbound";
 
 import {
-  downloadReceivedAttachment,
-  fetchReceivedEmail,
+  downloadReceivedAttachment, // @module:inbound
+  fetchReceivedEmail, // @module:inbound
   messageIdFor,
   smtpConfigured,
   transmit,
   useFakeResend,
   type FakeResend,
-  type ReceivedEmail,
+  type ReceivedEmail, // @module:inbound
 } from "./transport";
 
 export {
-  downloadReceivedAttachment,
-  fetchReceivedEmail,
+  downloadReceivedAttachment, // @module:inbound
+  fetchReceivedEmail, // @module:inbound
   messageIdFor,
   smtpConfigured,
   /** Tests only: Resend calls go to this fake (the real SDK is refused under test). */
   useFakeResend,
   type FakeResend,
-  type ReceivedEmail,
+  type ReceivedEmail, // @module:inbound
 };
+
+export {
+  handleResendDelivery,
+  plainEmail,
+  resendEvent,
+  type ResendDeliveryOutcome,
+  type ResendEvent,
+} from "./events";
 
 export interface Mail {
   to: string;

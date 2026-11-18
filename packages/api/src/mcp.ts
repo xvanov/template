@@ -2,7 +2,7 @@
  * The MCP server: this app's capabilities, for MCP clients (Claude Code,
  * Claude Desktop), over streamable HTTP at /api/mcp.
  *
- * Design (see CLAUDE.md, "Agents, proposals and MCP"):
+ * Design (see docs/guide.md, "Agents, proposals and MCP"):
  *  - Auth: a per-organization API key (`Authorization: Bearer tk_...`, see
  *    ./api-keys.ts), created and revoked by owners/admins in the app.
  *  - Every tool calls the SAME tRPC procedure the web app does, through a
@@ -144,6 +144,7 @@ export function createMcpServer(
     (input) => attempt(async () => json(await api.items.list(input))),
   );
 
+  // @module:rag
   server.registerTool(
     "docs_search",
     {
@@ -170,6 +171,7 @@ export function createMcpServer(
         });
       }),
   );
+  // @end
 
   server.registerTool(
     "items_create",

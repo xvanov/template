@@ -18,7 +18,9 @@ packages/db/generated/
 .env
 .env.*
 !.env.example
+# @module:ops
 !.env.deploy.example
+# @end
 
 # local runtime state
 #
@@ -29,9 +31,11 @@ packages/db/generated/
 # ignore rules that could collide with a source path.
 /storage/
 /apps/*/storage/
+# @module:ops
 # production state on the deploy host (scripts/deploy.sh, scripts/backup.sh)
 /.deploy/
 /backups/
+# @end
 coverage/
 test-results/
 playwright-report/
@@ -39,6 +43,7 @@ blob-report/
 *.log
 logs/
 
+# @module:mobile
 # expo / react-native
 .expo/
 .expo-shared/
@@ -51,6 +56,7 @@ apps/mobile/ios/
 *.mobileprovision
 *.orig.*
 web-build/
+# @end
 
 # editors / OS
 .DS_Store
@@ -58,13 +64,16 @@ web-build/
 .vscode/*
 !.vscode/extensions.json
 
+# @module:desktop
 # desktop (apps/desktop): Rust build output and tauri-generated schemas.
 # Updater signing keys never belong in the repo (see apps/desktop/README.md).
 /apps/desktop/src-tauri/target/
 /apps/desktop/src-tauri/gen/
 *.tauri.key
 *.tauri.key.pub
+# @end
 
+# @module:ml
 # ml/ (the Python sidecar, ml/README.md): environments, run outputs, data and
 # model weights never go in git. Commit code, configs, splits/ and experiments/.
 /ml/.venv/
@@ -76,5 +85,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
-# Competition data and credentials, wherever they land (docs/hackathon.md).
+# Competition data and credentials, wherever they land.
 kaggle.json
+# @end

@@ -367,7 +367,7 @@ describe("the registered tools", () => {
     }
     expect(TOOLS.map((t) => [t.name, t.effect])).toEqual([
       ["items_search", "read"],
-      ["docs_search", "read"],
+      ["docs_search", "read"], // @module:rag
       ["items_create", "write"],
       ["items_delete", "write"],
     ]);

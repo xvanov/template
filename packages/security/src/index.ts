@@ -10,7 +10,7 @@
  *   openSecret         AES-256-GCM for third-party tokens at rest, key rotation
  *   constantTimeEqual  for comparing anything secret
  *   readBodyLimited    a request body with a byte cap (webhooks, before HMAC work)
- *   readBytesLimited   the same, as bytes (file uploads: /api/media/transcribe)
+ *   readBytesLimited   the same, as bytes (file uploads)
  */
 export {
   readBodyLimited,

@@ -15,7 +15,7 @@
 -- One transaction: if a rebuild fails (a unique index already holds rows that
 -- are duplicates under the correct order), NOTHING changes, the version is NOT
 -- recorded, and the error (naming the index and the key) stops the caller.
--- That needs a person — see docs/deploy.md, "collation".
+-- That needs a person — see docs/guide.md, "collation".
 --
 -- Why not REINDEX DATABASE: it cannot run in a transaction block, and this
 -- runs through `prisma db execute`, which can only send one script. Tables

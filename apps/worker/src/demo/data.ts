@@ -55,6 +55,7 @@ export const DEMO_ITEMS: {
   },
 ];
 
+// @module:rag
 export const DEMO_DOC = {
   title: "Acme field service handbook",
   content: `# Acme field service handbook
@@ -87,7 +88,9 @@ Invoices are due within 14 days. We accept bank transfer and card. A second
 reminder goes out after 21 days.
 `,
 };
+// @end
 
+// @module:inbound
 export const DEMO_INBOX = {
   providerMessageId: "demo-seed-0001",
   fromAddress: "jordan.lee@example.com",
@@ -101,3 +104,4 @@ Friday morning instead? Happy to pay the call-out fee if it's too late.
 Thanks,
 Jordan Lee`,
 };
+// @end

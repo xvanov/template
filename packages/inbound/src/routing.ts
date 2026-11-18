@@ -26,6 +26,7 @@
 import { randomBytes } from "node:crypto";
 
 import { db as defaultDb, type PrismaClient } from "@repo/db";
+import { plainEmail } from "@repo/email";
 import { env } from "@repo/env";
 import { notifyOperator } from "@repo/notify";
 import { parseRecipient } from "@repo/outbound";
@@ -35,10 +36,7 @@ type Db = Pick<PrismaClient, "inboundRoute" | "outboundMessage">;
 export type InboundChannel = "email" | "sms";
 
 /** `Name <a@x>` / `a@x` → `a@x`, lowercased; null if not one plain address. */
-export function plainEmail(raw: string): string | null {
-  const inner = /<([^<>]+)>\s*$/.exec(raw.trim())?.[1] ?? raw;
-  return parseRecipient("email", inner);
-}
+export { plainEmail };
 
 /** `a+tag@x` → `a@x`; unchanged when there is no tag. */
 export function withoutPlusTag(address: string): string {

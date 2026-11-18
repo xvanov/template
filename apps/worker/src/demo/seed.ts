@@ -21,9 +21,11 @@ import "@repo/env/load";
 import { hashPassword } from "better-auth/crypto";
 import { db } from "@repo/db";
 import { env } from "@repo/env";
-import { documentHash, ingestDocument } from "@repo/rag";
+import { documentHash, ingestDocument } from "@repo/rag"; // @module:rag
 
-import { DEMO_DOC, DEMO_INBOX, DEMO_ITEMS, DEMO_ORG } from "./data";
+import { DEMO_ITEMS, DEMO_ORG } from "./data";
+import { DEMO_DOC } from "./data"; // @module:rag
+import { DEMO_INBOX } from "./data"; // @module:inbound
 import {
   isLocalDatabaseUrl,
   ownershipProblem,
@@ -130,8 +132,8 @@ async function main() {
   const inOrg = { organizationId: org.id };
   await db.$transaction([
     db.item.deleteMany({ where: inOrg }),
-    db.document.deleteMany({ where: inOrg }), // chunks cascade
-    db.inboundMessage.deleteMany({ where: inOrg }),
+    db.document.deleteMany({ where: inOrg }), // @module:rag
+    db.inboundMessage.deleteMany({ where: inOrg }), // @module:inbound
     db.item.createMany({
       data: DEMO_ITEMS.map((item) => ({
         ...item,
@@ -139,6 +141,7 @@ async function main() {
         createdById: user.id,
       })),
     }),
+    // @module:inbound
     db.inboundMessage.create({
       data: {
         ...DEMO_INBOX,
@@ -150,7 +153,11 @@ async function main() {
         processedAt: new Date(),
       },
     }),
+    // @end
   ]);
+  let summary = `items=${DEMO_ITEMS.length}`;
+  // @module:rag
+  // A document's chunks go with it (cascade).
   const doc = await db.document.create({
     data: {
       organizationId: org.id,
@@ -168,10 +175,11 @@ async function main() {
     { organizationId: org.id, documentId: doc.id },
     { embeddingModel: () => null },
   );
+  summary += ` doc=${indexed.status}`;
+  // @end
+  summary += " inbox=1"; // @module:inbound
 
-  console.log(
-    `[demo] org=${org.slug} user=${email} items=${DEMO_ITEMS.length} doc=${indexed.status} inbox=1 (reset)`,
-  );
+  console.log(`[demo] org=${org.slug} user=${email} ${summary} (reset)`);
 }
 
 main()

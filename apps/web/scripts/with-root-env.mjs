@@ -1,13 +1,15 @@
 // Run a command with the monorepo-root .env loaded.
 //
-//   node scripts/with-root-env.mjs next dev --port 3200
+//   node scripts/with-root-env.mjs next dev
 //
 // `next dev` only reads .env files from apps/web, but this repo keeps a single
 // .env at the root — so without this every server render fails with "Invalid
 // environment". Variables already set in the environment win (CI, Docker, the
 // smoke gate), and a missing file is not an error: `@repo/env` reports anything
 // actually absent. It runs before Next starts, so next.config.ts sees the
-// values too (allowedDevOrigins is derived from them).
+// values too (allowedDevOrigins is derived from them). `next dev` / `next
+// start` without a port get WEB_PORT from that .env (default 3200), the same
+// port docker compose publishes the web app on.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -19,6 +21,13 @@ const [command, ...args] = process.argv.slice(2);
 if (!command) {
   console.error("usage: node scripts/with-root-env.mjs <command> [args...]");
   process.exit(2);
+}
+if (
+  command === "next" &&
+  ["dev", "start"].includes(args[0]) &&
+  !args.some((a) => a === "-p" || a.startsWith("--port"))
+) {
+  args.push("--port", process.env.WEB_PORT || "3200");
 }
 
 // No shell on POSIX: an intermediate `sh` does not reliably forward SIGTERM,

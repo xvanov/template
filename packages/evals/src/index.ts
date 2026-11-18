@@ -1,7 +1,7 @@
 /**
  * The eval harness: golden sets (golden/*.jsonl), graders, retrieval
  * metrics, offline/live runner, baselines. CLI: `npm run eval` (src/cli.ts).
- * How to add a case: CLAUDE.md, "Evals".
+ * How to add a case: docs/guide.md, "Evals".
  */
 export {
   baselineKey,

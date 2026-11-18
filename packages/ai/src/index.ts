@@ -377,7 +377,7 @@ const dispatchTurn: ProviderTurn = (req) => {
       return Promise.reject(
         new LlmConfigError(
           `${req.route.id} cannot call tools: cli/ models do not support tool use. ` +
-            "Point the agent's tier (AGENT_TIER) at an anthropic/ or OpenAI-family model.",
+            "Use an anthropic/ or OpenAI-family model for tool calls.",
         ),
       );
     default:
