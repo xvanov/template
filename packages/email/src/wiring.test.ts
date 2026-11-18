@@ -18,7 +18,8 @@ const SKIP = new Set([
   "dist",
   ".git",
 ]);
-const THE_TRANSPORT = "packages/email/src/transport.ts";
+const MAIL_TRANSPORT = "packages/email/src/transport.ts";
+const SMS_TRANSPORT = "packages/sms/src/transport.ts";
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
@@ -44,6 +45,7 @@ describe("no way around the outbound guard", () => {
     );
     expect(root).toContain('mail: "packages/email/src/transport.ts"');
     expect(root).toContain('push: "packages/notify/src/ntfy.ts"');
+    expect(root).toContain('sms: "packages/sms/src/transport.ts"');
     expect(root).toContain("...outboundBoundary(");
     expect(web).toContain("...outboundBoundary(");
   });
@@ -51,46 +53,72 @@ describe("no way around the outbound guard", () => {
   it("only the email transport imports a mail library", () => {
     const offenders = files
       .filter((f) =>
-        /from\s+["'](nodemailer|@sendgrid\/|resend|postmark|mailgun|twilio)/.test(
+        /from\s+["'](nodemailer|@sendgrid\/|resend|postmark|mailgun|@aws-sdk\/client-ses)/.test(
           readFileSync(f, "utf8"),
         ),
       )
       .map((f) => relative(ROOT, f))
-      .filter((f) => f !== THE_TRANSPORT);
+      .filter((f) => f !== MAIL_TRANSPORT);
     expect(offenders).toEqual([]);
   });
 
-  it("only @repo/email's guarded entry point (and the transport's test) imports the transport", () => {
+  it("nothing imports an SMS SDK (packages/sms/src/transport.ts is a fetch client)", () => {
+    const offenders = files
+      .filter((f) =>
+        /from\s+["'](twilio|vonage|@vonage\/|messagebird|plivo|telnyx)/.test(
+          readFileSync(f, "utf8"),
+        ),
+      )
+      .map((f) => relative(ROOT, f));
+    expect(offenders).toEqual([]);
+  });
+
+  it("only the sms transport names the Twilio API host", () => {
+    const offenders = files
+      .filter((f) => /api\.twilio\.com/i.test(readFileSync(f, "utf8")))
+      .map((f) => relative(ROOT, f))
+      .filter((f) => f !== SMS_TRANSPORT);
+    expect(offenders).toEqual([]);
+  });
+
+  it("only each channel's guarded entry point (and its tests) imports its transport", () => {
     const importers = files
       .filter((f) =>
         /from\s+["'][^"']*\/transport["']/.test(readFileSync(f, "utf8")),
       )
       .map((f) => relative(ROOT, f));
-    // ...and the transport's own test, which mocks nodemailer.
+    // ...and the transports' own tests, which fake the SDKs.
     expect(importers.sort()).toEqual([
       "packages/email/src/index.ts",
       "packages/email/src/transport.test.ts",
+      "packages/sms/src/index.test.ts",
+      "packages/sms/src/index.ts",
     ]);
   });
 
-  it("the package exports nothing but the guarded entry point", () => {
-    const pkg = JSON.parse(
-      readFileSync(resolve(import.meta.dirname, "../package.json"), "utf8"),
-    );
-    expect(pkg.exports).toEqual({ ".": "./src/index.ts" });
+  it("the channel packages export nothing but the guarded entry point", () => {
+    for (const pkgDir of ["packages/email", "packages/sms"]) {
+      const pkg = JSON.parse(
+        readFileSync(resolve(ROOT, pkgDir, "package.json"), "utf8"),
+      );
+      expect(pkg.exports, pkgDir).toEqual({ ".": "./src/index.ts" });
+    }
   });
 
-  it("no other workspace depends on a mail library directly", () => {
+  it("no other workspace depends on a mail or SMS library directly", () => {
     const manifests = ["apps", "packages"].flatMap((d) =>
       readdirSync(resolve(ROOT, d)).map((p) =>
         resolve(ROOT, d, p, "package.json"),
       ),
     );
     const offenders = manifests.filter((m) => {
-      if (m.endsWith("packages/email/package.json")) return false;
       try {
         const pkg = JSON.parse(readFileSync(m, "utf8"));
-        return "nodemailer" in { ...pkg.dependencies, ...pkg.devDependencies };
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+        if (m.endsWith("packages/email/package.json")) return "twilio" in deps;
+        if (m.endsWith("packages/sms/package.json"))
+          return "nodemailer" in deps || "resend" in deps || "twilio" in deps;
+        return "nodemailer" in deps || "resend" in deps || "twilio" in deps;
       } catch {
         return false;
       }

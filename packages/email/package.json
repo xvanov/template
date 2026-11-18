@@ -14,7 +14,8 @@
   "dependencies": {
     "@repo/env": "*",
     "@repo/outbound": "*",
-    "nodemailer": "^9.0.3"
+    "nodemailer": "^9.0.3",
+    "resend": "6.37.0"
   },
   "devDependencies": {
     "@repo/db": "*",

@@ -22,6 +22,7 @@
     "@repo/db": "*",
     "@repo/domain": "*",
     "@repo/env": "*",
+    "@repo/inbound": "*",
     "@repo/jobs": "*",
     "@repo/rag": "*",
     "@repo/security": "*",

@@ -83,6 +83,8 @@ export const activityRouter = createTRPCRouter({
           status: true,
           blockReason: true,
           detail: true,
+          deliveryStatus: true,
+          deliveryDetail: true,
           createdAt: true,
           finishedAt: true,
         },

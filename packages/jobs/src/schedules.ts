@@ -42,6 +42,13 @@ export const SCHEDULES: Schedule[] = [
     pattern: "*/15 * * * *",
     data: {},
   },
+  {
+    // A no-op unless SMS is enabled and configured (packages/sms).
+    id: "sms-reconcile",
+    job: "sms.reconcile",
+    pattern: "7,37 * * * *",
+    data: {},
+  },
 ];
 
 export async function registerSchedules(): Promise<void> {

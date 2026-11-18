@@ -101,7 +101,67 @@ const serverSchema = z.object({
   SMTP_SECURE: bool(false),
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
+  /** The From of every email, whichever transport sends it (SMTP or Resend). */
   SMTP_FROM: z.string().default("App Template <no-reply@localhost>"),
+
+  /**
+   * Which transport sends email (packages/email/src/transport.ts):
+   *   smtp    SMTP_* above (Mailpit locally; any relay in production). Default.
+   *   resend  Resend's API, with RESEND_API_KEY. SMTP_FROM must be on a
+   *           domain verified in Resend.
+   */
+  EMAIL_TRANSPORT: z.preprocess(
+    blankIsUnset,
+    z.enum(["smtp", "resend"]).default("smtp"),
+  ),
+  RESEND_API_KEY: z.preprocess(blankIsUnset, z.string().optional()),
+  /**
+   * Signing secret of the Resend webhook (`whsec_...`, shown when the webhook
+   * is created). Resend signs with Svix; /api/webhooks/email-events verifies
+   * it. Unset in production = Resend's webhooks are refused.
+   */
+  RESEND_WEBHOOK_SECRET: z.preprocess(
+    blankIsUnset,
+    z
+      .string()
+      .regex(/^whsec_[A-Za-z0-9+/=]+$/, "must be the whsec_... signing secret")
+      .optional(),
+  ),
+  /**
+   * The domain inbound email arrives on (MX pointed at Resend, or at whatever
+   * calls /api/webhooks/email-inbound), e.g. `in.example.com`. Each tenant gets
+   * one random address on it (inbox.address). Unset = no inbound email.
+   */
+  INBOUND_EMAIL_DOMAIN: z.preprocess(
+    blankIsUnset,
+    z
+      .string()
+      .toLowerCase()
+      .regex(
+        /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/,
+        "must be a domain name such as in.example.com",
+      )
+      .optional(),
+  ),
+
+  // ── SMS (packages/sms, Twilio) ─────────────────────────────────────────
+  // Off unless OUTBOUND_SMS_ENABLED. Read only by packages/sms/src/transport.ts.
+  TWILIO_ACCOUNT_SID: z.preprocess(blankIsUnset, z.string().optional()),
+  TWILIO_AUTH_TOKEN: z.preprocess(blankIsUnset, z.string().optional()),
+  /** The number texts are sent from, E.164 (+15550100001). */
+  TWILIO_FROM_NUMBER: z.preprocess(
+    blankIsUnset,
+    z
+      .string()
+      .regex(/^\+[1-9]\d{7,14}$/, "must be E.164, e.g. +15550100001")
+      .optional(),
+  ),
+  /**
+   * The PUBLIC origin Twilio calls the webhooks on, if not APP_URL. Twilio
+   * signs the exact URL it calls, so verification rebuilds it from this, never
+   * from the request (behind a proxy the app sees an internal host).
+   */
+  TWILIO_WEBHOOK_BASE_URL: optionalUrl,
 
   /**
    * URL of a local dev mail inbox (Mailpit). When set, the "confirm your email"
@@ -312,6 +372,8 @@ const serverSchema = z.object({
   OUTBOUND_EMAIL_ENABLED: bool(true),
   /** Channel switch for push (ntfy). On by default; nothing pushes until NTFY_TOPIC is set. */
   OUTBOUND_PUSH_ENABLED: bool(true),
+  /** Channel switch for SMS (Twilio). OFF by default: texts cost money and reach phones. */
+  OUTBOUND_SMS_ENABLED: bool(false),
   /** Global kill switch. A runtime switch also exists (`npm run outbound:freeze`). */
   OUTBOUND_FROZEN: bool(false),
   /** Volume caps (fixed windows in Redis). Over the cap = blocked, not queued. */
@@ -463,6 +525,13 @@ export function env(): ServerEnv {
       `Invalid environment.\n${lines.join("\n")}\n\n` +
         `Fix your .env (start from .env.example, or run \`npm run setup\`).`,
     );
+  }
+
+  // The schema owns every variable; this reads the key only to say it is missing.
+  // eslint-disable-next-line no-restricted-syntax
+  const resendKey = parsed.data.RESEND_API_KEY;
+  if (parsed.data.EMAIL_TRANSPORT === "resend" && !resendKey) {
+    throw new Error("EMAIL_TRANSPORT=resend but RESEND_API_KEY is unset");
   }
 
   // S3 driver needs its credentials; catching it here beats a 500 on upload.

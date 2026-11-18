@@ -8,9 +8,11 @@ import {
   openSecret,
   openSecretDetailed,
   rateLimit,
+  readBodyLimited,
   sealSecret,
   verifyBearer,
   verifyHmac,
+  verifySvix,
   type SealingKeys,
 } from "./index";
 
@@ -109,6 +111,108 @@ describe("verifyHmac", () => {
     ).toMatchObject({
       status: 500,
     });
+  });
+});
+
+describe("readBodyLimited", () => {
+  const stream = (chunks: number, size: number) =>
+    new ReadableStream<Uint8Array>({
+      start(c) {
+        for (let i = 0; i < chunks; i++)
+          c.enqueue(new Uint8Array(size).fill(97));
+        c.close();
+      },
+    });
+  const req = (body: ReadableStream<Uint8Array> | string, headers = {}) =>
+    new Request("http://x.test/", {
+      method: "POST",
+      body,
+      headers,
+      // @ts-expect-error Node's fetch needs this for a stream body
+      duplex: "half",
+    });
+
+  it("reads a body within the cap", async () => {
+    expect(await readBodyLimited(req("héllo"), 100)).toEqual({
+      ok: true,
+      text: "héllo",
+    });
+  });
+
+  it("refuses by declared length without reading", async () => {
+    expect(
+      await readBodyLimited(req("x", { "content-length": "999999" }), 100),
+    ).toMatchObject({ ok: false, status: 413 });
+  });
+
+  it("refuses a chunked body (no length) once it streams past the cap", async () => {
+    expect(await readBodyLimited(req(stream(10, 64)), 300)).toMatchObject({
+      ok: false,
+      status: 413,
+    });
+    expect(await readBodyLimited(req(stream(4, 64)), 300)).toMatchObject({
+      ok: true,
+    });
+  });
+});
+
+describe("verifySvix", () => {
+  // The worked example from Svix's documentation ("Verifying webhooks
+  // manually"), checked against their reference implementation.
+  const doc = {
+    secret: "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+    id: "msg_p5jXN8AQM9LWM0D4loKWxJek",
+    timestamp: "1614265330",
+    payload: '{"test": 2432232314}',
+    signature: "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=",
+    now: () => 1614265330 * 1000,
+    production: true,
+  };
+
+  it("accepts Svix's documented test vector", () => {
+    expect(verifySvix(doc)).toEqual({ ok: true });
+  });
+
+  it("accepts any v1 signature in a space-separated list (secret rotation)", () => {
+    expect(
+      verifySvix({
+        ...doc,
+        signature: `v1,bm90LXRoaXMtb25l ${doc.signature}`,
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it("refuses a changed body, id, wrong version or wrong secret", () => {
+    for (const over of [
+      { payload: '{"test": 2432232315}' },
+      { id: "msg_other" },
+      { signature: doc.signature.replace("v1,", "v2,") },
+      { secret: "whsec_" + Buffer.from("x".repeat(24)).toString("base64") },
+      { signature: "" },
+    ]) {
+      expect(verifySvix({ ...doc, ...over })).toMatchObject({ status: 401 });
+    }
+  });
+
+  it("refuses a timestamp more than 5 minutes off, either way (replay)", () => {
+    expect(
+      verifySvix({ ...doc, now: () => (1614265330 + 301) * 1000 }),
+    ).toMatchObject({ status: 401 });
+    expect(
+      verifySvix({ ...doc, now: () => (1614265330 - 301) * 1000 }),
+    ).toMatchObject({ status: 401 });
+    expect(
+      verifySvix({ ...doc, now: () => (1614265330 + 299) * 1000 }),
+    ).toEqual({ ok: true });
+  });
+
+  it("FAILS CLOSED in production without a secret; open in development", () => {
+    expect(verifySvix({ ...doc, secret: undefined })).toMatchObject({
+      status: 500,
+    });
+    expect(
+      verifySvix({ ...doc, secret: undefined, signature: null, ...dev }),
+    ).toEqual({ ok: true });
   });
 });
 

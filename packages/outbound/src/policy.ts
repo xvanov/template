@@ -5,13 +5,14 @@
  */
 
 /**
- * Channels with a transport: email (packages/email) and push (ntfy, in
- * packages/notify). Add "sms" here, with a recipient parser and an enable flag,
- * in the same change that adds its transport, not before.
+ * Channels with a transport: email (packages/email), push (ntfy, in
+ * packages/notify) and sms (Twilio, in packages/sms). A new channel is added
+ * here, with a recipient parser and an enable flag, in the same change that
+ * adds its transport, not before.
  */
-export type Channel = "email" | "push";
+export type Channel = "email" | "push" | "sms";
 
-export const CHANNELS: readonly Channel[] = ["email", "push"];
+export const CHANNELS: readonly Channel[] = ["email", "push", "sms"];
 
 /** Why a message was not sent. Stored verbatim in outbound_message.blockReason. */
 export type BlockReason =
@@ -38,6 +39,8 @@ export interface OutboundAttempt {
   /**
    * email: exactly one plain address (lists and display names are blocked).
    * push: one ntfy topic name.
+   * sms: one phone number in international form (+447700900123; spaces,
+   *      dashes, dots and brackets are tolerated; normalised to E.164).
    */
   recipient: string;
   /** What is sending it, dotted and grep-able: `auth.verify-email`, `items.digest`. */
@@ -46,6 +49,18 @@ export interface OutboundAttempt {
   organizationId?: string | null;
   actorUserId?: string | null;
   subject?: string;
+  /**
+   * The caller's stable name for this ONE logical message, e.g.
+   * `invoice.42.reminder.2026-11`. Optional, but set it whenever the send runs
+   * in something that retries (a job): a second deliver() with the same key
+   * reuses the first attempt's outbound_message row, returns it untouched once
+   * it was sent, and otherwise re-sends under the SAME provider idempotency key
+   * (the row id), so the provider can drop a duplicate too. Unique per
+   * tenant (organizationId; rows without one share a "system" namespace).
+   * Reusing a key for another channel or recipient throws ConflictError.
+   * See `deliver` for the in-progress and stale rules.
+   */
+  idempotencyKey?: string;
   /**
    * Mail the recipient JUST asked for by submitting this address to better-auth
    * (verification, password reset, magic link). Exempt from the safe-mode
@@ -110,25 +125,53 @@ const PLAIN_EMAIL =
 /** An ntfy topic: what ntfy itself accepts in a topic name. Case-sensitive. */
 const NTFY_TOPIC = /^[A-Za-z0-9_-]{1,64}$/;
 
+/** E.164: a plus, a non-zero country code digit, at most 15 digits in all. */
+const E164 = /^\+[1-9]\d{7,14}$/;
+
+/**
+ * One phone number in E.164 (`+447700900123`), or null.
+ *
+ * International form only: a national number (`07700 900123`, `(555)
+ * 010-0001`) is refused rather than guessed at, because which country it
+ * belongs to is a guess, and a wrong guess texts a stranger. `00` is accepted
+ * as the international prefix. Spaces, dashes, dots and brackets are
+ * formatting and removed; anything else (a comma, a letter, `;`, a second `+`)
+ * makes it not ONE number, so it is refused, like an email list.
+ */
+export function parsePhone(raw: string): string | null {
+  const t = raw.trim();
+  if (!/^[+\d][\d\s().-]*$/.test(t)) return null;
+  let digits = t.replace(/[\s().-]/g, "");
+  if (digits.startsWith("00")) digits = `+${digits.slice(2)}`;
+  return E164.test(digits) ? digits : null;
+}
+
 export function parseRecipient(channel: Channel, raw: string): string | null {
   if (channel === "push") {
     const t = raw.trim();
     return NTFY_TOPIC.test(t) ? t : null;
   }
+  if (channel === "sms") return parsePhone(raw);
   const r = raw.trim().toLowerCase();
   return r.length <= 254 && PLAIN_EMAIL.test(r) ? r : null;
 }
 
-/** `a@x.com, @example.com` → normalised entries. Invalid entries are dropped. */
+/**
+ * `a@x.com, @example.com, +447700900123` → normalised entries: addresses,
+ * `@domain`s and E.164 numbers. Invalid entries are dropped.
+ */
 export function parseSafeList(raw: string | undefined): string[] {
   return (raw ?? "")
     .split(",")
     .map((s) => s.trim().toLowerCase())
-    .filter((s) =>
-      s.startsWith("@")
-        ? parseRecipient("email", `x${s}`) !== null
-        : parseRecipient("email", s) !== null,
-    );
+    .flatMap((s) => {
+      if (s.startsWith("@"))
+        return parseRecipient("email", `x${s}`) !== null ? [s] : [];
+      if (s.includes("@"))
+        return parseRecipient("email", s) !== null ? [s] : [];
+      const phone = parsePhone(s);
+      return phone ? [phone] : [];
+    });
 }
 
 export function isSafeRecipient(
@@ -136,11 +179,14 @@ export function isSafeRecipient(
   recipient: string,
   safeList: readonly string[],
 ): boolean {
-  // The allowlist holds addresses; push has no allowlist (only the
-  // operator's own topic is ever sent to, via the `operator` exemption).
-  if (channel !== "email") return false;
+  // push has no allowlist (only the operator's own topic is ever sent to,
+  // via the `operator` exemption).
+  if (channel === "push") return false;
   const r = parseRecipient(channel, recipient);
   if (!r) return false;
+  // A number is allowed only by its exact entry: there is no "@domain" for
+  // phones, and a prefix rule (+44…) would allowlist a whole country.
+  if (channel === "sms") return safeList.includes(r);
   const domain = r.slice(r.indexOf("@"));
   return safeList.some((entry) => entry === r || entry === domain);
 }
@@ -212,7 +258,9 @@ export function staticBlock(
       detail:
         attempt.channel === "push"
           ? "Safe mode is on and push goes only to the operator's NTFY_TOPIC."
-          : "Safe mode is on and the recipient is not in OUTBOUND_SAFE_RECIPIENTS.",
+          : attempt.channel === "sms"
+            ? "Safe mode is on and the number is not in OUTBOUND_SAFE_RECIPIENTS (exact E.164 entries)."
+            : "Safe mode is on and the recipient is not in OUTBOUND_SAFE_RECIPIENTS.",
     };
   }
   return null;
@@ -220,8 +268,8 @@ export function staticBlock(
 
 /**
  * `local-catcher` asserts that SMTP is a catcher. It says nothing about any
- * other channel (ntfy has no catcher: a push reaches a real phone), so for
- * every channel but email it means strict.
+ * other channel (ntfy and Twilio have no catcher: a push or a text reaches a
+ * real phone), so for every channel but email it means strict.
  */
 export function effectiveSafeMode(mode: SafeMode, channel: Channel): SafeMode {
   return mode === "local-catcher" && channel !== "email" ? "strict" : mode;

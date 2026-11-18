@@ -265,7 +265,11 @@ async function dispatch(
     else {
       outboundMessageId = result.id;
       if (result.status === "sent") status = "sent";
-      else {
+      else if (result.status === "in_progress") {
+        // Not reachable: notify sends with no idempotencyKey. Kept honest.
+        status = "pending";
+        error = result.detail;
+      } else {
         // Over the volume cap: not lost; retried by the tick or digested.
         status = result.reason === CAP_HELD ? "held" : "blocked";
         error = `${result.reason}: ${result.detail}`;

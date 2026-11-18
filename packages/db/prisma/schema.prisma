@@ -31,17 +31,18 @@ model User {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  sessions    Session[]
-  accounts    Account[]
-  members     Member[]
-  invitations Invitation[]
-  items       Item[]
-  mediaAssets MediaAsset[]
-  agentRuns   AgentRun[]
-  apiKeys     ApiKey[]
-  reviewed    AgentProposal[] @relation("ProposalReviewer")
-  proposed    AgentProposal[] @relation("ProposalProposer")
-  documents   Document[]
+  sessions       Session[]
+  accounts       Account[]
+  members        Member[]
+  invitations    Invitation[]
+  items          Item[]
+  mediaAssets    MediaAsset[]
+  agentRuns      AgentRun[]
+  apiKeys        ApiKey[]
+  reviewed       AgentProposal[]  @relation("ProposalReviewer")
+  proposed       AgentProposal[]  @relation("ProposalProposer")
+  documents      Document[]
+  handledInbound InboundMessage[]
 
   @@map("user")
 }
@@ -109,20 +110,22 @@ model Organization {
   metadata  String?
   createdAt DateTime @default(now())
 
-  members     Member[]
-  invitations Invitation[]
-  items       Item[]
-  mediaAssets MediaAsset[]
-  jobRuns     JobRun[]
-  auditEvents AuditEvent[]
-  outbound    OutboundMessage[]
-  suppressed  OutboundSuppression[]
-  agentRuns   AgentRun[]
-  agentSteps  AgentStep[]
-  proposals   AgentProposal[]
-  apiKeys     ApiKey[]
-  documents   Document[]
-  docChunks   DocumentChunk[]
+  members       Member[]
+  invitations   Invitation[]
+  items         Item[]
+  mediaAssets   MediaAsset[]
+  jobRuns       JobRun[]
+  auditEvents   AuditEvent[]
+  outbound      OutboundMessage[]
+  suppressed    OutboundSuppression[]
+  agentRuns     AgentRun[]
+  agentSteps    AgentStep[]
+  proposals     AgentProposal[]
+  apiKeys       ApiKey[]
+  documents     Document[]
+  docChunks     DocumentChunk[]
+  inbound       InboundMessage[]
+  inboundRoutes InboundRoute[]
 
   @@map("organization")
 }
@@ -189,8 +192,10 @@ model MediaAsset {
   filename       String
   contentType    String
   sizeBytes      Int
-  uploadedById   String
-  uploadedBy     User         @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  /// Null for files nobody uploaded through the app: attachments of inbound
+  /// messages (packages/inbound) arrive from outside.
+  uploadedById   String?
+  uploadedBy     User?        @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
   createdAt      DateTime     @default(now())
   documents      Document[]
 
@@ -370,16 +375,16 @@ model AuditEvent {
   @@map("audit_event")
 }
 
-/// Every outbound message ATTEMPT (email, push; SMS later), sent or not.
+/// Every outbound message ATTEMPT (email, push, sms), sent or not.
 /// Written by packages/outbound before the provider is called, so a message
 /// cannot leave without a row; blocked attempts carry the gate that stopped them.
 ///
 /// Null organizationId = system mail (sign-up verification, which happens
 /// before the account has an org); never shown to a tenant.
 model OutboundMessage {
-  id                String        @id @default(cuid())
+  id                String           @id @default(cuid())
   organizationId    String?
-  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization      Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   /// "email" | "sms" | "push"
   channel           String
   recipient         String
@@ -394,12 +399,34 @@ model OutboundMessage {
   detail            String?
   providerMessageId String?
   actorUserId       String?
-  createdAt         DateTime      @default(now())
+  /// The caller's key for "this one logical message" (e.g. `invoice.42.reminder`).
+  /// Unique per tenant (`idempotencyScope`): a retry with the same key reuses
+  /// this row and never sends twice once sent.
+  idempotencyKey    String?
+  /// The tenant id, or "system" for rows with no tenant: the key's namespace.
+  /// A column rather than organizationId itself because Postgres treats NULLs
+  /// as distinct, and system keys must collide too.
+  idempotencyScope  String?
+  /// When a sender last took this row to send ("pending" since then). A
+  /// pending row claimed longer ago than the in-flight window is abandoned.
+  claimedAt         DateTime?
+  /// What the provider reported AFTER accepting it (webhooks, the SMS
+  /// reconcile job): "queued" | "sent" | "delayed" | "delivered" | "bounced"
+  /// | "undelivered" | "failed" | "complained" | "suppressed". `status` above
+  /// stays the guard's own verdict; this is the recipient side.
+  deliveryStatus    String?
+  /// The provider's reason (bounce message, Twilio error code explained).
+  deliveryDetail    String?
+  deliveryUpdatedAt DateTime?
+  createdAt         DateTime         @default(now())
   finishedAt        DateTime?
+  repliesReceived   InboundMessage[]
 
+  @@unique([idempotencyScope, idempotencyKey])
   @@index([organizationId, createdAt])
   @@index([recipient, createdAt])
   @@index([status, createdAt])
+  @@index([channel, providerMessageId])
   @@map("outbound_message")
 }
 
@@ -419,6 +446,79 @@ model OutboundSuppression {
   @@unique([channel, recipient, organizationId])
   @@index([channel, recipient])
   @@map("outbound_suppression")
+}
+
+/// A message that ARRIVED (packages/inbound): an email to one of the org's
+/// inbound addresses, or an SMS to the app's number. Org-scoped: written only
+/// once the recipient address routed to a tenant (see InboundRoute).
+///
+/// The webhook stores the row ("received") and the worker fills in the rest
+/// ("processed"): body, attachments (to packages/storage), the thread link.
+model InboundMessage {
+  id                String           @id @default(cuid())
+  organizationId    String
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// "email" | "sms"
+  channel           String
+  /// "resend" | "generic" | "twilio": who delivered it to us.
+  provider          String
+  /// The provider's id for it; with `provider`, the dedupe key (webhooks retry).
+  providerMessageId String
+  fromAddress       String
+  /// The address it was sent to that routed it here.
+  toAddress         String
+  subject           String?
+  /// The first ~200 characters of `text`, for the inbox list.
+  snippet           String?
+  text              String?
+  /// Stored as received and NEVER rendered as HTML by the app (stored XSS):
+  /// the UI shows `text`, which the worker derives from this when absent.
+  html              String?
+  /// RFC 5322 Message-ID / In-Reply-To / References, for threading.
+  messageIdHeader   String?
+  inReplyTo         String?
+  /// [{ filename, contentType, sizeBytes, mediaAssetId | null, skipped? }]
+  attachments       Json             @default("[]")
+  /// The outbound message this answers, when it could be matched
+  /// (In-Reply-To/References for email; the last text to that number for SMS).
+  replyToOutboundId String?
+  replyToOutbound   OutboundMessage? @relation(fields: [replyToOutboundId], references: [id], onDelete: SetNull)
+  /// "received" (waiting for the worker) | "processed" | "failed"
+  status            String           @default("received")
+  error             String?
+  /// What the provider sent, until the worker has processed it (then cleared).
+  raw               Json?
+  handledAt         DateTime?
+  handledById       String?
+  handledBy         User?            @relation(fields: [handledById], references: [id], onDelete: SetNull)
+  createdAt         DateTime         @default(now())
+  processedAt       DateTime?
+
+  @@unique([provider, providerMessageId])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, handledAt])
+  @@map("inbound_message")
+}
+
+/// Which tenant an inbound address belongs to. `address` is normalised the
+/// way the outbound guard normalises (lowercased email, E.164 number), and
+/// unique across the app: one address, one tenant.
+model InboundRoute {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// "email" | "sms"
+  channel        String
+  address        String
+  /// Set (to organizationId) only on the address the app generated for the
+  /// tenant: unique, so a tenant has at most one, however many requests race.
+  /// Null on addresses added by hand (NULLs do not collide).
+  autoForOrg     String?      @unique
+  createdAt      DateTime     @default(now())
+
+  @@unique([channel, address])
+  @@index([organizationId])
+  @@map("inbound_route")
 }
 
 /// Operator notifications (packages/notify): alerts for whoever RUNS the app,

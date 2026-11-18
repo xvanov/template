@@ -65,6 +65,20 @@ describe("/api/media", () => {
     expect(await res.text()).toBe("hello");
   });
 
+  it("serves a file with a non-Latin name (RFC 5987 filename*), not a 500", async () => {
+    const a = await createTenant("media-utf8");
+    const res = await upload(a, 'отчёт 見積 "q".txt');
+    expect(res.status).toBe(201);
+    const { key } = (await res.json()) as { key: string };
+    const got = await download(a, key);
+    expect(got.status).toBe(200);
+    const cd = got.headers.get("content-disposition")!;
+    expect(cd).toMatch(/^inline; filename="[\x20-\x7e]*"; filename\*=UTF-8''/);
+    expect(decodeURIComponent(cd.split("filename*=UTF-8''")[1]!)).toBe(
+      'отчёт 見積 "q".txt',
+    );
+  });
+
   it("refuses a request with no session", async () => {
     const a = await createTenant("media-anon");
     const key = await uploadedKey(a);

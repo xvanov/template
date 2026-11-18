@@ -26,5 +26,6 @@ export default defineConfig([
   ...outboundBoundary({
     mail: "packages/email/src/transport.ts",
     push: "packages/notify/src/ntfy.ts",
+    sms: "packages/sms/src/transport.ts",
   }),
 ]);
