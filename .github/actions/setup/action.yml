@@ -34,16 +34,20 @@ runs:
     # Exact hit: nothing to do. Partial hit: `npm install` brings the restored
     # tree in line with the lockfile, fetching only what changed (`npm ci`
     # would delete node_modules first). Measured on 4 cores, #10's tree → #11's
-    # lockfile: 2s vs 12s, and the same package set as a clean `npm ci`. The
-    # diff check keeps `npm ci`'s guarantee: a lockfile out of sync with
-    # package.json fails here instead of being silently rewritten.
+    # lockfile: 2s vs 12s, and the same package set as a clean `npm ci`.
+    # `npm ci --dry-run` (~1s, touches nothing) keeps `npm ci`'s guarantee: a
+    # lockfile out of sync with package.json fails here. Do NOT check with
+    # `git diff` after `npm install`: on a stale restored tree npm rewrites
+    # harmless metadata (`devOptional` → `dev`) in a perfectly valid lockfile
+    # (PR #14 went red on exactly that), so the rewrite is discarded instead.
     - if: steps.nm.outputs.cache-hit != 'true'
       shell: bash
       run: |
         if [ -d node_modules ]; then
-          npm install --no-audit --fund=false
-          git diff --exit-code -- package-lock.json \
+          npm ci --dry-run --ignore-scripts --no-audit --fund=false >/dev/null \
             || { echo "::error::package-lock.json is out of sync with package.json — run npm install and commit it"; exit 1; }
+          npm install --no-audit --fund=false
+          git checkout -- package-lock.json
         else
           npm ci --no-audit --fund=false
         fi
