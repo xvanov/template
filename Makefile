@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-.PHONY: help setup dev web mobile worker desktop desktop-build up inbox stack down test typecheck lint lint-sh smoke e2e test-ops deploy db-migrate db-seed db-reset studio clean
+.PHONY: help setup dev web mobile mobile-dev-client worker desktop desktop-build up inbox stack down test typecheck lint lint-sh smoke e2e test-ops deploy db-migrate db-seed db-reset studio clean
 
 help: ## show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -19,6 +19,9 @@ web: ## run only the web app on :3200
 
 mobile: ## run the Expo dev server (scan the QR with Expo Go)
 	@npm run dev:mobile
+
+mobile-dev-client: ## run the Expo dev server for a development build (push, native modules)
+	@npm run dev:mobile:dev-client
 
 worker: ## run only the background worker
 	@npm run dev:worker

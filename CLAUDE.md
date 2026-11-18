@@ -640,8 +640,12 @@ npx eas build --profile development --platform android   # dev client APK
 npx eas build --profile development-simulator --platform ios
 npx eas build --profile preview                # internal test build
 npx eas build --profile production             # store build (build number auto-incremented)
-npx expo start --dev-client --port 8091        # then open the dev client
+cd ../.. && make mobile-dev-client             # dev server for the dev client
 ```
+
+`make mobile` starts Expo with `--go`: with expo-dev-client installed, a bare
+`expo start` would target the dev client and Expo Go users would get a QR
+code their app cannot open. `make mobile-dev-client` is the other one.
 
 `eas.json` profiles: `development` (dev client, internal distribution, APK /
 device build), `development-simulator`, `preview` (internal), `production`.
