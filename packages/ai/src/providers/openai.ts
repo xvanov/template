@@ -187,7 +187,8 @@ export function strictCompatible(schema: unknown): boolean {
   if (!schema || typeof schema !== "object") return true;
   const node = schema as Record<string, unknown>;
   const props = (node.properties ?? {}) as Record<string, unknown>;
-  const isObject = node.type === "object" || node.properties !== undefined;
+  const types = Array.isArray(node.type) ? node.type : [node.type];
+  const isObject = types.includes("object") || node.properties !== undefined;
   if (isObject) {
     const required = Array.isArray(node.required) ? node.required : [];
     if (Object.keys(props).some((k) => !required.includes(k))) return false;
@@ -220,6 +221,11 @@ export async function callOpenAiFamily(
     route.provider === "openai" || route.provider === "azure";
   // Read by @ai-sdk/openai and @ai-sdk/azure (which also reads "openai").
   const options: Record<string, string | boolean> = {};
+  // Read by @ai-sdk/openai-compatible (openrouter/, deepseek/, local/), which
+  // ignores the "openai" key and also defaults to strict. Its generic
+  // "openaiCompatible" key, not the provider's own name: unknown keys under
+  // the provider name are copied into the request body.
+  const compatible: Record<string, boolean> = {};
   if (isReasoningCapable && /^(gpt-5|o\d)/i.test(route.model)) {
     options.reasoningEffort = reasoningEffort(req.effort);
   }
@@ -228,6 +234,7 @@ export async function callOpenAiFamily(
   // still sent, non-strict; the caller's zod validation is the guarantee.
   if (req.jsonSchema && !strictCompatible(req.jsonSchema)) {
     options.strictJsonSchema = false;
+    compatible.strictJsonSchema = false;
   }
   try {
     const result = await generate({
@@ -258,7 +265,12 @@ export async function callOpenAiFamily(
         ? { output: Output.object({ schema: jsonSchema(req.jsonSchema) }) }
         : {}),
       ...(Object.keys(options).length
-        ? { providerOptions: { openai: options } }
+        ? {
+            providerOptions: {
+              openai: options,
+              ...(isReasoningCapable ? {} : { openaiCompatible: compatible }),
+            },
+          }
         : {}),
     });
     const stop =
