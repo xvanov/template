@@ -3,6 +3,7 @@ import { agentRouter } from "./routers/agent";
 import { apiKeysRouter } from "./routers/api-keys";
 import { desktopRouter } from "./routers/desktop";
 import { docsRouter } from "./routers/docs";
+import { glanceRouter } from "./routers/glance";
 import { aiRouter } from "./routers/ai";
 import { healthRouter } from "./routers/health";
 import { inboxRouter } from "./routers/inbox";
@@ -25,6 +26,7 @@ export const appRouter = createTRPCRouter({
   inbox: inboxRouter,
   desktop: desktopRouter,
   push: pushRouter,
+  glance: glanceRouter,
 });
 
 export type AppRouter = typeof appRouter;

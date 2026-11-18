@@ -234,6 +234,16 @@ describe("local spawn", () => {
     expect(((await slow) as LlmProviderError).costUnknown).toBe(true); // killed mid-run
   });
 
+  it("refuses images with a config error, before starting anything", async () => {
+    setLlmEnv({ CLAUDE_BIN: join(dir, "does-not-exist") });
+    await expect(
+      callCli({
+        ...req("m"),
+        images: [{ data: new Uint8Array([1]), mediaType: "image/png" }],
+      }),
+    ).rejects.toThrow(/cannot take images/);
+  });
+
   it("fails with a typed error naming CLAUDE_BIN when claude is not installed", async () => {
     setLlmEnv({ CLAUDE_BIN: join(dir, "does-not-exist") });
     await expect(callCli(req("m"))).rejects.toThrow(

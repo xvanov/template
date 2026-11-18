@@ -1,0 +1,166 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`disabled: the module stays out of autolinking Podfile and settings.gradle 1`] = `
+"}
+// GLASSES_ENABLED is off: keep the glasses module (and Meta's SDK) out.
+expoAutolinking.exclude = ["glasses"]
+expoAutolinking.useExpoModules()
+
+rootProject.name = 'App Template'
+"
+`;
+
+exports[`enabled: Android AndroidManifest.xml 1`] = `
+{
+  "manifest": {
+    "$": {
+      "xmlns:android": "http://schemas.android.com/apk/res/android",
+    },
+    "application": [
+      {
+        "$": {
+          "android:name": ".MainApplication",
+        },
+        "meta-data": [
+          {
+            "$": {
+              "android:name": "com.meta.wearable.mwdat.APPLICATION_ID",
+              "android:value": "0",
+            },
+          },
+          {
+            "$": {
+              "android:name": "com.meta.wearable.mwdat.CLIENT_TOKEN",
+              "android:value": "0",
+            },
+          },
+          {
+            "$": {
+              "android:name": "com.meta.wearable.mwdat.ANALYTICS_OPT_OUT",
+              "android:value": "true",
+            },
+          },
+          {
+            "$": {
+              "android:name": "com.meta.wearable.mwdat.CRASH_REPORTING_OPT_OUT",
+              "android:value": "true",
+            },
+          },
+        ],
+      },
+    ],
+    "uses-permission": [
+      {
+        "$": {
+          "android:name": "android.permission.INTERNET",
+        },
+      },
+      {
+        "$": {
+          "android:name": "android.permission.BLUETOOTH",
+        },
+      },
+      {
+        "$": {
+          "android:name": "android.permission.BLUETOOTH_CONNECT",
+        },
+      },
+      {
+        "$": {
+          "android:name": "android.permission.CAMERA",
+        },
+      },
+    ],
+  },
+}
+`;
+
+exports[`enabled: Android gradle.properties raises minSdk to 29 and passes the SDK settings 1`] = `
+[
+  {
+    "type": "comment",
+    "value": "x",
+  },
+  {
+    "key": "newArchEnabled",
+    "type": "property",
+    "value": "true",
+  },
+  {
+    "key": "android.minSdkVersion",
+    "type": "property",
+    "value": "29",
+  },
+  {
+    "key": "glasses.datVersion",
+    "type": "property",
+    "value": "1.0.1",
+  },
+  {
+    "key": "glasses.mockDevice",
+    "type": "property",
+    "value": "true",
+  },
+]
+`;
+
+exports[`enabled: iOS Info.plist 1`] = `
+{
+  "MWDAT": {
+    "Analytics": {
+      "OptOut": true,
+    },
+    "AppLinkURLScheme": "apptemplate://",
+    "ClientToken": "0",
+    "CrashReporting": {
+      "OptOut": true,
+    },
+    "MetaAppID": "0",
+    "TeamID": "$(DEVELOPMENT_TEAM)",
+  },
+  "NSBluetoothAlwaysUsageDescription": "App Template connects to your Meta AI glasses over Bluetooth.",
+  "NSBonjourServices": [
+    "_expo._tcp",
+    "_bonjour._tcp",
+  ],
+  "NSCameraUsageDescription": "Existing camera text.",
+  "NSLocalNetworkUsageDescription": "App Template finds and connects to your glasses over Wi-Fi.",
+  "UIBackgroundModes": [
+    "remote-notification",
+    "bluetooth-central",
+    "bluetooth-peripheral",
+    "external-accessory",
+    "processing",
+  ],
+  "UISupportedExternalAccessoryProtocols": [
+    "com.meta.ar.wearable",
+  ],
+}
+`;
+
+exports[`enabled: iOS Podfile.properties.json raises (never lowers) the deployment target 1`] = `
+{
+  "glasses.datVersion": "1.0.1",
+  "glasses.mockDevice": "true",
+  "ios.deploymentTarget": "17.2",
+}
+`;
+
+exports[`enabled: one Fresco version (the DAT's fbcore vs React Native's) forces every com.facebook.fresco artifact, once 1`] = `
+"apply plugin: "expo-root-project"
+
+// glasses: one Fresco version (modules/glasses/plugin/with-glasses.js).
+// Meta's DAT pulls Fresco fbcore 3.7.0; mixing it with React
+// Native's other Fresco artifacts crashes at launch (NoSuchMethodError).
+allprojects {
+  configurations.configureEach {
+    resolutionStrategy.eachDependency { details ->
+      if (details.requested.group == "com.facebook.fresco") {
+        details.useVersion("3.7.0")
+        details.because("one Fresco version for React Native and the Meta DAT")
+      }
+    }
+  }
+}
+"
+`;

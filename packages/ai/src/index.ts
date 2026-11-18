@@ -81,6 +81,7 @@ import {
 } from "./providers/transcribe";
 import type {
   ChatEntry,
+  ImageInput,
   ProviderCall,
   ProviderResult,
   ProviderTurn,
@@ -100,6 +101,7 @@ export { costUsd, parsePrices, priceFor } from "./pricing";
 export type { Price, TokenUsage } from "./pricing";
 export type {
   ChatEntry,
+  ImageInput,
   ProviderTurn,
   ToolCall,
   ToolResult,
@@ -110,6 +112,13 @@ export type {
 } from "./providers/types";
 
 // ── options and results ──────────────────────────────────────────────────
+
+/**
+ * Pre-flight estimate for one image, in prompt characters (~4 per token).
+ * Anthropic bills about (width × height) / 750 tokens, capped near 1,600 for
+ * an image it downsizes; OpenAI "high" detail is similar. 1,600 tokens ≈ this.
+ */
+export const IMAGE_ESTIMATE_CHARS = 6_400;
 
 interface CallOptions {
   /** Free-text label for cost attribution, e.g. "item.summarize". */
@@ -127,6 +136,12 @@ interface CallOptions {
 export interface AskOptions extends CallOptions {
   prompt: string;
   system?: string;
+  /**
+   * Images the model looks at (vision). The tier's model must accept images;
+   * cli/ models never do (LlmConfigError). Each counts ~IMAGE_ESTIMATE_CHARS
+   * toward the pre-flight cap estimate; the real usage is what gets billed.
+   */
+  images?: ImageInput[];
   /** Default 16000. The cap reserves the FULL allowance — lower it for cheap calls. */
   maxOutputTokens?: number;
   /** Reasoning depth. Default LLM_EFFORT ("medium"). */
@@ -594,13 +609,16 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
     const maxOutputTokens = opts.maxOutputTokens ?? 16_000;
     return metered(
       opts,
-      (opts.system?.length ?? 0) + opts.prompt.length,
+      (opts.system?.length ?? 0) +
+        opts.prompt.length +
+        (opts.images?.length ?? 0) * IMAGE_ESTIMATE_CHARS,
       maxOutputTokens,
       (route) =>
         deps.call({
           route,
           ...(opts.system ? { system: opts.system } : {}),
           prompt: opts.prompt,
+          ...(opts.images?.length ? { images: opts.images } : {}),
           maxOutputTokens,
           effort: opts.effort ?? env().LLM_EFFORT,
           ...(jsonSchema ? { jsonSchema: jsonSchema(route) } : {}),

@@ -121,8 +121,10 @@ backup/restore round trip (about 30s). `make lint` shellchecks every script.
    via `verifySvix`, or generic `verifyHmac`), `email-inbound` (`verifyHmac`),
    `twilio` and `twilio/status` (`verifyTwilioWebhook` from `@repo/sms`)) and
    the MCP endpoint (`/api/mcp`, an org API key; its tools call tRPC
-   procedures). Copy those. A webhook verifies, stores, and hands slow work to
-   a job; it never does that work in the request.
+   procedures), and the glance page (`/glance/<gl_…>`, a read-only glance
+   link: HTML for Meta Ray-Ban Display glasses, where nobody can sign in;
+   `packages/api/src/glance.ts`). Copy those. A webhook verifies, stores,
+   and hands slow work to a job; it never does that work in the request.
 2. **Tenant isolation lives in `orgProcedure`, not in resolvers.** Any query on
    an org-scoped table goes through `orgProcedure` and filters on
    `ctx.organizationId`. Mutations use `updateMany`/`deleteMany` with the org in
@@ -620,12 +622,20 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
 - **Bundle:** watch first-load JS when adding client libraries; Radix menus,
   popovers and tooltips pull in positioning code — keep them off public pages
   that do not need them.
+- **`/glance/<gl_…>` is the one page that is NOT the kit**, on purpose: Meta
+  Ray-Ban Display glasses load it over a slow link (Meta's budget: 300 KB),
+  draw black as transparent, and navigate with a D-pad. It is one hand-written
+  HTML string (`src/lib/glance-html.ts`, ~5 KB, a nonce'd inline script, no
+  Next bundle) served by a route handler. Members create/revoke their own
+  glance links at `/app/glasses` (`glance.*` procedures; a link reads only
+  `glanceSnapshot` for its org, is stored hashed, dies with membership,
+  expires (30 days by default) and shows counts only unless `showDetails`).
 
 ## Mobile (apps/mobile)
 
 Same API as the web app (tRPC with the session cookie attached by hand; file
 bytes to `/api/media/*`). Screens: `items` (with dictation), `photos`,
-`device` (push status, test push, glasses), `proposal/[id]` and `inbox/[id]`
+`device` (push status, test push), `glasses` (capture flow), `proposal/[id]` and `inbox/[id]`
 (what tapping a push opens: `lib/push-route.ts` maps its `kind`/`id`).
 Sign-out unregisters the push token and clears expo-image's caches. New screens use
 `components/states.tsx` (Loading / Empty / Error / Button / ProgressBar).
@@ -678,8 +688,26 @@ and `EXPO_PUBLIC_API_URL` as EAS environment variables per environment.
   for its format), settled per token when the server reports tokens and
   `LLM_PRICES` has the model, else per reported minute. The audio is not
   stored. The button hides when it is not set up.
-- **Glasses**: `modules/glasses` is a typed JS API that reports
-  "unavailable" until a native module is added (its README says how).
+- **Glasses** (Meta Ray-Ban / Oakley / Display; full story in
+  `modules/glasses/README.md`): a local Expo module wrapping Meta's Wearables
+  Device Access Toolkit 1.0 (Android from Maven Central, iOS a Swift Package
+  via `spm_dependency`). **Opt-in at build time**: with `GLASSES_ENABLED`
+  unset its config plugin EXCLUDES the module from autolinking (Podfile
+  `use_expo_modules!(exclude:)`, settings.gradle `expoAutolinking.exclude`),
+  so default builds are byte-for-byte what they were; on, it adds the
+  Info.plist/manifest entries and raises minSdk 29 / iOS 17.2. The JS API
+  reports `unavailable` instead of throwing at import, everywhere.
+  `app/glasses.tsx` runs capture → `uploadMedia` → `ai.describeImage`
+  (optional, discretionary, `tier: "fast"` must be a vision model; `ask()`
+  takes `images`, cli/ refuses them) → `expo-speech` (plays through the
+  glasses over Bluetooth). Sources: real glasses, Meta's MockDeviceKit
+  (phone camera as the glasses' camera), or the phone camera (Expo Go).
+  Android is compiled against the real SDK and the simulated-glasses flow was
+  run end to end on an emulator; **iOS is unverified** (no Xcode here), so an
+  iOS build with the flag is refused unless `GLASSES_IOS_EXPERIMENTAL=1`. The
+  flag-on Android build forces one Fresco version (the DAT pulls fbcore 3.7,
+  React Native 3.6: launch crash otherwise). MockDeviceKit only in eas.json's
+  development profiles. Display glasses get the web page `/glance/<gl_…>` (see UI above).
 
 ## Things that will bite you (all learned here, the hard way)
 

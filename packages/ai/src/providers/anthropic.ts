@@ -69,6 +69,22 @@ function defaultClient(): AnthropicLike {
   return client;
 }
 
+/** The prompt, after any images (Anthropic recommends image-then-text). */
+function userContent(req: ProviderRequest) {
+  if (!req.images?.length) return req.prompt;
+  return [
+    ...req.images.map((img) => ({
+      type: "image" as const,
+      source: {
+        type: "base64" as const,
+        media_type: img.mediaType,
+        data: Buffer.from(img.data).toString("base64"),
+      },
+    })),
+    { type: "text" as const, text: req.prompt },
+  ];
+}
+
 /** The request body. Pure — unit-tested for what must NOT be sent. */
 export function buildParams(
   req: ProviderRequest,
@@ -82,7 +98,7 @@ export function buildParams(
     model,
     max_tokens: req.maxOutputTokens,
     ...(req.system ? { system: req.system } : {}),
-    messages: [{ role: "user", content: req.prompt }],
+    messages: [{ role: "user", content: userContent(req) }],
     ...(Object.keys(outputConfig).length
       ? { output_config: outputConfig }
       : {}),

@@ -1,11 +1,19 @@
 import type { Effort, Route } from "../models";
 import type { TokenUsage } from "../pricing";
 
+/** An image sent with the prompt (vision). Bytes, never a URL: no fetches. */
+export interface ImageInput {
+  data: Uint8Array;
+  mediaType: "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+}
+
 /** What every provider is asked to do: one prompt in, one reply out. */
 export interface ProviderRequest {
   route: Route;
   system?: string;
   prompt: string;
+  /** Images the model looks at before the prompt. Needs a vision-capable model. */
+  images?: ImageInput[];
   maxOutputTokens: number;
   effort: Effort;
   /** JSON Schema the reply must match (structured output). The caller validates. */

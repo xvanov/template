@@ -44,6 +44,7 @@ model User {
   documents      Document[]
   handledInbound InboundMessage[]
   pushDevices    PushDevice[]
+  glanceLinks    GlanceLink[]
 
   @@map("user")
 }
@@ -128,6 +129,7 @@ model Organization {
   inbound       InboundMessage[]
   inboundRoutes InboundRoute[]
   pushDevices   PushDevice[]
+  glanceLinks   GlanceLink[]
 
   @@map("organization")
 }
@@ -213,6 +215,34 @@ model PushDevice {
 
   @@index([organizationId, userId])
   @@map("push_device")
+}
+
+/// A read-only link for a glanceable view (/glance/<secret>), e.g. a web app
+/// on Meta Ray-Ban Display glasses, where signing in is impractical. Acts as
+/// its creator in its organization, ONLY for the glance snapshot; stops
+/// working when revoked or when the creator leaves the organization.
+model GlanceLink {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name           String
+  /// The first characters of the secret, to tell links apart in a list.
+  prefix         String
+  /// SHA-256 of the secret (`gl_` + 256 random bits); the secret is shown once.
+  hash           String       @unique
+  /// False (default): counts only ("3 waiting"), never who or what. True:
+  /// also titles and senders, which then show on a see-through display.
+  showDetails    Boolean      @default(false)
+  /// Refused after this (null = never; the UI defaults to 30 days).
+  expiresAt      DateTime?
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, userId])
+  @@map("glance_link")
 }
 
 /// A blob in packages/storage. The row is the source of truth for metadata;

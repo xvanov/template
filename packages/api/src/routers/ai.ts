@@ -15,9 +15,43 @@ import {
   LlmTruncatedError,
   transcribeEnabled,
   spendByPurpose,
+  type ImageInput,
 } from "@repo/ai";
+import { storage } from "@repo/storage";
 
-import { createTRPCRouter, orgProcedure, publicProcedure } from "../trpc";
+import { DomainRuleError, NotFoundError } from "../errors";
+import {
+  createTRPCRouter,
+  orgProcedure,
+  publicProcedure,
+  rateLimited,
+} from "../trpc";
+
+/** What every vision provider accepts. HEIC is converted on the phone. */
+const VISION_TYPES: readonly ImageInput["mediaType"][] = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+];
+/**
+ * Anthropic's per-image limit is 5 MB of BASE64, i.e. 3.75 MB of bytes. The
+ * phone shrinks photos to ≤ 1568 px (~0.5 MB) before upload, so this only
+ * bites on full-size files from elsewhere.
+ */
+export const MAX_DESCRIBE_BYTES = Math.floor((5 * 1024 * 1024 * 3) / 4);
+
+/**
+ * Short, spoken-friendly, and never identifying people: the description may
+ * be read aloud through open-ear speakers, near the people in the photo.
+ */
+const DESCRIBE_SYSTEM = [
+  "You describe a photo taken by the user (often from smart glasses) so it can be read aloud.",
+  "Answer in at most three short sentences of plain text: no lists, no markdown.",
+  "Lead with what matters: the main subject, any readable text, anything that needs attention.",
+  "Never identify, name or guess the identity of a person from their face or body; describe people only in general terms.",
+  "If the photo is too dark or blurry to tell, say so.",
+].join(" ");
 
 export const aiRouter = createTRPCRouter({
   /** Public: a boolean only. Which model runs is not for anonymous visitors. */
@@ -86,6 +120,76 @@ export const aiRouter = createTRPCRouter({
         }
         throw err;
       }
+    }),
+
+  /**
+   * Describe one of this tenant's photos (the glasses capture flow). Optional
+   * and capped: "discretionary", so it stops at the daily cap; the fast tier,
+   * which must be a vision-capable model; a small output allowance. Rate
+   * limited per user, because each call sends a whole image.
+   */
+  describeImage: orgProcedure
+    .use(rateLimited({ limit: 10, windowSeconds: 60 }))
+    .input(
+      z.object({
+        mediaId: z.string().min(1).max(64),
+        question: z.string().trim().min(1).max(500).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const asset = await ctx.db.mediaAsset.findFirst({
+        where: { id: input.mediaId, organizationId: ctx.organizationId },
+        select: { key: true, contentType: true, sizeBytes: true },
+      });
+      if (!asset) throw new NotFoundError("Photo not found.");
+      const mediaType = asset.contentType.split(";")[0]!.trim().toLowerCase();
+      if (!(VISION_TYPES as readonly string[]).includes(mediaType)) {
+        throw new DomainRuleError(
+          "Only JPEG, PNG, WebP or GIF photos can be described.",
+        );
+      }
+      if (asset.sizeBytes > MAX_DESCRIBE_BYTES) {
+        throw new DomainRuleError(
+          "That photo is too large to describe (3.75 MB max).",
+        );
+      }
+      const data = await storage().get(asset.key);
+      let r;
+      try {
+        r = await ask({
+          purpose: "media.describe",
+          priority: "discretionary",
+          tier: "fast",
+          organizationId: ctx.organizationId,
+          userId: ctx.user.id,
+          system: DESCRIBE_SYSTEM,
+          prompt: input.question ?? "What is in this photo?",
+          images: [{ data, mediaType: mediaType as ImageInput["mediaType"] }],
+          maxOutputTokens: 400,
+          effort: "low",
+        });
+      } catch (err) {
+        // Like ai.ask: a cut-off description is still useful, labelled.
+        if (err instanceof LlmTruncatedError) {
+          return {
+            text: err.partialText,
+            truncated: true,
+            servedBy: null,
+            costUsd: err.costUsd,
+            costKnown: true,
+            latencyMs: null,
+          };
+        }
+        throw err;
+      }
+      return {
+        text: r.text,
+        truncated: false,
+        servedBy: r.servedBy,
+        costUsd: r.costUsd,
+        costKnown: r.costKnown,
+        latencyMs: r.latencyMs,
+      };
     }),
 
   spend: orgProcedure

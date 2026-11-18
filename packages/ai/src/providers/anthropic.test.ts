@@ -123,6 +123,37 @@ describe("buildParams", () => {
   });
 });
 
+describe("buildParams with images", () => {
+  it("sends images as base64 blocks before the text, and a plain string without them", () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const p = buildParams(
+      req("claude-sonnet-5-5", {
+        prompt: "what is this?",
+        images: [{ data: png, mediaType: "image/png" }],
+      }),
+    );
+    expect(p.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: Buffer.from(png).toString("base64"),
+            },
+          },
+          { type: "text", text: "what is this?" },
+        ],
+      },
+    ]);
+    expect(buildParams(req("claude-sonnet-5-5")).messages).toEqual([
+      { role: "user", content: "hi" },
+    ]);
+  });
+});
+
 describe("callAnthropic", () => {
   it("returns text, usage incl. cache tokens, and the cost at list price", async () => {
     const { client } = fakeClient(
