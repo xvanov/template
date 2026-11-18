@@ -50,6 +50,9 @@ echo "→ throwaway postgres ($DEPLOY_PROJECT)"
 compose up -d --wait db >/dev/null 2>&1
 
 sql "CREATE TABLE t (id int PRIMARY KEY, note text); INSERT INTO t VALUES (1, 'før'), (2, 'after');"
+# pgvector (document search): the extension, a vector column and its HNSW
+# index must survive the round trip — restore.sh recreates the database empty.
+sql "CREATE EXTENSION IF NOT EXISTS vector; CREATE TABLE emb (id int PRIMARY KEY, e vector(3)); INSERT INTO emb VALUES (1, '[1,0,0]'), (2, '[0,1,0]'); CREATE INDEX emb_hnsw ON emb USING hnsw (e vector_cosine_ops);"
 upload 'mkdir -p /s/org1 && echo hello > /s/org1/a.txt'
 
 echo "→ backup"
@@ -73,6 +76,9 @@ echo "→ restore"
 
 [ "$(sql "SELECT string_agg(id || ':' || note, ',' ORDER BY id) FROM t")" = "1:før,2:after" ] ||
   fail "rows did not come back"
+[ "$(sql "SELECT id FROM emb ORDER BY e <=> '[0.9,0.1,0]' LIMIT 1")" = 1 ] ||
+  fail "vector rows did not come back (pgvector)"
+[ "$(sql "SELECT to_regclass('emb_hnsw') IS NOT NULL")" = t ] || fail "the HNSW index did not come back"
 [ "$(sql "SELECT to_regclass('junk') IS NULL")" = t ] || fail "a table created after the dump survived the restore"
 [ "$(upload 'cat /s/org1/a.txt; ls /s')" = "$(printf 'hello\norg1')" ] || fail "uploads did not come back exactly"
 ls "$BACKUP_DIR"/pre-restore/db-*.dump >/dev/null 2>&1 || fail "no pre-restore safety dump"

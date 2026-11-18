@@ -1,0 +1,18 @@
+{"id":"r-rollback","input":"how do I roll back a release","expected":["deploys"],"tags":["keyword"]}
+{"id":"r-per-diem","input":"per diem amount when travelling","expected":["expenses"],"tags":["keyword"]}
+{"id":"r-receipts","input":"deadline for uploading receipts","expected":["expenses"],"tags":["keyword"]}
+{"id":"r-backup-time","input":"what time does the nightly database backup run","expected":["backups"],"tags":["keyword"]}
+{"id":"r-restore","input":"restore a dump","expected":["backups"],"tags":["keyword"]}
+{"id":"r-sev1-ack","input":"SEV1 acknowledge on-call","expected":["incident-response"],"tags":["keyword"]}
+{"id":"r-postmortem","input":"when is the postmortem due","expected":["incident-response"],"tags":["keyword"]}
+{"id":"r-carryover","input":"unused vacation days carry over","expected":["vacation"],"tags":["keyword"]}
+{"id":"r-2fa","input":"two-factor authentication SMS","expected":["security"],"tags":["keyword"]}
+{"id":"r-p1-response","input":"P1 ticket first response time","expected":["support-sla"],"tags":["keyword"]}
+{"id":"r-laptop","input":"when does my laptop arrive","expected":["onboarding"],"tags":["keyword"]}
+{"id":"r-heading-only","input":"escalation","expected":["support-sla"],"tags":["heading"]}
+{"id":"r-key-rotation","input":"how often are encryption keys rotated","expected":["security"],"tags":["keyword"]}
+{"id":"r-sem-undo","input":"undo a broken update","expected":["deploys"],"tags":["semantic"]}
+{"id":"r-sem-days-off","input":"how many days off do I get a year","expected":["vacation"],"tags":["semantic"]}
+{"id":"r-sem-impostor","input":"a stranger messaged me pretending to be IT","expected":["security"],"tags":["semantic"]}
+{"id":"r-sem-lunch","input":"who pays for lunch with a customer","expected":["expenses"],"tags":["semantic"]}
+{"id":"r-sem-outage","input":"the site is down, who gets woken up","expected":["incident-response","support-sla"],"tags":["semantic"]}

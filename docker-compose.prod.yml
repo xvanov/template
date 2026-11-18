@@ -52,7 +52,7 @@ x-app: &app
 
 services:
   db:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:0.8.6-pg17-bookworm
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres

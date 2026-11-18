@@ -39,6 +39,7 @@
     "auth:schema": "npm run schema -w @repo/auth",
     "outbound:freeze": "npm run freeze -w @repo/outbound --",
     "ai:live": "npm run live -w @repo/ai --",
+    "eval": "npm run eval -w @repo/evals --",
     "postinstall": "npm run db:generate",
     "inbox": "echo 'Local mail inbox: http://localhost:8035'"
   },

@@ -17,6 +17,7 @@
     "@repo/domain": "*",
     "@repo/env": "*",
     "@repo/notify": "*",
+    "@repo/rag": "*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

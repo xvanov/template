@@ -1,6 +1,7 @@
 import { activityRouter } from "./routers/activity";
 import { agentRouter } from "./routers/agent";
 import { apiKeysRouter } from "./routers/api-keys";
+import { docsRouter } from "./routers/docs";
 import { aiRouter } from "./routers/ai";
 import { healthRouter } from "./routers/health";
 import { itemsRouter } from "./routers/items";
@@ -14,6 +15,7 @@ export const appRouter = createTRPCRouter({
   items: itemsRouter,
   ai: aiRouter,
   media: mediaRouter,
+  docs: docsRouter,
   activity: activityRouter,
   agent: agentRouter,
   apiKeys: apiKeysRouter,

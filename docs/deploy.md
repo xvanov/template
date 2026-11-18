@@ -245,10 +245,11 @@ the extra rows and deploy again, or restore the last dump taken before the
 image change. `scripts/test-collation.sh` reproduces the whole failure and
 the repair in CI.
 
-**Order of releases.** The image switch to pgvector ships in a LATER release
-than these checks. **Every server must deploy the release with the checks
-first** (while still on `postgres:17-alpine`), then the image switch. A
-server that skips straight to the image switch with an older `deploy.sh` is
+**Order of releases.** This release switches the db image from
+`postgres:17-alpine` to `pgvector/pgvector:0.8.6-pg17-bookworm` (document
+search). The checks above shipped in the release BEFORE it. **Every server
+must deploy that earlier release first** (still on `postgres:17-alpine`),
+then this one. A server that skips straight here with an older `deploy.sh` is
 only partly protected by step 4: its old script recreates the database under
 the running app, which then serves on stale indexes until migrate repairs
 them. And if that repair FAILS (duplicates already written), migrate fails,

@@ -23,6 +23,7 @@
     "@repo/domain": "*",
     "@repo/env": "*",
     "@repo/jobs": "*",
+    "@repo/rag": "*",
     "@repo/security": "*",
     "@repo/storage": "*",
     "@trpc/client": "^11.18.0",
