@@ -196,7 +196,7 @@ there is nothing extra to configure for the phone.
 
 1. Rename: `expo.scheme` + `APP_SCHEME`, `expo.name`/`slug` and the bundle
    identifiers in `apps/mobile/app.json`, the `<title>` in
-   `apps/web/src/app/layout.tsx`, `productName`/`identifier` in
+   `apps/web/src/app/layout.tsx`, `productName`/`mainBinaryName`/`identifier` in
    `apps/desktop/src-tauri/tauri.conf.json`.
 2. Replace the demo `Item` model with your domain. Keep its `organizationId`
    column and index shape; `packages/api/src/routers/items.ts` is the reference.

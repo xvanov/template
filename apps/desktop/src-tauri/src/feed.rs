@@ -19,8 +19,62 @@ pub const INTERVAL: Duration = Duration::from_secs(30);
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct Event {
     pub key: String,
+    /// "proposal" | "inbound" | "agent_run" (anything else: a generic label).
+    #[serde(default)]
+    pub kind: String,
     pub title: String,
     pub body: String,
+}
+
+/// One OS notification.
+#[derive(Debug, PartialEq)]
+pub struct Note {
+    pub title: String,
+    pub body: String,
+}
+
+/// What a poll's new events look like on screen. With `details` (opt-in, tray
+/// menu): one notification per event, as the server worded it, which can put
+/// a sender and a subject on a lock screen. Without (the default): one
+/// notification per KIND, saying only that and how many, e.g. "New email" or
+/// "3 new messages", and nothing about who or what.
+pub fn notes(events: &[&Event], details: bool, app: &str) -> Vec<Note> {
+    if details {
+        return events
+            .iter()
+            .map(|e| Note {
+                title: e.title.clone(),
+                body: e.body.clone(),
+            })
+            .collect();
+    }
+    let mut kinds: Vec<(&str, Vec<&Event>)> = Vec::new();
+    for e in events {
+        match kinds.iter_mut().find(|(k, _)| *k == e.kind) {
+            Some((_, list)) => list.push(e),
+            None => kinds.push((&e.kind, vec![e])),
+        }
+    }
+    kinds
+        .into_iter()
+        .map(|(kind, list)| {
+            let n = list.len();
+            let title = if n == 1 {
+                list[0].title.clone()
+            } else {
+                match kind {
+                    "proposal" => format!("{n} approvals waiting"),
+                    "inbound" => format!("{n} new messages"),
+                    "agent_run" => format!("{n} agent runs finished"),
+                    _ => format!("{n} updates"),
+                }
+            };
+            Note {
+                title,
+                body: format!("Open {app} to see {}.", if n == 1 { "it" } else { "them" }),
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -86,15 +140,23 @@ pub fn cookie_header<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) ->
     (!h.is_empty()).then_some(h)
 }
 
+/// The HTTP client for talking to the server: OS-trusted certificates (like
+/// the window), statuses as values, and NO redirects (one could carry the
+/// Cookie header to another origin; the health probe does not need them).
+pub fn agent(timeout: Duration) -> ureq::Agent {
+    use ureq::tls::{RootCerts, TlsConfig};
+    ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .tls_config(TlsConfig::builder().root_certs(RootCerts::PlatformVerifier).build())
+        .build()
+        .into()
+}
+
 /// One request. Blocking: call it from a thread of its own.
 pub fn poll(server: &Url, since: Option<&str>, cookie: &str) -> Outcome {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(15)))
-        .http_status_as_error(false)
-        // A redirect could carry the Cookie header to another origin.
-        .max_redirects(0)
-        .build()
-        .into();
+    let agent = agent(Duration::from_secs(15));
     let res = agent
         .get(feed_url(server, since).as_str())
         .header("Cookie", cookie)
@@ -173,6 +235,7 @@ mod tests {
                 cursor: "c2".into(),
                 events: vec![Event {
                     key: "inbound:1".into(),
+                    kind: "inbound".into(),
                     title: "New email".into(),
                     body: "a: b".into()
                 }]
@@ -193,6 +256,60 @@ mod tests {
             cookie_header([("a", "1"), ("better-auth.session_token", "t.s")]).unwrap(),
             "a=1; better-auth.session_token=t.s"
         );
+    }
+
+    fn ev(key: &str, kind: &str, title: &str, body: &str) -> Event {
+        Event {
+            key: key.into(),
+            kind: kind.into(),
+            title: title.into(),
+            body: body.into(),
+        }
+    }
+
+    #[test]
+    fn notes_say_only_what_and_how_many_by_default() {
+        let a = ev("inbound:1", "inbound", "New email", "jane@x.test: Contract");
+        let b = ev(
+            "proposal:1",
+            "proposal",
+            "Waiting for your approval",
+            "Delete “Payroll”",
+        );
+        let c = ev("inbound:2", "inbound", "New text message", "From +1555");
+        let all = [&a, &b, &c];
+
+        let quiet = notes(&all, false, "Acme");
+        assert_eq!(
+            quiet,
+            vec![
+                Note {
+                    title: "2 new messages".into(),
+                    body: "Open Acme to see them.".into()
+                },
+                Note {
+                    title: "Waiting for your approval".into(),
+                    body: "Open Acme to see it.".into()
+                },
+            ]
+        );
+        let text = format!("{quiet:?}");
+        assert!(!text.contains("jane") && !text.contains("Payroll") && !text.contains("+1555"));
+
+        assert_eq!(notes(&[&a], false, "Acme")[0].title, "New email");
+        assert_eq!(notes(&[&b, &b], false, "Acme")[0].title, "2 approvals waiting");
+        let odd = ev("x:1", "", "Something", "secret");
+        assert_eq!(notes(&[&odd, &odd], false, "Acme")[0].title, "2 updates");
+    }
+
+    #[test]
+    fn notes_with_details_are_one_per_event_as_the_server_worded_them() {
+        let a = ev("inbound:1", "inbound", "New email", "jane@x.test: Contract");
+        let b = ev("inbound:2", "inbound", "New email", "bob@x.test: Invoice");
+        let n = notes(&[&a, &b], true, "Acme");
+        assert_eq!(n.len(), 2);
+        assert_eq!(n[0].body, "jane@x.test: Contract");
+        assert!(notes(&[], false, "Acme").is_empty());
     }
 
     #[test]

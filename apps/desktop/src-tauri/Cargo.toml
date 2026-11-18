@@ -26,7 +26,10 @@ tauri-plugin-updater = "=2.14.1"
 tauri-plugin-window-state = "=2.5.0"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
-ureq = "=3.5.2"
+# platform-verifier: trust the OS certificate store (a company CA, a
+# self-hosted server's own CA), as the window's webview does, not only the
+# Mozilla roots compiled into the binary.
+ureq = { version = "=3.5.2", features = ["platform-verifier"] }
 url = "=2.5.8"
 
 [dev-dependencies]

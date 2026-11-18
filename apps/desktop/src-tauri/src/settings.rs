@@ -26,6 +26,10 @@ pub struct Settings {
     /// OS notifications from the server's feed. On unless turned off.
     #[serde(default = "yes")]
     pub notifications: bool,
+    /// Put who and what (a sender, a subject) in notifications. Off: they say
+    /// only "New email", "3 new messages" (feed::notes). Opt-in, tray menu.
+    #[serde(default)]
+    pub notification_details: bool,
 }
 
 fn yes() -> bool {
@@ -37,6 +41,7 @@ impl Default for Settings {
         Settings {
             server_url: None,
             notifications: true,
+            notification_details: false,
         }
     }
 }
@@ -128,7 +133,7 @@ mod tests {
     fn a_broken_stored_url_falls_back_to_the_default() {
         let s = Settings {
             server_url: Some("not a url".into()),
-            notifications: true,
+            ..Settings::default()
         };
         assert_eq!(s.server(), default_server());
     }
@@ -142,6 +147,7 @@ mod tests {
         let s = Settings {
             server_url: Some("https://app.example.com/".into()),
             notifications: false,
+            notification_details: true,
         };
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);
@@ -152,6 +158,7 @@ mod tests {
 
         std::fs::write(&p, "{}").unwrap();
         assert!(Settings::load(&p).notifications, "absent field = on");
+        assert!(!Settings::load(&p).notification_details, "details are opt-in");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

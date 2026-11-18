@@ -795,8 +795,8 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
 
 1. Rename: `expo.scheme` + `APP_SCHEME`, `expo.name`/`slug`, bundle identifiers
    in `apps/mobile/app.json`, the `<title>` in `apps/web/src/app/layout.tsx`,
-   `apps/web/src/app/manifest.ts` and `icon.svg`. Desktop: `productName` and
-   `identifier` in `apps/desktop/src-tauri/tauri.conf.json` (the identifier
+   `apps/web/src/app/manifest.ts` and `icon.svg`. Desktop: `productName`,
+   `mainBinaryName` and `identifier` in `apps/desktop/src-tauri/tauri.conf.json` (the identifier
    names users' settings dir: never change it after a release), then
    `npm run icons -w desktop` (regenerated from `icon.svg`). The desktop
    shell has no URL scheme (no deep links yet), so `APP_SCHEME` is mobile's.

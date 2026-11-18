@@ -6,6 +6,8 @@ const COMMANDS: &[&str] = &["get_state", "set_server", "retry", "set_notificatio
 fn main() {
     // settings.rs bakes the default server address in at compile time.
     println!("cargo:rerun-if-env-changed=DESKTOP_APP_URL");
+    // policy.rs bakes in the extra origins the window may load (iframes).
+    println!("cargo:rerun-if-env-changed=DESKTOP_EMBED_ORIGINS");
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
     )

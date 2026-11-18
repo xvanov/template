@@ -7,6 +7,8 @@
  *
  *   DESKTOP_APP_URL                  server a fresh install opens (compiled in;
  *                                    default http://localhost:3200)
+ *   DESKTOP_EMBED_ORIGINS            extra https origins the window may load,
+ *                                    comma-separated (iframes: payments, video)
  *   DESKTOP_UPDATER_PUBKEY           updater public key (`tauri signer generate`)
  *   DESKTOP_UPDATER_ENDPOINT         where latest.json lives; with the key above
  *                                    it turns the updater ON and makes `build`

@@ -9,13 +9,17 @@ A Tauri 2 app for Windows, macOS and Linux that opens the **deployed web app**
   (Windows, macOS; Linux tray hosts only show the menu).
 - **OS notifications** for what wants the user: a proposal waiting for
   approval, a new inbound email or text, an agent run they started that
-  finished or failed. The server decides what and how it is worded
-  (`packages/api/src/routers/desktop.ts`); the shell only shows each event once.
+  finished or failed. By default a notification says only what and how many
+  ("New email", "3 new messages"), never who or what about, since it can
+  appear on a lock screen; "Show details in notifications" in the tray menu
+  turns on the sender/subject/summary. The server decides what to notify about
+  and how it is worded (`packages/api/src/routers/desktop.ts`); the shell
+  shows each event once.
 - **Start at login**: off until turned on (tray or setup screen). It then
   starts with `--hidden`, in the tray only.
 - **Single instance**: a second launch brings up the running one.
 - **Window size and position** are remembered.
-- **External links** open in the system browser.
+- **External links** you click open in the system browser.
 - **Updates**, signed, when a release is configured for them (off by default).
 
 It is a remote-URL shell: there is no copy of the web UI in it, so it is always
@@ -47,15 +51,18 @@ and `.dmg` on macOS. Unsigned unless the signing variables below are set.
 
 ## Configuration: one place each
 
-| What                      | Where                                                                        |
-| ------------------------- | ---------------------------------------------------------------------------- |
-| Name, identifier, version | `src-tauri/tauri.conf.json` (`productName`, `identifier`, `version`)         |
-| Icons                     | `npm run icons -w desktop` regenerates them from `apps/web/src/app/icon.svg` |
-| Default server            | `DESKTOP_APP_URL` at build time (default `http://localhost:3200`)            |
-| Server, per install       | the setup screen (tray, "Server settings…"); saved in `settings.json`        |
-| Updater, signing          | environment variables at build time, below; never in a committed file        |
+| What                      | Where                                                                                  |
+| ------------------------- | -------------------------------------------------------------------------------------- |
+| Name, identifier, version | `src-tauri/tauri.conf.json` (`productName`, `mainBinaryName`, `identifier`, `version`) |
+| Icons                     | `npm run icons -w desktop` regenerates them from `apps/web/src/app/icon.svg`           |
+| Default server            | `DESKTOP_APP_URL` at build time (default `http://localhost:3200`)                      |
+| Embeddable origins        | `DESKTOP_EMBED_ORIGINS` at build time (see security model, 3)                          |
+| Server, per install       | the setup screen (tray, "Server settings…"); saved in `settings.json`                  |
+| Updater, signing          | environment variables at build time, below; never in a committed file                  |
 
-`productName` is what the window, tray and installers are called; the
+`productName` is what the window, tray and installers are called;
+`mainBinaryName` is the installed executable (and the app name Linux shows on
+notifications: a dev run shows `desktop`, the Cargo binary); the
 `identifier` (reverse DNS, e.g. `com.acme.app`) names the config and data
 directories, so changing it after release orphans users' settings and
 sign-in. `settings.json` lives in the app config dir
@@ -89,22 +96,37 @@ and the user's session from going anywhere but the server.
    of it: every command is refused from the remote window, from a remote page
    in the setup window, and from local content in any other window; the setup
    page gets its commands and no plugin's. Run `cargo test`.
-3. **The window stays on the server's origin** (`src/policy.rs`). Same
-   origin (scheme, host and port) loads in the window. `https://accounts.google.com`
-   also stays, because Google sign-in must set the session in this window's
-   cookie jar. Other `http(s)`, `mailto:` and `tel:` links open in the system
-   browser or mail/phone app; anything else (`file:`, `javascript:`, `data:`,
-   custom schemes that could launch local programs) is dropped. `target=_blank`
-   and `window.open` never create a second app window. A redirect to another
-   origin counts as leaving: set `APP_URL` to the address the app answers on
-   (with `https://` if it redirects there).
+3. **The window stays on the server's origin** (`src/policy.rs`). Only the
+   same origin (scheme, host and port) loads in the window, plus
+   `https://accounts.google.com` (Google sign-in must set the session in this
+   window's cookie jar) and any `DESKTOP_EMBED_ORIGINS`. Two events are kept
+   apart on purpose:
+   - **Navigations** of the window or of any iframe in it (WebKitGTK and
+     WKWebView report both the same way) to anywhere else are **dropped,
+     silently**. They never open the system browser: otherwise any embedded
+     iframe or script could launch the browser with no click.
+   - **Clicked links** to other sites open in the system browser (or the
+     mail/phone app for `mailto:`/`tel:`). A small script in the main frame
+     turns a plain left click on such a link into a new-window request, and
+     `target=_blank` links are one already; the shell opens those outside if
+     they are `http(s)`, `mailto:` or `tel:`, and drops anything else
+     (`file:`, `data:`, custom schemes that could launch a local program).
+     `javascript:` URLs are not navigations: the page runs them as its own
+     script, which it could do anyway.
+
+   `target=_blank` and `window.open` never create a second app window. A
+   redirect to another origin is a navigation, so it is dropped: set
+   `APP_URL` to the address the app answers on (the setup screen says where
+   a server redirects to).
+
 4. **CSP on the local page** (`tauri.conf.json`): `default-src 'none'`, scripts
    and styles only from the bundle, IPC as the only connection, no forms
    posting anywhere, no framing. The remote page keeps the CSP its server sends.
 5. **The session cookie goes only to the server.** Notifications poll
    `desktop.feed` (a tRPC query) with the cookies the window's cookie store
    holds for the server's URL, sent to that origin only, never following
-   redirects. The shell mints, stores and logs no token of its own; signing
+   redirects, over TLS checked against the OS certificate store (like the
+   window: a company or self-hosted CA works). The shell mints, stores and logs no token of its own; signing
    out in the window stops the notifications.
 6. **Updates are signed.** The updater only installs a bundle whose signature
    verifies against the public key compiled in; the private key lives only in
@@ -139,7 +161,8 @@ poll every 30 s costs the same queries and needs no reconnect logic.
 3. Bump `version` in `tauri.conf.json`, then
    `git tag desktop-v0.2.0 && git push origin desktop-v0.2.0`. The `release`
    job of `.github/workflows/desktop.yml` builds every OS, signs the update
-   bundles, and attaches them and `latest.json` to a **draft** release.
+   bundles, and attaches them and `latest.json` to ONE **draft** release
+   (created first, then filled by the three builds).
    Publish the draft; running apps find it within 12 hours (and at start),
    notify once, and offer "Install update … and restart" in the tray.
 
@@ -181,6 +204,17 @@ monorepo.
   app may not be secure"): Google blocks some embedded browsers. Email and
   password always work. The fix, if it bites, is sign-in in the system browser
   with a deep link back to the app, which this template does not have yet.
+- **Iframes from other origins do not load** unless listed in
+  `DESKTOP_EMBED_ORIGINS` (comma-separated https origins, at build time),
+  e.g. `https://js.stripe.com,https://www.youtube-nocookie.com`. The shell
+  cannot tell an iframe's navigation from the main frame's, so a listed origin
+  could also replace the app in the window; list only origins you trust that
+  far. The page itself navigating to another origin by script
+  (`location.href = ...`) is dropped too; use a link, which opens outside.
+- A `window.open` the page makes WITHOUT a click is a new-window request too.
+  WebKitGTK and WKWebView block such popups before the shell sees them;
+  WebView2 (Windows) may not (untested), in which case it opens the system
+  browser for an `http(s)`/`mailto:`/`tel:` URL, as an unblocked popup would.
 - Clicking a notification does not open the item; it is only a heads-up.
 - The "can't connect" screen covers start-up and reconnects. If the server
   goes away while the window is open, the page shows the webview's own error;

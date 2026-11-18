@@ -90,15 +90,20 @@ fn product<R: Runtime>(app: &AppHandle<R>) -> String {
 
 /// Is the app there? `GET <server>/api/health` (apps/web), 2xx = yes.
 fn probe(server: &Url) -> Result<(), String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(6)))
-        .http_status_as_error(false)
-        .build()
-        .into();
+    let agent = feed::agent(Duration::from_secs(6));
     let host = server.host_str().unwrap_or("the server");
     let url = server.join("/api/health").map_err(|e| e.to_string())?;
     match agent.get(url.as_str()).call() {
         Ok(r) if r.status().is_success() => Ok(()),
+        // The window is locked to this exact origin, so following a redirect
+        // (http → https, or to another host) would strand it: say where to.
+        Ok(r) if r.status().is_redirection() => Err(format!(
+            "{host} redirects to {}. Use that address instead.",
+            r.headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("another address")
+        )),
         Ok(r) if r.status().as_u16() == 404 => Err(format!(
             "{host} answered, but it does not look like this app (no /api/health)."
         )),
@@ -194,27 +199,29 @@ fn open_main<R: Runtime>(app: &AppHandle<R>, server: &Url, show: bool) {
         let _ = w.destroy();
     }
 
-    let (nav_app, nav_server) = (app.clone(), server.clone());
+    let nav_server = server.clone();
+    let embeddable = policy::parse_origins(policy::EMBED_ORIGINS_ENV);
     let (win_app, win_server) = (app.clone(), server.clone());
     let built = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(server.clone()))
         .title(product(app))
         .inner_size(1280.0, 860.0)
         .min_inner_size(400.0, 320.0)
         .visible(show)
-        .on_navigation(move |url| match policy::decide(url, &nav_server) {
-            policy::Nav::Stay => true,
-            policy::Nav::Browser => {
-                open_external(&nav_app, url);
-                false
+        // Main frame AND iframes come through here: never open anything from
+        // it, or an iframe could launch the browser with no click (policy.rs).
+        .on_navigation(move |url| {
+            let ok = policy::navigation_allowed(url, &nav_server, &embeddable);
+            if !ok {
+                // The origin only: a URL can carry tokens.
+                eprintln!("[desktop] blocked navigation to {}", url.origin().ascii_serialization());
             }
-            policy::Nav::Block => {
-                eprintln!("[desktop] blocked navigation to {}", url.scheme());
-                false
-            }
+            ok
         })
+        // Clicks on links to other sites become new-window requests.
+        .initialization_script(policy::click_script(server))
         // target=_blank and window.open never make a second app window.
         .on_new_window(move |url, _features| {
-            match policy::decide(&url, &win_server) {
+            match policy::new_window(&url, &win_server) {
                 policy::Nav::Stay => {
                     if let Some(w) = win_app.get_webview_window(MAIN) {
                         let _ = w.navigate(url);
@@ -294,10 +301,14 @@ fn follow_feed<R: Runtime>(app: AppHandle<R>, server: Url, gen: u64) {
                 None => since = None,
                 Some(cookie) => match feed::poll(&server, since.as_deref(), &cookie) {
                     feed::Outcome::Page(page) => {
-                        for e in page.events {
-                            if since.is_some() && seen.first(&e.key) {
-                                notify(&app, &e.title, &e.body);
-                            }
+                        let fresh: Vec<&feed::Event> = page
+                            .events
+                            .iter()
+                            .filter(|e| since.is_some() && seen.first(&e.key))
+                            .collect();
+                        let details = shell(&app).settings.lock().unwrap().notification_details;
+                        for note in feed::notes(&fresh, details, &product(&app)) {
+                            notify(&app, &note.title, &note.body);
                         }
                         since = Some(page.cursor);
                     }
@@ -377,7 +388,10 @@ fn install_update<R: Runtime>(app: &AppHandle<R>) {
 
 fn tray_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let st = shell(app);
-    let notifications = st.settings.lock().unwrap().notifications;
+    let (notifications, details) = {
+        let s = st.settings.lock().unwrap();
+        (s.notifications, s.notification_details)
+    };
     let name = product(app);
     let menu = Menu::new(app)?;
     menu.append(&MenuItem::with_id(
@@ -401,6 +415,14 @@ fn tray_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         "Notifications",
         true,
         notifications,
+        None::<&str>,
+    )?)?;
+    menu.append(&CheckMenuItem::with_id(
+        app,
+        "details",
+        "Show details in notifications",
+        notifications,
+        details,
         None::<&str>,
     )?)?;
     let auto = app.autolaunch().is_enabled().unwrap_or(false);
@@ -446,6 +468,10 @@ fn handle_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
         "notify" => {
             let on = !shell(app).settings.lock().unwrap().notifications;
             let _ = set_notifications_inner(app, on);
+        }
+        "details" => {
+            let _ = save_settings(app, |s| s.notification_details = !s.notification_details);
+            refresh_tray(app);
         }
         "autostart" => {
             let on = app.autolaunch().is_enabled().unwrap_or(false);
@@ -560,7 +586,15 @@ fn set_autostart<R: Runtime>(app: AppHandle<R>, on: bool) -> Result<View, String
 fn configure<R: Runtime>(b: tauri::Builder<R>, updater: bool) -> tauri::Builder<R> {
     let mut b = b
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_opener::init())
+        // Its default injects a click handler into EVERY page that sends
+        // target=_blank links to `plugin:opener|open_url` over IPC. The app
+        // window has no IPC, so those links went nowhere; the shell opens
+        // them itself instead (on_new_window, policy.rs).
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec![HIDDEN_ARG]),
