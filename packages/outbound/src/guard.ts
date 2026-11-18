@@ -341,13 +341,24 @@ export async function deliver(
 
   // The row is "pending" and ours. No row, no send: had the write thrown,
   // the provider would never have been called.
+  //
+  // Every later write is conditional on still holding THIS claim: if this
+  // send was slow enough for the row to go stale and a retry took it over,
+  // this attempt's late "failed" or "sent" must not overwrite the retry's
+  // outcome (a late "failed" over a real "sent" would make the next retry
+  // send a duplicate).
+  const ours = {
+    id,
+    status: "pending",
+    claimedAt: outcome.claimedAt,
+  };
   let receipt: ProviderReceipt;
   try {
     receipt = await send(recipient!, { messageId: id });
   } catch (err) {
     await db.outboundMessage
       .updateMany({
-        where: { id },
+        where: ours,
         data: {
           status: "failed",
           detail: (err instanceof Error ? err.message : String(err)).slice(
@@ -365,11 +376,12 @@ export async function deliver(
 
   // The provider HAS accepted the message. Failing to record that must not
   // turn into an error: a caller (a job) would retry and send it twice. The
-  // row stays "pending", which is the honest state of what we know (and a
-  // retry with the same key reports it in progress until it goes stale).
+  // row stays "pending", which is the honest state of what we know: a retry
+  // with the same key reports it in progress until it goes stale, and then
+  // sends it again (SMTP and Twilio cannot tell us they already have it).
   try {
     await db.outboundMessage.updateMany({
-      where: { id },
+      where: ours,
       data: {
         status: "sent",
         providerMessageId: receipt.providerMessageId,

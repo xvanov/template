@@ -9,18 +9,18 @@
  * only makes Twilio retry something a retry cannot fix.
  */
 import { handleSmsStatus } from "@repo/inbound";
-import { authFailure } from "@repo/security";
 import { verifyTwilioWebhook } from "@repo/sms";
 
-import { WEBHOOK_LIMITS, webhookBody } from "@/lib/webhook-guard";
+import {
+  refuseUnsigned,
+  WEBHOOK_LIMITS,
+  webhookBody,
+} from "@/lib/webhook-guard";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  const raw = await webhookBody(req, {
-    name: "twilio-status",
-    maxBytes: WEBHOOK_LIMITS.small,
-  });
+  const raw = await webhookBody(req, WEBHOOK_LIMITS.small);
   if (raw instanceof Response) return raw;
   const params = Object.fromEntries(new URLSearchParams(raw));
   const url = new URL(req.url);
@@ -29,7 +29,7 @@ export async function POST(req: Request) {
     params,
     signature: req.headers.get("x-twilio-signature"),
   });
-  if (!check.ok) return authFailure(check);
+  if (!check.ok) return refuseUnsigned(req, "twilio-status", check);
 
   const result = await handleSmsStatus(params);
   if (!result.ok)

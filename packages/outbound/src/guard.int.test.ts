@@ -17,6 +17,7 @@ import {
   setFrozen,
   suppress,
   unsuppress,
+  type DeliveryResult,
   type GuardConfig,
   type GuardDeps,
 } from "./index";
@@ -323,31 +324,61 @@ describe("deliver", () => {
     ).toBe(1);
   });
 
+  /**
+   * A fake provider that accepts at once but does not RETURN until released:
+   * the winner holds its fresh "pending" claim while every other caller
+   * looks, so what they see is fixed, not a matter of scheduling.
+   */
+  function heldProvider() {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let accepted = 0;
+    const send = async () => {
+      accepted++;
+      await gate;
+      return { providerMessageId: `<m${accepted}@relay>` };
+    };
+    return { send, release, accepted: () => accepted };
+  }
+
+  /** Run `n` deliveries; release the provider once all but one returned. */
+  async function race(
+    n: number,
+    run: () => Promise<DeliveryResult>,
+    release: () => void,
+  ) {
+    let settled = 0;
+    const all = Array.from({ length: n }, () =>
+      run().finally(() => {
+        settled++;
+      }),
+    );
+    await vi.waitFor(() => expect(settled).toBe(n - 1), { timeout: 5000 });
+    release();
+    return Promise.all(all);
+  }
+
   it("idempotency key: concurrent attempts send once", async () => {
     const key = `test.race.${randomBytes(6).toString("hex")}`;
     const deps = { config: config(), store: memoryStore() };
-    const send = vi.fn(async () => {
-      await new Promise((r) => setTimeout(r, 30));
-      return { providerMessageId: "p" };
-    });
+    const provider = heldProvider();
     const attempt = {
       channel: "email" as const,
       recipient: addr(),
       purpose: "test.race",
       idempotencyKey: key,
     };
-    const results = await Promise.all([
-      deliver(attempt, send, deps),
-      deliver(attempt, send, deps),
-    ]);
-    expect(send).toHaveBeenCalledTimes(1);
-    // The loser reports what it found on the winner's row: still sending
-    // ("in_progress") or, if it looked after the send, already sent.
-    expect(new Set(results.map((r) => r.id)).size).toBe(1);
-    const loser = results.find(
-      (r) => r.status === "in_progress" || r.detail?.startsWith("duplicate"),
+    const results = await race(
+      2,
+      () => deliver(attempt, provider.send, deps),
+      provider.release,
     );
-    expect(loser).toBeDefined();
+    expect(provider.accepted()).toBe(1);
+    expect(results.map((r) => r.status).sort()).toEqual([
+      "in_progress",
+      "sent",
+    ]);
+    expect(new Set(results.map((r) => r.id)).size).toBe(1);
   });
 
   it("idempotency key: concurrent RETRIES after a failure send once", async () => {
@@ -369,19 +400,65 @@ describe("deliver", () => {
       ),
     ).rejects.toThrow("421");
 
-    // A fake SMTP relay that counts what it accepts.
-    let accepted = 0;
-    const smtp = async () => {
-      await new Promise((r) => setTimeout(r, 30));
-      accepted++;
-      return { providerMessageId: `<m${accepted}@relay>` };
-    };
-    const results = await Promise.all(
-      Array.from({ length: 4 }, () => deliver(attempt, smtp, deps)),
+    const provider = heldProvider();
+    const results = await race(
+      4,
+      () => deliver(attempt, provider.send, deps),
+      provider.release,
     );
-    expect(accepted).toBe(1);
-    expect(results.filter((r) => r.status === "sent")).toHaveLength(1);
+    expect(provider.accepted()).toBe(1);
     expect(new Set(results.map((r) => r.id)).size).toBe(1);
+    expect(results.map((r) => r.status).sort()).toEqual([
+      "in_progress",
+      "in_progress",
+      "in_progress",
+      "sent",
+    ]);
+  });
+
+  it("idempotency key: a slow sender that lost its claim cannot overwrite the takeover", async () => {
+    const key = `test.late.${randomBytes(6).toString("hex")}`;
+    const deps = { config: config(), store: memoryStore() };
+    const attempt = {
+      channel: "email" as const,
+      recipient: addr(),
+      purpose: "test.late",
+      idempotencyKey: key,
+    };
+    // A claims the row and hangs inside the provider...
+    let failA!: (e: Error) => void;
+    let aCalled!: () => void;
+    const aInProvider = new Promise<void>((r) => (aCalled = r));
+    const a = deliver(
+      attempt,
+      () =>
+        new Promise((_, reject) => {
+          failA = reject;
+          aCalled();
+        }),
+      deps,
+    );
+    await aInProvider;
+
+    // ...long enough for its claim to go stale: B takes over and sends.
+    const later = () => new Date(Date.now() + PENDING_STALE_MS + 60_000);
+    const b = await deliver(attempt, ok, { ...deps, now: later });
+    expect(b.status).toBe("sent");
+
+    // A's provider call finally fails. Its write must change nothing.
+    failA(new Error("timeout after 6 minutes"));
+    await expect(a).rejects.toThrow("timeout");
+    expect(await rowOf(b.id)).toMatchObject({
+      status: "sent",
+      providerMessageId: "msg-1",
+    });
+
+    // So the next retry sees "sent" and does not send again.
+    const send = spy();
+    expect(await deliver(attempt, send, { ...deps, now: later })).toMatchObject(
+      { status: "sent", id: b.id },
+    );
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("idempotency key: a pending row is in progress until stale, then a retry takes it", async () => {

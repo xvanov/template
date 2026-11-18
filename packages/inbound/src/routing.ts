@@ -122,12 +122,16 @@ export async function routeSms(
     console.warn(
       `[inbound] sms from a number several tenants texted, to shared number ${toNumber ?? to}: not routed (give each tenant its own number: an inbound_route row)`,
     );
-    await notifyOperator({
+    // Fire and forget: this runs inside a provider's webhook, which must
+    // answer in seconds whatever the operator channel is doing.
+    void notifyOperator({
       title: "Inbound text could not be routed",
       body: `A reply arrived on the shared number ${toNumber ?? to} from a number more than one tenant texted in the last ${SMS_REPLY_WINDOW_DAYS} days, so it was not delivered to any inbox. Give each tenant its own number (an inbound_route row) to route replies.`,
       priority: "low",
       dedupeKey: `inbound-sms-ambiguous:${toNumber ?? to}`,
-    });
+    }).catch((err: unknown) =>
+      console.error("[inbound] could not notify the operator:", err),
+    );
   }
   return null;
 }

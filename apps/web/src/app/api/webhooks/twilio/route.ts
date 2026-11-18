@@ -13,11 +13,14 @@
  * no auto-reply (Twilio's Advanced Opt-Out answers STOP/HELP itself).
  */
 import { handleInboundSms } from "@repo/inbound";
-import { authFailure } from "@repo/security";
 import { verifyTwilioWebhook } from "@repo/sms";
 
 import { logUnrouted, queueInbound } from "@/lib/inbound-queue";
-import { WEBHOOK_LIMITS, webhookBody } from "@/lib/webhook-guard";
+import {
+  refuseUnsigned,
+  WEBHOOK_LIMITS,
+  webhookBody,
+} from "@/lib/webhook-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -25,10 +28,7 @@ const EMPTY_TWIML =
   '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
 
 export async function POST(req: Request) {
-  const raw = await webhookBody(req, {
-    name: "twilio",
-    maxBytes: WEBHOOK_LIMITS.small,
-  });
+  const raw = await webhookBody(req, WEBHOOK_LIMITS.small);
   if (raw instanceof Response) return raw;
   const params = Object.fromEntries(new URLSearchParams(raw));
   const url = new URL(req.url);
@@ -37,7 +37,7 @@ export async function POST(req: Request) {
     params,
     signature: req.headers.get("x-twilio-signature"),
   });
-  if (!check.ok) return authFailure(check);
+  if (!check.ok) return refuseUnsigned(req, "twilio", check);
 
   const result = await handleInboundSms(params);
   if (!result.ok)

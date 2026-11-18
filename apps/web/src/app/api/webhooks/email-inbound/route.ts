@@ -17,20 +17,21 @@
  */
 import { env } from "@repo/env";
 import { genericInboundEmail, intakeGenericEmail } from "@repo/inbound";
-import { authFailure, verifyHmac } from "@repo/security";
+import { verifyHmac } from "@repo/security";
 
 import { logUnrouted, queueInbound } from "@/lib/inbound-queue";
-import { WEBHOOK_LIMITS, webhookBody } from "@/lib/webhook-guard";
+import {
+  refuseUnsigned,
+  WEBHOOK_LIMITS,
+  webhookBody,
+} from "@/lib/webhook-guard";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   const e = env();
   // Base64 attachments included; larger mail belongs in object storage first.
-  const raw = await webhookBody(req, {
-    name: "email-inbound",
-    maxBytes: WEBHOOK_LIMITS.inboundEmail,
-  });
+  const raw = await webhookBody(req, WEBHOOK_LIMITS.inboundEmail);
   if (raw instanceof Response) return raw;
 
   const check = verifyHmac({
@@ -43,7 +44,7 @@ export async function POST(req: Request) {
     secretName: "EMAIL_WEBHOOK_SECRET",
     production: e.NODE_ENV === "production",
   });
-  if (!check.ok) return authFailure(check);
+  if (!check.ok) return refuseUnsigned(req, "email-inbound", check);
 
   let parsed;
   try {

@@ -240,8 +240,13 @@ claimed under 5 minutes ago) it returns `status: "in_progress"` and sends
 nothing; otherwise (failed, blocked, or a stale pending) it takes the row with
 a compare-and-set, so of any number of racing retries exactly one sends. The
 same key for a different channel or recipient throws `ConflictError`
-(CONFLICT) and sends nothing. A send reuses the row id, which the transport
-hands the provider (Resend's
+(CONFLICT) and sends nothing. An attempt's final write ("sent"/"failed") only
+applies while it still holds its claim, so a sender slow enough to be taken
+over cannot overwrite the retry's outcome. If the provider accepted a message
+but marking it sent failed, the row stays `pending`, and a keyed retry
+re-sends it once the 5-minute window has passed (SMTP and Twilio cannot tell
+us they already have it; Resend drops the repeat by its key). A send reuses
+the row id, which the transport hands the provider (Resend's
 `Idempotency-Key`; every email's `Message-ID` is `<obm.<row id>@<from
 domain>>`, which is how replies are threaded). SMTP and Twilio take no key, so
 a crash between their accepting a message and our marking it sent can still
@@ -311,9 +316,11 @@ Email and texts that ARRIVE land in `inbound_message` (org-scoped), shown on
   plus the path, never from the request (behind a proxy that is an internal
   host). A wrong base URL shows as `[sms] refused a webhook ...` in the log.
 - No auto-replies to texts: Twilio's Advanced Opt-Out answers STOP/HELP.
-- Every webhook rate-limits per IP (fails open, like other capacity limits)
-  and caps its body while streaming (`readBodyLimited`), both BEFORE any
-  signature work.
+- Every webhook caps its body while streaming (`readBodyLimited`) BEFORE any
+  signature work, then verifies the signature. Only requests whose signature
+  FAILED are rate-limited per IP (`refuseUnsigned`, fails open): the IP is
+  X-Forwarded-For, which an attacker can set to Twilio's, so throttling all
+  traffic would let anyone 429 real callbacks (a lost STOP is not retried).
 - Twilio signatures carry no timestamp, so a captured, validly signed START
   could be replayed to lift a STOP. Accepted: it needs a request Twilio
   signed for that number, and the carrier keeps its own block regardless.

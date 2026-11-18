@@ -279,7 +279,7 @@ describe("/api/webhooks/twilio", () => {
   });
 });
 
-describe("every webhook: size cap and rate limit before signature work", () => {
+describe("every webhook: size cap before signature work; throttling only of failed signatures", () => {
   const routes = [
     ["email-events", emailEvents],
     ["email-inbound", emailInbound],
@@ -308,19 +308,30 @@ describe("every webhook: size cap and rate limit before signature work", () => {
     }
   });
 
-  it("throttles one IP flooding a webhook (429), not other IPs", async () => {
-    const hit = (ip: string) =>
+  it("throttles only FAILED signatures per IP: a flood of forgeries cannot 429 real callbacks", async () => {
+    // An attacker sets X-Forwarded-For to whatever IP Twilio uses.
+    const ip = `203.0.113.${Math.floor(Math.random() * 250)}`;
+    const forged = () =>
       twilioStatus(
         new Request("http://internal:3000/api/webhooks/twilio/status", {
           method: "POST",
-          headers: { "x-forwarded-for": ip },
+          headers: { "x-forwarded-for": ip, "x-twilio-signature": "forged" },
           body: "MessageSid=SM1&MessageStatus=sent",
         }),
       );
-    const ip = `203.0.113.${Math.floor(Math.random() * 250)}`;
     let last = 0;
-    for (let i = 0; i < 601; i++) last = (await hit(ip)).status;
+    for (let i = 0; i < 31; i++) last = (await forged()).status;
     expect(last).toBe(429);
-    expect((await hit("198.51.100.7")).status).not.toBe(429);
+
+    // Twilio's real, signed callback to the SAME webhook from that same IP
+    // still goes through.
+    const signed = twilioRequest("/api/webhooks/twilio/status", {
+      MessageSid: `SM${uid()}`,
+      MessageStatus: "delivered",
+    });
+    signed.headers.set("x-forwarded-for", ip);
+    const res = await twilioStatus(signed);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, matched: 0 });
   });
 });

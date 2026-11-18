@@ -29,10 +29,14 @@ import { db, recordAudit } from "@repo/db";
 import { env } from "@repo/env";
 import { handleResendEvent, resendEvent } from "@repo/inbound";
 import { parseRecipient, suppress } from "@repo/outbound";
-import { authFailure, verifyHmac, verifySvix } from "@repo/security";
+import { verifyHmac, verifySvix } from "@repo/security";
 
 import { logUnrouted, queueInbound } from "@/lib/inbound-queue";
-import { WEBHOOK_LIMITS, webhookBody } from "@/lib/webhook-guard";
+import {
+  refuseUnsigned,
+  WEBHOOK_LIMITS,
+  webhookBody,
+} from "@/lib/webhook-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -42,10 +46,7 @@ const event = z.object({
 });
 
 export async function POST(req: Request) {
-  const raw = await webhookBody(req, {
-    name: "email-events",
-    maxBytes: WEBHOOK_LIMITS.small,
-  });
+  const raw = await webhookBody(req, WEBHOOK_LIMITS.small);
   if (raw instanceof Response) return raw;
   return req.headers.has("svix-id") ? resend(req, raw) : generic(req, raw);
 }
@@ -61,7 +62,7 @@ async function resend(req: Request, raw: string) {
     secretName: "RESEND_WEBHOOK_SECRET",
     production: e.NODE_ENV === "production",
   });
-  if (!check.ok) return authFailure(check);
+  if (!check.ok) return refuseUnsigned(req, "email-events:resend", check);
 
   let parsed;
   try {
@@ -106,7 +107,7 @@ async function generic(req: Request, raw: string) {
     secretName: "EMAIL_WEBHOOK_SECRET",
     production: e.NODE_ENV === "production",
   });
-  if (!check.ok) return authFailure(check);
+  if (!check.ok) return refuseUnsigned(req, "email-events", check);
 
   let parsed;
   try {

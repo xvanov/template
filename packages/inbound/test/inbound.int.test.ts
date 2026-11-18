@@ -412,11 +412,16 @@ describe("sms", () => {
         }),
       ).toBe(0);
     }
-    expect(
-      await db.notification.findFirst({
-        where: { dedupeKey: `inbound-sms-ambiguous:${shared}` },
-      }),
-    ).toMatchObject({ priority: "low" });
+    // Notified without holding up the webhook: it lands shortly after.
+    await vi.waitFor(
+      async () =>
+        expect(
+          await db.notification.findFirst({
+            where: { dedupeKey: `inbound-sms-ambiguous:${shared}` },
+          }),
+        ).toMatchObject({ priority: "low" }),
+      { timeout: 5000 },
+    );
 
     // With its own number (an inbound_route row), the tenant gets its replies.
     await db.inboundRoute.create({
