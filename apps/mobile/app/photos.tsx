@@ -12,7 +12,8 @@
 import { useState } from "react";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
-import { FlatList, Image, Pressable, Text, View } from "react-native";
+import { Image } from "expo-image";
+import { FlatList, Pressable, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
@@ -140,11 +141,15 @@ export default function Photos() {
           renderItem={({ item }) => (
             <View className="aspect-square w-1/3 p-0.5">
               <View className="flex-1 overflow-hidden rounded-md bg-surface">
+                {/* expo-image, not RN's Image: on Android (new architecture)
+                    RN's Image drops `source.headers`, so the session cookie
+                    never reaches /api/media/blob and every photo is a 401. */}
                 <Image
                   source={mediaSource(item.url)}
                   accessibilityLabel={item.filename}
-                  className="h-full w-full"
-                  resizeMode="cover"
+                  style={{ width: "100%", height: "100%" }}
+                  contentFit="cover"
+                  recyclingKey={item.id}
                 />
               </View>
             </View>

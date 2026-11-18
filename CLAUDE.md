@@ -718,6 +718,11 @@ and `EXPO_PUBLIC_API_URL` as EAS environment variables per environment.
   nothing is uploaded. Use `uploadMedia` / `transcribeAudio` from
   `apps/mobile/lib/upload.ts`; `lib/upload-body.test.ts` runs both shapes
   through expo's real encoder.
+- **React Native's `<Image>` drops `source.headers` on Android** (new
+  architecture; seen on an emulator: the request arrived with no Cookie and
+  every photo was a 401). Show authenticated media (`/api/media/blob`, the
+  local storage driver) with `expo-image` and `mediaSource()` from
+  `apps/mobile/lib/media.ts`, as `app/photos.tsx` does.
 - **Push needs a development build, a physical device and `EAS_PROJECT_ID`.**
   In Expo Go the device screen says so and nothing is registered. A blocked
   test push in dev is safe mode doing its job: put your own (verified)
