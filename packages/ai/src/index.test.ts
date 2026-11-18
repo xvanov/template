@@ -175,6 +175,19 @@ describe("ask", () => {
     expect(h.rows()[0]!.costUsd).toBeCloseTo(0.02, 4);
   });
 
+  // Found live: cli/ refuses images before sending, but the row kept the
+  // estimate as unknown spend, eating into the tenant's cap for nothing.
+  it("records a config error (refused before sending) as a known $0", async () => {
+    const h = harness(new LlmConfigError("cli/ models cannot take images"));
+    await expect(h.llm.ask(base)).rejects.toBeInstanceOf(LlmConfigError);
+    expect(h.rows()[0]).toMatchObject({
+      ok: false,
+      costUsd: 0,
+      costKnown: true,
+      status: "done",
+    });
+  });
+
   it("is disabled, not crashing, when the provider has no key or LLM_ENABLED=false", async () => {
     setLlmEnv({ LLM_ENABLED: "false", ANTHROPIC_API_KEY: "k" });
     await expect(harness().llm.ask(base)).rejects.toBeInstanceOf(

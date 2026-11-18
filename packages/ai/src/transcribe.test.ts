@@ -312,6 +312,43 @@ describe("transcribeOpenAiCompatible (the wire format)", () => {
     expect(f.seen[0]!.form.get("response_format")).toBe("verbose_json");
   });
 
+  it("Azure: deployment-scoped URL, api-key header, default GA api-version", async () => {
+    setLlmEnv({
+      AZURE_OPENAI_ENDPOINT: "https://res.cognitiveservices.azure.com/",
+      AZURE_OPENAI_API_KEY: "az-key",
+      LLM_TRANSCRIBE_MODEL: "azure/gpt-4o-mini-transcribe",
+    });
+    expect(transcribeEnabled()).toBe(true);
+    const f = fake(200, {
+      text: "hi",
+      usage: { type: "tokens", input_tokens: 50, output_tokens: 20 },
+    });
+    const r = await transcribeOpenAiCompatible(
+      parseModel("azure/gpt-4o-mini-transcribe"),
+      req,
+      f.http,
+    );
+    expect(r.tokens).toEqual({ input: 50, output: 20 });
+    expect(f.seen[0]!.url).toBe(
+      "https://res.cognitiveservices.azure.com/openai/deployments/gpt-4o-mini-transcribe/audio/transcriptions?api-version=2024-10-21",
+    );
+    expect(f.seen[0]!.headers).toEqual({ "api-key": "az-key" });
+    expect(f.seen[0]!.form.get("response_format")).toBe("json");
+
+    // A dated AZURE_OPENAI_API_VERSION is used as is; no key = off.
+    setLlmEnv({
+      AZURE_OPENAI_ENDPOINT: "https://res.openai.azure.com/openai/v1",
+      AZURE_OPENAI_API_KEY: "k",
+      AZURE_OPENAI_API_VERSION: "2025-03-01-preview",
+    });
+    await transcribeOpenAiCompatible(parseModel("azure/whisper"), req, f.http);
+    expect(f.seen[1]!.url).toBe(
+      "https://res.openai.azure.com/openai/deployments/whisper/audio/transcriptions?api-version=2025-03-01-preview",
+    );
+    setLlmEnv({ LLM_TRANSCRIBE_MODEL: "azure/whisper" });
+    expect(transcribeEnabled()).toBe(false);
+  });
+
   it("reads token usage (gpt-4o-*-transcribe json)", async () => {
     setLlmEnv({ OPENAI_API_KEY: "k" });
     const f = fake(200, {

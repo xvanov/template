@@ -527,7 +527,9 @@ Org-scoped `document` + `document_chunk` tables; `/app/docs` in the UI; the
   must cite `[n]` with a verbatim quote. Out-of-range citation, a quote not in
   its source, `known: false`, or a number/email/link absent from the sources
   (`assertGrounded`) → `status: "unknown"` with the sources, for a person.
-  No sources → "unknown" without calling the model. To avoid false
+  No sources → "unknown" without calling the model (keyword-only search;
+  with embeddings on, the meaning leg always returns neighbours, so the model
+  is asked and must abstain itself). To avoid false
   rejects: list numbering and `[n]` markers are not checked as facts,
   "02:00" equals "2:00", quotes are matched against link TEXT
   (`[text](url)` → text), and an elided quote ("a … b") must have its pieces
@@ -719,7 +721,7 @@ and `EXPO_PUBLIC_API_URL` as EAS environment variables per environment.
   production enable Expo's "enhanced push security" (`EXPO_ACCESS_TOKEN`).
 - **Dictation**: expo-audio records 16 kHz mono AAC; `POST
 /api/media/transcribe` runs `transcribe()` from `@repo/ai`
-  (`LLM_TRANSCRIBE_MODEL`, `openai/` or `local/` OpenAI-compatible
+  (`LLM_TRANSCRIBE_MODEL`, `openai/`, `azure/<deployment>` or `local/` OpenAI-compatible
   `/audio/transcriptions`) into `llm_call` under the daily cap: reserved
   per minute (`LLM_TRANSCRIBE_COST_PER_MINUTE` x the longest the file can be
   for its format), settled per token when the server reports tokens and

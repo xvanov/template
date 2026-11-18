@@ -8,7 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LlmProviderError } from "../errors";
 import { parseModel } from "../models";
 import { setLlmEnv } from "../test-env";
-import { callOpenAiFamily, callOpenAiTools, embedOpenAiFamily } from "./openai";
+import { z } from "zod";
+
+import {
+  callOpenAiFamily,
+  callOpenAiTools,
+  embedOpenAiFamily,
+  strictCompatible,
+} from "./openai";
 
 interface Sent {
   url: string;
@@ -170,6 +177,43 @@ describe("local/ and stop reasons", () => {
     });
     expect(r.text).toBe("not json");
     expect(r.usage.outputTokens).toBe(20);
+  });
+
+  // Found live (Azure gpt-5.4-mini, gpt-4.1): strict mode 400s on a schema
+  // with an optional property before the model runs, so any askObject schema
+  // with `.optional()` failed every time on openai/ and azure/.
+  it("sends strict structured output only for a schema strict mode can enforce", async () => {
+    const schemaOf = (s: z.ZodType) => {
+      const { $schema: _d, ...body } = z.toJSONSchema(s) as Record<
+        string,
+        unknown
+      >;
+      return body;
+    };
+    const closed = schemaOf(
+      z.object({ items: z.array(z.object({ name: z.string() })) }),
+    );
+    const open = schemaOf(
+      z.object({
+        items: z.array(
+          z.object({ name: z.string(), note: z.string().optional() }),
+        ),
+      }),
+    );
+    expect(strictCompatible(closed)).toBe(true);
+    expect(strictCompatible(open)).toBe(false);
+    expect(strictCompatible(schemaOf(z.record(z.string(), z.number())))).toBe(
+      false,
+    );
+
+    const sent = stubFetch(completion('{"items":[]}'));
+    await callOpenAiFamily(req("azure/gpt-4.1", { jsonSchema: closed }));
+    await callOpenAiFamily(req("azure/gpt-4.1", { jsonSchema: open }));
+    const strictOf = (i: number) =>
+      (sent[i]!.body.response_format as { json_schema: { strict: boolean } })
+        .json_schema.strict;
+    expect(strictOf(0)).toBe(true);
+    expect(strictOf(1)).toBe(false);
   });
 
   it("wraps HTTP errors in a typed, retry-aware error", async () => {

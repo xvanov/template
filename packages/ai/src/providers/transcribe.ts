@@ -4,6 +4,11 @@
  *
  *   openai/gpt-4o-mini-transcribe   api.openai.com (OPENAI_API_KEY, OPENAI_BASE_URL)
  *   openai/whisper-1                same
+ *   azure/<deployment>              Azure OpenAI, deployment-scoped URL with
+ *                                   AZURE_OPENAI_API_VERSION (a dated one;
+ *                                   default 2024-10-21) and the api-key header.
+ *                                   Azure's v1 surface answers
+ *                                   DeploymentNotFound for audio (seen live).
  *   local/<model>                   any compatible server: speaches /
  *                                   faster-whisper-server, LocalAI, a Groq-style
  *                                   API, at LLM_TRANSCRIBE_BASE_URL (else
@@ -17,7 +22,7 @@ import { env } from "@repo/env";
 import { LlmConfigError, LlmProviderError } from "../errors";
 import type { ProviderId, Route } from "../models";
 
-export const TRANSCRIBE_PROVIDERS: ProviderId[] = ["openai", "local"];
+export const TRANSCRIBE_PROVIDERS: ProviderId[] = ["openai", "azure", "local"];
 
 export interface TranscribeRequest {
   audio: Uint8Array;
@@ -45,20 +50,44 @@ type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 const OPENAI_DEFAULT_BASE = "https://api.openai.com/v1";
 
-/** Base URL and key for a route; null base = not configured. */
+/** Oldest GA Azure api-version with /audio/transcriptions (verified live). */
+export const AZURE_TRANSCRIBE_API_VERSION = "2024-10-21";
+
+/** Where a route's transcription goes; null url = not configured. */
 export function transcribeEndpoint(route: Route): {
-  baseUrl: string | null;
-  apiKey: string | undefined;
+  url: string | null;
+  headers: Record<string, string>;
 } {
   const e = env();
+  const bearer = (key: string | undefined): Record<string, string> =>
+    key ? { authorization: `Bearer ${key}` } : {};
+  const at = (base: string) =>
+    `${base.replace(/\/+$/, "")}/audio/transcriptions`;
   switch (route.provider) {
     case "openai":
       return {
-        baseUrl: e.OPENAI_API_KEY
-          ? (e.OPENAI_BASE_URL ?? OPENAI_DEFAULT_BASE)
+        url: e.OPENAI_API_KEY
+          ? at(e.OPENAI_BASE_URL ?? OPENAI_DEFAULT_BASE)
           : null,
-        apiKey: e.OPENAI_API_KEY,
+        headers: bearer(e.OPENAI_API_KEY),
       };
+    case "azure": {
+      if (!e.AZURE_OPENAI_ENDPOINT || !e.AZURE_OPENAI_API_KEY) {
+        return { url: null, headers: {} };
+      }
+      const endpoint = e.AZURE_OPENAI_ENDPOINT.replace(/\/+$/, "").replace(
+        /\/openai(\/v1)?$/,
+        "",
+      );
+      const version =
+        e.AZURE_OPENAI_API_VERSION && e.AZURE_OPENAI_API_VERSION !== "v1"
+          ? e.AZURE_OPENAI_API_VERSION
+          : AZURE_TRANSCRIBE_API_VERSION;
+      return {
+        url: `${endpoint}/openai/deployments/${encodeURIComponent(route.model)}/audio/transcriptions?api-version=${encodeURIComponent(version)}`,
+        headers: { "api-key": e.AZURE_OPENAI_API_KEY },
+      };
+    }
     case "local": {
       const base = e.LLM_TRANSCRIBE_BASE_URL ?? e.LLM_BASE_URL;
       // The OpenAI default with no key is "nobody configured this".
@@ -67,8 +96,8 @@ export function transcribeEndpoint(route: Route): {
         Boolean(e.LLM_API_KEY) ||
         base.replace(/\/+$/, "") !== OPENAI_DEFAULT_BASE;
       return {
-        baseUrl: configured ? base : null,
-        apiKey: e.LLM_API_KEY || undefined,
+        url: configured ? at(base) : null,
+        headers: bearer(e.LLM_API_KEY || undefined),
       };
     }
     default:
@@ -93,8 +122,8 @@ export async function transcribeOpenAiCompatible(
   req: TranscribeRequest,
   http: FetchLike = (url, init) => fetch(url, init),
 ): Promise<TranscribeResponse> {
-  const { baseUrl, apiKey } = transcribeEndpoint(route);
-  if (!baseUrl)
+  const { url, headers } = transcribeEndpoint(route);
+  if (!url)
     throw new LlmConfigError(
       `${route.id} is not configured for transcription.`,
     );
@@ -113,9 +142,9 @@ export async function transcribeOpenAiCompatible(
 
   let res: Response;
   try {
-    res = await http(`${baseUrl.replace(/\/+$/, "")}/audio/transcriptions`, {
+    res = await http(url, {
       method: "POST",
-      headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+      headers,
       body: form,
       signal: AbortSignal.timeout(req.timeoutMs ?? 120_000),
     });

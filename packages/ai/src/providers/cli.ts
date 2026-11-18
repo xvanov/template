@@ -23,6 +23,11 @@
  *  - one call at a time (a queue); the timeout covers the queue wait too, so
  *    a caller never waits longer than it asked.
  *
+ * `maxOutputTokens` is NOT enforced: `claude -p` has no output-token flag, so
+ * a reply runs to its natural end (seen live: 568 tokens for a 16-token
+ * limit). The pre-send cap estimate still uses the limit; the recorded cost is
+ * the real one.
+ *
  * Cost comes from the CLI itself (`total_cost_usd`, API-equivalent dollars) —
  * it draws on the subscription's credit pool, and it is recorded like any call.
  *

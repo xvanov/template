@@ -1,0 +1,51 @@
+{
+  "key": "live-azure-gpt-5.4-mini",
+  "savedAt": "2026-11-18T17:13:49.569Z",
+  "suites": {
+    "retrieval": {
+      "score": 0.9352,
+      "metrics": {
+        "mrr": 0.9352,
+        "recall@5": 1,
+        "recall@1": 0.8889
+      },
+      "passing": [
+        "r-rollback",
+        "r-per-diem",
+        "r-receipts",
+        "r-backup-time",
+        "r-restore",
+        "r-sev1-ack",
+        "r-postmortem",
+        "r-carryover",
+        "r-2fa",
+        "r-p1-response",
+        "r-laptop",
+        "r-heading-only",
+        "r-key-rotation",
+        "r-sem-undo",
+        "r-sem-days-off",
+        "r-sem-impostor",
+        "r-sem-lunch",
+        "r-sem-outage"
+      ]
+    },
+    "answer": {
+      "score": 1,
+      "metrics": {
+        "pass_rate": 1
+      },
+      "passing": [
+        "a-per-diem",
+        "a-rollback",
+        "a-backup-retention",
+        "a-not-in-docs",
+        "a-gibberish",
+        "a-time-format",
+        "a-list-steps",
+        "a-elided-quote",
+        "a-link-text"
+      ]
+    }
+  }
+}
