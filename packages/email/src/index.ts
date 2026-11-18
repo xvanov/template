@@ -47,6 +47,14 @@ export {
   type ReceivedEmail,
 };
 
+export {
+  handleResendDelivery,
+  plainEmail,
+  resendEvent,
+  type ResendDeliveryOutcome,
+  type ResendEvent,
+} from "./events";
+
 export interface Mail {
   to: string;
   subject: string;

@@ -1,6 +1,6 @@
 /**
- * What build is running, for the health check: APP_VERSION (scripts/deploy.sh
- * sets it to the deployed git commit), else the root package.json `version`,
+ * What build is running, for the health check: APP_VERSION (a deploy sets
+ * it to the deployed git commit), else the root package.json `version`,
  * else "unknown".
  *
  * The package.json is a static import, so the bundler (Next) or tsx reads it

@@ -87,7 +87,8 @@ In `.env.production`, set:
   sign-in fails with "Invalid origin".
 - `SMTP_*`: a real relay. Delete `OUTBOUND_SAFE_MODE=local`, which production
   refuses. Set it to `false` for real mail to real people, or leave it unset.
-- `DEV_MAIL_INBOX_URL=` and `EXPO_PUBLIC_DEV_MAIL_INBOX_URL=`: empty.
+- `DEV_MAIL_INBOX_URL=`: empty.
+- `EXPO_PUBLIC_DEV_MAIL_INBOX_URL=`: empty. <!-- @module:mobile -->
 - `CRON_SECRET`, `EMAIL_WEBHOOK_SECRET`, `SECRETS_ENCRYPTION_KEY`: if you use
   them. In production they fail closed when unset.
 

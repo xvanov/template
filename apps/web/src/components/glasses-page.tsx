@@ -2,7 +2,7 @@
 
 /**
  * Glance links for Meta Ray-Ban Display glasses (and any small screen): a
- * read-only page of what needs you — approvals and unhandled inbox — at
+ * read-only page of what needs you (open items, approvals, unhandled inbox) at
  * /glance/<secret>, added to the glasses as a Web App. Each member manages
  * their own links; the secret is shown once.
  */
@@ -80,7 +80,7 @@ export function GlassesPage() {
             <h1>Glance links</h1>
           </CardTitle>
           <CardDescription>
-            A read-only page of what needs you (approvals and unhandled inbox),
+            A read-only page of what needs you (open items, approvals, inbox),
             sized for Meta Ray-Ban Display glasses. Anyone with the link can see
             it, so treat it like a password; revoke it if it leaks. By default
             it shows counts only; titles and senders appear on a see-through

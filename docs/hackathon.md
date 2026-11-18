@@ -56,7 +56,7 @@ plus `DB_PORT`/`DATABASE_URL` etc. in `.env`; `make doctor` flags a mismatch.
 
 - [ ] Rehearse the demo end to end, out loud, with a timer. Then cut it by a third.
 - [ ] Record a screen capture of the full demo as the fallback for a dead network.
-- [ ] Deploy (docs/deploy.md), or run the demo from a laptop; know which. For
+- [ ] Deploy, or run the demo from a laptop; know which. For
       a public URL, do NOT seed the demo account: create a real one. Keep
       `OUTBOUND_SAFE_MODE` strict (the default in production) so the demo cannot
       email or text a real person.

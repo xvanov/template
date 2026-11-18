@@ -113,26 +113,18 @@ export function renderGlancePage(opts: {
 <title>${escapeHtml(appName)}</title>
 <style>${STYLE}</style>
 </head><body><main>
-<section aria-label="Waiting for approval">
-<h1><span>Approvals</span>${count(s.approvals.count)}</h1>
+${s.sections
+  .map(
+    (sec) => `<section aria-label="${escapeHtml(sec.label)}">
+<h1><span>${escapeHtml(sec.label)}</span>${count(sec.count)}</h1>
 ${
   s.details
-    ? rows(s.approvals.rows, now, "Nothing waiting for you.")
-    : summary(
-        s.approvals.count,
-        "waiting for your approval",
-        "Nothing waiting for you.",
-      )
+    ? rows(sec.rows, now, sec.empty)
+    : summary(sec.count, sec.noun, sec.empty)
 }
-</section>
-<section aria-label="Inbox">
-<h1><span>Inbox</span>${count(s.inbox.unhandled)}</h1>
-${
-  s.details
-    ? rows(s.inbox.rows, now, "Inbox is clear.")
-    : summary(s.inbox.unhandled, "unhandled messages", "Inbox is clear.")
-}
-</section>
+</section>`,
+  )
+  .join("\n")}
 <footer>${escapeHtml(appName)} · updated ${now.toISOString().slice(11, 16)} UTC</footer>
 </main>
 <script nonce="${escapeHtml(nonce)}">${SCRIPT}</script>

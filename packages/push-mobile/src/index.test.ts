@@ -209,16 +209,25 @@ describe("no network under test", () => {
 
 describe("pushText: nothing about who or what on the lock screen", () => {
   it("says only what kind of thing happened", () => {
+    expect(pushText({ kind: "item", id: "i1" })).toEqual({
+      title: "New item",
+      body: "Someone in your workspace added an item.",
+      data: { kind: "item", id: "i1" },
+    });
+    // @module:agent
     expect(pushText({ kind: "proposal", id: "p1" })).toEqual({
       title: "Waiting for your approval",
       body: "An agent proposal needs your review.",
       data: { kind: "proposal", id: "p1" },
     });
+    // @end
+    // @module:inbound
     expect(
       pushText({ kind: "inbound", id: "m1" }, { channel: "sms" }).title,
     ).toBe("New text message");
     expect(
       pushText({ kind: "inbound", id: "m1" }, { channel: "email" }).title,
     ).toBe("New email");
+    // @end
   });
 });

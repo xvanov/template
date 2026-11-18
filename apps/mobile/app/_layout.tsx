@@ -8,7 +8,7 @@ import superjson from "superjson";
 
 import "../global.css";
 
-import { PushRegistrar } from "../components/push-registrar";
+import { PushRegistrar } from "../components/push-registrar"; // @module:push-mobile
 import { getBaseUrl } from "../lib/api-url";
 import { getSessionCookie } from "../lib/auth";
 import { trpc } from "../lib/trpc";
@@ -43,7 +43,9 @@ export default function RootLayout() {
       <QueryClientProvider client={queryClient}>
         <SafeAreaProvider>
           <StatusBar style="auto" />
+          {/* @module:push-mobile */}
           <PushRegistrar />
+          {/* @end */}
           <Stack screenOptions={{ headerShown: false }} />
         </SafeAreaProvider>
       </QueryClientProvider>

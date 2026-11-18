@@ -11,16 +11,16 @@
  *   EAS_PROJECT_ID       From `eas init`; needed for push tokens and EAS builds.
  *   EXPO_OWNER           Expo account or org that owns the project (optional).
  *
- * Meta glasses (modules/glasses/README.md), all optional, all build-time:
- *   GLASSES_ENABLED        Link the Meta Wearables SDK into the build.  false
- *   GLASSES_META_APP_ID    Wearables Developer Center app id.           "0" (Developer Mode)
- *   GLASSES_CLIENT_TOKEN   Its client token.                            "0" (Developer Mode)
- *   GLASSES_MOCK_DEVICE    Compile MockDeviceKit (simulated glasses).   false (eas.json: on for development)
- *   GLASSES_ANALYTICS_OPT_OUT  Opt out of Meta's SDK analytics.         true
- *   GLASSES_CRASH_REPORTING_OPT_OUT  Opt out of its crash reports.      true
- *   GLASSES_IOS_EXPERIMENTAL  Allow an iOS build (Swift unverified).    false
- *   GLASSES_DAT_VERSION    Device Access Toolkit version.               1.0.1
- *
+ * Meta glasses (modules/glasses/README.md), all optional, all build-time: // @module:glasses
+ *   GLASSES_ENABLED        Link the Meta Wearables SDK into the build.  false // @module:glasses
+ *   GLASSES_META_APP_ID    Wearables Developer Center app id.           "0" (Developer Mode) // @module:glasses
+ *   GLASSES_CLIENT_TOKEN   Its client token.                            "0" (Developer Mode) // @module:glasses
+ *   GLASSES_MOCK_DEVICE    Compile MockDeviceKit (simulated glasses).   false (eas.json: on for development) // @module:glasses
+ *   GLASSES_ANALYTICS_OPT_OUT  Opt out of Meta's SDK analytics.         true // @module:glasses
+ *   GLASSES_CRASH_REPORTING_OPT_OUT  Opt out of its crash reports.      true // @module:glasses
+ *   GLASSES_IOS_EXPERIMENTAL  Allow an iOS build (Swift unverified).    false // @module:glasses
+ *   GLASSES_DAT_VERSION    Device Access Toolkit version.               1.0.1 // @module:glasses
+ * // @module:glasses
  * APP_SCHEME is load-bearing: the OAuth browser hop deep-links back on it, and
  * the server lists `<scheme>://` in better-auth's trustedOrigins. Both sides
  * read the same variable, so they cannot disagree.
@@ -115,12 +115,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     ],
     // The dev client: `eas build --profile development`. Expo Go ignores it.
     "expo-dev-client",
+    // @module:push-mobile
     [
       "expo-notifications",
       // Android's status-bar icon must be a white silhouette; replace this
       // with one (96x96 PNG, transparent background) when you rebrand.
       { icon: "./assets/android-icon-monochrome.png", color: "#4f46e5" },
     ],
+    // @end
     [
       "expo-image-picker",
       {
@@ -130,6 +132,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         microphonePermission: false,
       },
     ],
+    // @module:ai
     [
       "expo-audio",
       {
@@ -138,6 +141,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         enableBackgroundPlayback: false,
       },
     ],
+    // @end
+    // @module:glasses
     // Meta glasses (modules/glasses/README.md). Off by default: the native
     // module is then left out of autolinking and the build is unchanged.
     [
@@ -153,6 +158,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         datVersion: process.env.GLASSES_DAT_VERSION,
       },
     ],
+    // @end
   ],
   experiments: {
     typedRoutes: true,

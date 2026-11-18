@@ -10,12 +10,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { DictateButton } from "../components/dictate-button";
+import { DictateButton } from "../components/dictate-button"; // @module:ai
 import { EmptyState, ErrorState, LoadingState } from "../components/states";
 import { useSession } from "../lib/auth";
 import { useThemeColors } from "../lib/theme";
 import { trpc } from "../lib/trpc";
-import { useSignOut } from "../lib/use-push";
+import { useSignOut } from "../lib/use-sign-out";
 
 /** The same data as the web dashboard, over the same typed API. */
 export default function Items() {
@@ -30,7 +30,7 @@ export default function Items() {
   const remove = trpc.items.remove.useMutation({ onSuccess: refetch });
 
   const [title, setTitle] = useState("");
-  const [dictateError, setDictateError] = useState<string | null>(null);
+  const [dictateError, setDictateError] = useState<string | null>(null); // @module:ai
   const signOut = useSignOut();
 
   return (
@@ -63,18 +63,22 @@ export default function Items() {
         >
           <Text className="text-sm text-accent">Photos</Text>
         </Pressable>
+        {/* @module:push-mobile|glasses */}
         <Pressable
           accessibilityRole="link"
           onPress={() => router.push("/device")}
         >
           <Text className="text-sm text-accent">This device</Text>
         </Pressable>
+        {/* @end */}
+        {/* @module:glasses */}
         <Pressable
           accessibilityRole="link"
           onPress={() => router.push("/glasses")}
         >
           <Text className="text-sm text-accent">Glasses</Text>
         </Pressable>
+        {/* @end */}
       </View>
 
       <View className="flex-row gap-2 px-5 pb-3">
@@ -92,6 +96,7 @@ export default function Items() {
           }}
           returnKeyType="done"
         />
+        {/* @module:ai */}
         <DictateButton
           onText={(text) => {
             setDictateError(null);
@@ -100,6 +105,7 @@ export default function Items() {
           }}
           onError={setDictateError}
         />
+        {/* @end */}
         <Pressable
           accessibilityRole="button"
           disabled={!title.trim() || create.isPending}
@@ -115,9 +121,11 @@ export default function Items() {
         </Pressable>
       </View>
 
+      {/* @module:ai */}
       {dictateError ? (
         <Text className="px-5 pb-2 text-sm text-danger">{dictateError}</Text>
       ) : null}
+      {/* @end */}
 
       {items.isPending ? (
         <LoadingState />

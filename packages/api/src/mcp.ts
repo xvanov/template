@@ -144,6 +144,7 @@ export function createMcpServer(
     (input) => attempt(async () => json(await api.items.list(input))),
   );
 
+  // @module:rag
   server.registerTool(
     "docs_search",
     {
@@ -170,6 +171,7 @@ export function createMcpServer(
         });
       }),
   );
+  // @end
 
   server.registerTool(
     "items_create",

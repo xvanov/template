@@ -6,18 +6,31 @@ const now = new Date("2026-11-18T12:00:00Z");
 const snapshot = {
   at: now.toISOString(),
   details: true,
-  approvals: {
-    count: 7,
-    rows: [
-      {
-        id: "p1",
-        title: `<img src=x onerror=alert(1)>`,
-        detail: null,
-        at: "2026-11-18T11:55:00Z",
-      },
-    ],
-  },
-  inbox: { unhandled: 0, rows: [] },
+  sections: [
+    {
+      key: "items",
+      label: "Open items",
+      count: 7,
+      noun: "open items",
+      empty: "Nothing open.",
+      rows: [
+        {
+          id: "p1",
+          title: `<img src=x onerror=alert(1)>`,
+          detail: null,
+          at: "2026-11-18T11:55:00Z",
+        },
+      ],
+    },
+    {
+      key: "inbox",
+      label: "Inbox",
+      count: 0,
+      noun: "unhandled messages",
+      empty: "Inbox is clear.",
+      rows: [],
+    },
+  ],
 };
 
 describe("renderGlancePage", () => {
@@ -65,18 +78,12 @@ describe("helpers", () => {
 describe("counts-only links", () => {
   it("show numbers and no rows", () => {
     const html = renderGlancePage({
-      snapshot: {
-        ...snapshot,
-        details: false,
-        approvals: { count: 2, rows: [] },
-      },
+      snapshot: { ...snapshot, details: false },
       appName: "Acme",
       nonce: "n",
       now,
     });
-    expect(html).toContain(
-      "2 waiting for your approval. Details on your phone.",
-    );
+    expect(html).toContain("7 open items. Details on your phone.");
     expect(html).toContain("Inbox is clear.");
     expect(html).not.toContain("<li");
   });

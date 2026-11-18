@@ -22,7 +22,8 @@ import {
   TOOLS,
   toolSpec,
 } from "@repo/agent";
-import { enqueue, queueAppPush } from "@repo/jobs";
+import { enqueue } from "@repo/jobs";
+import { queueAppPush } from "@repo/jobs"; // @module:push-mobile
 
 import { ConflictError, NotFoundError } from "../errors";
 import { createTRPCRouter, orgProcedure, rateLimited } from "../trpc";
@@ -269,11 +270,13 @@ export const agentRouter = createTRPCRouter({
         input: input.input,
         audit: ctx.audit,
       });
+      // @module:push-mobile
       // From an MCP client, the key's owner is not looking at the app: push.
       // (A proposal you just made yourself in the app needs no push.)
       if (ctx.apiKey) {
         await queueAppPush(ctx.organizationId, { kind: "proposal", id: p.id });
       }
+      // @end
       return p;
     }),
 

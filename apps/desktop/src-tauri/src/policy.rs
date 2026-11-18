@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn the_server_loads_in_the_window() {
         for t in [
-            "https://app.example.com/app/inbox?x=1#y",
+            "https://app.example.com/app/settings?x=1#y",
             "https://app.example.com:443/login",
             "blob:https://app.example.com/5f1c-uuid",
             "about:blank",
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn new_windows_for_the_app_stay_in_the_app_window() {
-        assert_eq!(win("https://app.example.com/app/docs", S), Nav::Stay);
+        assert_eq!(win("https://app.example.com/app/reports", S), Nav::Stay);
         assert_eq!(win("https://accounts.google.com/o/oauth2/v2/auth", S), Nav::Stay);
     }
 

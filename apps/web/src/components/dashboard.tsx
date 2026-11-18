@@ -2,8 +2,8 @@
 
 /**
  * The "hello world" that proves the whole stack is alive: one screen touching
- * auth, the tenant, the database, the typed API, the LLM, blob storage and the
- * background worker. It is also what the smoke gate drives.
+ * auth, the tenant, the database, the typed API, blob storage and the
+ * background worker (and the LLM, with the AI module). It is also what the smoke gate drives.
  *
  * Built only from the kit in components/ui — use it as the reference for how a
  * page is put together (states, forms, tables, toasts).
@@ -29,10 +29,10 @@ import { Input } from "@/components/ui/input";
 import {
   EmptyState,
   ErrorState,
-  FieldError,
+  FieldError, // @module:ai
   LoadingState,
 } from "@/components/ui/states";
-import { Textarea } from "@/components/ui/textarea";
+import { Textarea } from "@/components/ui/textarea"; // @module:ai
 import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { uploadFile } from "@/lib/upload";
 import { cn } from "@/lib/utils";
@@ -42,7 +42,7 @@ type Item = RouterOutputs["items"]["list"][number];
 export function Dashboard() {
   const format = useFormat();
   const items = trpc.items.list.useQuery({ includeDone: true, limit: 50 });
-  const aiEnabled = trpc.ai.enabled.useQuery();
+  const aiEnabled = trpc.ai.enabled.useQuery(); // @module:ai
   const media = trpc.media.list.useQuery({ limit: 12 });
   const jobs = trpc.items.recentJobs.useQuery();
 
@@ -76,10 +76,10 @@ export function Dashboard() {
       setTimeout(() => void jobs.refetch(), 1500);
     },
   });
-  const askAi = trpc.ai.ask.useMutation();
+  const askAi = trpc.ai.ask.useMutation(); // @module:ai
 
   const [title, setTitle] = useState("");
-  const [prompt, setPrompt] = useState("Give me one tip for shipping faster.");
+  const [prompt, setPrompt] = useState("Give me one tip for shipping faster."); // @module:ai
   const [uploading, setUploading] = useState(false);
 
   async function upload(file: File) {
@@ -230,6 +230,7 @@ export function Dashboard() {
         </CardContent>
       </Card>
 
+      {/* @module:ai */}
       {/* ── ai: LLM plumbing with per-call cost ───────────────────────── */}
       <Card>
         <CardHeader>
@@ -293,6 +294,7 @@ export function Dashboard() {
           )}
         </CardContent>
       </Card>
+      {/* @end */}
 
       {/* ── storage: upload + authenticated read-back ─────────────────── */}
       <Card>

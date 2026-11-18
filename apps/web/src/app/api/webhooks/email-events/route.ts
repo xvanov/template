@@ -8,8 +8,8 @@
  *      suppressed → outbound_message.deliveryStatus, matched on the id Resend
  *        returned when it accepted the message;
  *      a permanent bounce or a complaint → the global suppression list;
- *      email.received → an inbound message (packages/inbound), content
- *        fetched by the worker.
+ *      email.received → an inbound message (packages/inbound), content // @module:inbound
+ *        fetched by the worker. // @module:inbound
  *
  * 2. Generic HMAC, for any other provider: HMAC-SHA256 over
  *    `${timestamp}.${rawBody}` with EMAIL_WEBHOOK_SECRET, sent as
@@ -26,12 +26,13 @@
  */
 import { z } from "zod";
 import { db, recordAudit } from "@repo/db";
+import { handleResendDelivery, resendEvent } from "@repo/email";
 import { env } from "@repo/env";
-import { handleResendEvent, resendEvent } from "@repo/inbound";
+import { handleResendReceived } from "@repo/inbound"; // @module:inbound
 import { parseRecipient, suppress } from "@repo/outbound";
 import { verifyHmac, verifySvix } from "@repo/security";
 
-import { logUnrouted, queueInbound } from "@/lib/inbound-queue";
+import { logUnrouted, queueInbound } from "@/lib/inbound-queue"; // @module:inbound
 import {
   refuseUnsigned,
   WEBHOOK_LIMITS,
@@ -73,26 +74,24 @@ async function resend(req: Request, raw: string) {
   if (!parsed.success)
     return Response.json({ error: "Unrecognised event" }, { status: 400 });
 
-  const outcome = await handleResendEvent(parsed.data);
-  if (outcome.kind === "inbound") {
-    if (outcome.intake.outcome === "unrouted")
+  // @module:inbound
+  if (parsed.data.type === "email.received") {
+    const intake = await handleResendReceived(parsed.data);
+    if (!intake) return Response.json({ ok: true, ignored: parsed.data.type });
+    if (intake.outcome === "unrouted")
       logUnrouted("email", parsed.data.data.to ?? []);
-    else await queueInbound(outcome.intake);
+    else await queueInbound(intake);
+    return Response.json({ ok: true, inbound: intake.outcome });
   }
+  // @end
+  const outcome = await handleResendDelivery(parsed.data);
   // 200 for events we do not act on too (opened, clicked, contact.*): an
   // error would only make Resend retry something nothing can fix.
-  return Response.json({ ok: true, ...summary(outcome) });
-}
-
-function summary(outcome: Awaited<ReturnType<typeof handleResendEvent>>) {
-  switch (outcome.kind) {
-    case "inbound":
-      return { inbound: outcome.intake.outcome };
-    case "delivery":
-      return { status: outcome.status, matched: outcome.matched };
-    default:
-      return { ignored: outcome.type };
-  }
+  return Response.json(
+    outcome.kind === "delivery"
+      ? { ok: true, status: outcome.status, matched: outcome.matched }
+      : { ok: true, ignored: outcome.type },
+  );
 }
 
 async function generic(req: Request, raw: string) {

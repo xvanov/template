@@ -9,7 +9,7 @@
 // module that reads it is evaluated.
 import "@repo/env/load";
 
-import { announceLlmConfig } from "@repo/ai";
+import { announceLlmConfig } from "@repo/ai"; // @module:ai
 import { createWorker, registerSchedules, closeQueue } from "@repo/jobs";
 import { env } from "@repo/env";
 
@@ -17,7 +17,7 @@ async function main() {
   // Validate the environment before connecting to anything, so a bad config
   // fails in one readable line instead of as a connection timeout.
   const CONCURRENCY = env().WORKER_CONCURRENCY;
-  announceLlmConfig();
+  announceLlmConfig(); // @module:ai
 
   await registerSchedules();
 

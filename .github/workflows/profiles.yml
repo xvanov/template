@@ -1,0 +1,78 @@
+# Every profile of scripts/new-app.sh, generated and gated like a real app:
+# format, typecheck, lint, unit + integration tests, migrations == schema,
+# and the smoke gate for web and hackathon (scripts/test-profiles.sh: the
+# same script as locally). Separate from ci.yml so the main gate stays fast;
+# it runs when the template machinery changes, weekly (module code changes
+# elsewhere can still break a profile), and on demand.
+name: profiles
+
+on:
+  workflow_dispatch:
+    inputs:
+      smoke:
+        description: "Profiles that also run the smoke gate (comma-separated, or all)"
+        default: "web,hackathon"
+  schedule:
+    - cron: "23 4 * * 1"
+  pull_request:
+    paths:
+      - "template/**"
+      - "scripts/new-app*"
+      - "scripts/test-profiles.sh"
+      - ".github/workflows/profiles.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profile:
+    name: ${{ matrix.profile }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [web, web-ai, mobile, desktop, glasses, hackathon, full]
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg17-bookworm
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app
+          POSTGRES_INITDB_ARGS: "--locale-provider=builtin --builtin-locale=C.UTF-8"
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d app"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      TEST_PG_URL: postgresql://postgres:postgres@localhost:5432
+      TEST_REDIS_URL: redis://localhost:6379
+      SMOKE_PROFILES: ${{ github.event.inputs.smoke || 'web,hackathon' }}
+      PROFILES_OUT: ${{ github.workspace }}/../profiles
+      # The smoke step installs the generated app's own Chromium first.
+      PLAYWRIGHT_INSTALL: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: node --test scripts/new-app.test.mjs
+      - run: bash scripts/test-profiles.sh ${{ matrix.profile }}
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: profile-${{ matrix.profile }}-logs
+          path: ${{ github.workspace }}/../profiles/*.log
+          retention-days: 7

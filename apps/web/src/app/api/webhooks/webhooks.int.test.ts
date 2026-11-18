@@ -9,30 +9,30 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { db } from "@repo/db";
 import { createTenant } from "@repo/db/testing";
 import { resetEnvCache } from "@repo/env";
-import { ensureEmailAddress } from "@repo/inbound";
+import { ensureEmailAddress } from "@repo/inbound"; // @module:inbound
 import { findSuppression } from "@repo/outbound";
 
 import { POST as emailEvents } from "./email-events/route";
-import { POST as emailInbound } from "./email-inbound/route";
-import { POST as twilioInbound } from "./twilio/route";
-import { POST as twilioStatus } from "./twilio/status/route";
+import { POST as emailInbound } from "./email-inbound/route"; // @module:inbound
+import { POST as twilioInbound } from "./twilio/route"; // @module:sms
+import { POST as twilioStatus } from "./twilio/status/route"; // @module:sms
 
 const { enqueue } = vi.hoisted(() => ({ enqueue: vi.fn(async () => "job") }));
 vi.mock("@repo/jobs", () => ({ enqueue }));
 
 const SVIX_SECRET = `whsec_${randomBytes(24).toString("base64")}`;
 const HMAC_SECRET = "generic-test-secret";
-const TWILIO_TOKEN = "twilio-test-token";
-const PUBLIC = "https://app.example.test";
-const DOMAIN = `in-${randomBytes(3).toString("hex")}.example.test`;
+const TWILIO_TOKEN = "twilio-test-token"; // @module:sms
+const PUBLIC = "https://app.example.test"; // @module:sms
+const DOMAIN = `in-${randomBytes(3).toString("hex")}.example.test`; // @module:inbound
 
 beforeAll(() => {
   Object.assign(process.env, {
     RESEND_WEBHOOK_SECRET: SVIX_SECRET,
     EMAIL_WEBHOOK_SECRET: HMAC_SECRET,
-    TWILIO_AUTH_TOKEN: TWILIO_TOKEN,
-    TWILIO_WEBHOOK_BASE_URL: PUBLIC,
-    INBOUND_EMAIL_DOMAIN: DOMAIN,
+    TWILIO_AUTH_TOKEN: TWILIO_TOKEN, // @module:sms
+    TWILIO_WEBHOOK_BASE_URL: PUBLIC, // @module:sms
+    INBOUND_EMAIL_DOMAIN: DOMAIN, // @module:inbound
   });
   resetEnvCache();
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -82,6 +82,7 @@ function hmacRequest(path: string, body: unknown) {
   });
 }
 
+// @module:sms
 /** Twilio: base64 HMAC-SHA1 of the PUBLIC url + sorted key/value pairs. */
 function twilioRequest(
   path: string,
@@ -106,6 +107,7 @@ function twilioRequest(
     body: new URLSearchParams(params).toString(),
   });
 }
+// @end
 
 describe("/api/webhooks/email-events (Resend, Svix-signed)", () => {
   it("records delivery on our message by Resend's id", async () => {
@@ -151,6 +153,7 @@ describe("/api/webhooks/email-events (Resend, Svix-signed)", () => {
     expect(await findSuppression("email", "v@x.test", null)).toBeNull();
   });
 
+  // @module:inbound
   it("email.received for a tenant's address is stored and queued", async () => {
     const a = await createTenant("wh-recv");
     const address = (await ensureEmailAddress(a.organizationId))!;
@@ -175,8 +178,10 @@ describe("/api/webhooks/email-events (Resend, Svix-signed)", () => {
       { jobId: expect.stringMatching(/^inbound-/) },
     );
   });
+  // @end
 });
 
+// @module:inbound
 describe("/api/webhooks/email-inbound (generic, HMAC-signed)", () => {
   it("stores a signed message for the right tenant, once", async () => {
     const a = await createTenant("wh-gen");
@@ -216,7 +221,9 @@ describe("/api/webhooks/email-inbound (generic, HMAC-signed)", () => {
     expect(res.status).toBe(401);
   });
 });
+// @end
 
+// @module:sms
 describe("/api/webhooks/twilio", () => {
   const number = () =>
     `+4477009${String(randomBytes(3).readUIntBE(0, 3) % 100000).padStart(5, "0")}`;
@@ -278,13 +285,14 @@ describe("/api/webhooks/twilio", () => {
     ).toBe("delivered");
   });
 });
+// @end
 
 describe("every webhook: size cap before signature work; throttling only of failed signatures", () => {
   const routes = [
     ["email-events", emailEvents],
-    ["email-inbound", emailInbound],
-    ["twilio", twilioInbound],
-    ["twilio/status", twilioStatus],
+    ["email-inbound", emailInbound], // @module:inbound
+    ["twilio", twilioInbound], // @module:sms
+    ["twilio/status", twilioStatus], // @module:sms
   ] as const;
 
   it("refuses an oversized chunked body (no Content-Length) with 413", async () => {
@@ -300,38 +308,41 @@ describe("every webhook: size cap before signature work; throttling only of fail
         new Request(`http://internal:3000/api/webhooks/${name}`, {
           method: "POST",
           body: huge,
-          // @ts-expect-error Node's fetch needs this for a stream body
+          // Node's fetch needs this for a stream body (cast below: whether
+          // RequestInit declares it depends on the installed @types).
           duplex: "half",
-        }),
+        } as RequestInit),
       );
       expect(res.status, name).toBe(413);
     }
   });
 
   it("throttles only FAILED signatures per IP: a flood of forgeries cannot 429 real callbacks", async () => {
-    // An attacker sets X-Forwarded-For to whatever IP Twilio uses.
+    // An attacker sets X-Forwarded-For to whatever IP the provider uses.
     const ip = `203.0.113.${Math.floor(Math.random() * 250)}`;
+    const body = { type: "bounce", email: `t-${uid()}@customer.test` };
     const forged = () =>
-      twilioStatus(
-        new Request("http://internal:3000/api/webhooks/twilio/status", {
+      emailEvents(
+        new Request("http://internal:3000/api/webhooks/email-events", {
           method: "POST",
-          headers: { "x-forwarded-for": ip, "x-twilio-signature": "forged" },
-          body: "MessageSid=SM1&MessageStatus=sent",
+          headers: {
+            "x-forwarded-for": ip,
+            "x-webhook-timestamp": String(Math.floor(Date.now() / 1000)),
+            "x-webhook-signature": "sha256=forged",
+          },
+          body: JSON.stringify(body),
         }),
       );
     let last = 0;
     for (let i = 0; i < 31; i++) last = (await forged()).status;
     expect(last).toBe(429);
 
-    // Twilio's real, signed callback to the SAME webhook from that same IP
-    // still goes through.
-    const signed = twilioRequest("/api/webhooks/twilio/status", {
-      MessageSid: `SM${uid()}`,
-      MessageStatus: "delivered",
-    });
+    // The provider's real, signed callback to the SAME webhook from that same
+    // IP still goes through.
+    const signed = hmacRequest("/api/webhooks/email-events", body);
     signed.headers.set("x-forwarded-for", ip);
-    const res = await twilioStatus(signed);
+    const res = await emailEvents(signed);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, matched: 0 });
+    expect(await res.json()).toEqual({ ok: true });
   });
 });

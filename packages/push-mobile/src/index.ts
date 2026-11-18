@@ -316,9 +316,11 @@ async function recordReceipt(
 
 // ── what the app pushes about ─────────────────────────────────────────────
 
-/** Things in a tenant that want a human, as pushes. Same set as desktop.feed. */
+/** Things in a tenant that want a human, as pushes (the desktop shell's set too). */
 export type AppEvent =
-  { kind: "proposal"; id: string } | { kind: "inbound"; id: string };
+  | { kind: "item"; id: string }
+  | { kind: "proposal"; id: string } // @module:agent
+  | { kind: "inbound"; id: string }; // @module:inbound
 
 /**
  * The lock-screen text for an event: what happened, never who or what (see
@@ -328,20 +330,34 @@ export function pushText(
   event: AppEvent,
   detail: { channel?: string } = {},
 ): MobilePush {
-  if (event.kind === "proposal") {
-    return {
-      title: "Waiting for your approval",
-      body: "An agent proposal needs your review.",
-      data: { kind: event.kind, id: event.id },
-    };
+  const data = { kind: event.kind, id: event.id };
+  switch (event.kind) {
+    case "item":
+      return {
+        title: "New item",
+        body: "Someone in your workspace added an item.",
+        data,
+      };
+    // @module:agent
+    case "proposal":
+      return {
+        title: "Waiting for your approval",
+        body: "An agent proposal needs your review.",
+        data,
+      };
+    // @end
+    // @module:inbound
+    case "inbound":
+      return {
+        title: detail.channel === "sms" ? "New text message" : "New email",
+        body: "Open the app to read it.",
+        data,
+      };
+    // @end
   }
-  return {
-    title: detail.channel === "sms" ? "New text message" : "New email",
-    body: "Open the app to read it.",
-    data: { kind: event.kind, id: event.id },
-  };
 }
 
+// @module:agent
 /** Members of an org who should hear about a proposal no one in particular asked for. */
 async function orgAdmins(organizationId: string): Promise<string[]> {
   const members = await db.member.findMany({
@@ -350,12 +366,27 @@ async function orgAdmins(organizationId: string): Promise<string[]> {
   });
   return members.map((m) => m.userId);
 }
+// @end
+
+/** Every member of the org with a registered device, but `except`. */
+async function membersWithDevices(
+  organizationId: string,
+  except?: string | null,
+): Promise<string[]> {
+  const devices = await db.pushDevice.findMany({
+    where: { organizationId, disabled: false },
+    distinct: ["userId"],
+    select: { userId: true },
+  });
+  return devices.map((d) => d.userId).filter((u) => u !== except);
+}
 
 /**
  * Push one event to the people it concerns:
- *   proposal  the user it was made for (proposedBy), else the org's owners
- *             and admins; only while it is still pending.
- *   inbound   every member of the org with a registered device.
+ *   item      every member with a registered device but its creator.
+ *   proposal  the user it was made for (proposedBy), else the org's owners // @module:agent
+ *             and admins; only while it is still pending. // @module:agent
+ *   inbound   every member of the org with a registered device. // @module:inbound
  * Idempotent per event and device. A no-op while the channel is off.
  */
 export async function notifyAppEvent(
@@ -368,28 +399,44 @@ export async function notifyAppEvent(
 
   let users: string[];
   let push: MobilePush;
-  if (event.kind === "proposal") {
-    const p = await db.agentProposal.findFirst({
-      where: { id: event.id, organizationId },
-      select: { status: true, proposedById: true },
-    });
-    if (!p || p.status !== "pending")
-      return { ...none, skipped: "not pending" };
-    users = p.proposedById ? [p.proposedById] : await orgAdmins(organizationId);
-    push = pushText(event);
-  } else {
-    const m = await db.inboundMessage.findFirst({
-      where: { id: event.id, organizationId },
-      select: { channel: true },
-    });
-    if (!m) return { ...none, skipped: "not found" };
-    const devices = await db.pushDevice.findMany({
-      where: { organizationId, disabled: false },
-      distinct: ["userId"],
-      select: { userId: true },
-    });
-    users = devices.map((d) => d.userId);
-    push = pushText(event, { channel: m.channel });
+  switch (event.kind) {
+    case "item": {
+      const item = await db.item.findFirst({
+        where: { id: event.id, organizationId },
+        select: { createdById: true },
+      });
+      if (!item) return { ...none, skipped: "not found" };
+      users = await membersWithDevices(organizationId, item.createdById);
+      push = pushText(event);
+      break;
+    }
+    // @module:agent
+    case "proposal": {
+      const p = await db.agentProposal.findFirst({
+        where: { id: event.id, organizationId },
+        select: { status: true, proposedById: true },
+      });
+      if (!p || p.status !== "pending")
+        return { ...none, skipped: "not pending" };
+      users = p.proposedById
+        ? [p.proposedById]
+        : await orgAdmins(organizationId);
+      push = pushText(event);
+      break;
+    }
+    // @end
+    // @module:inbound
+    case "inbound": {
+      const m = await db.inboundMessage.findFirst({
+        where: { id: event.id, organizationId },
+        select: { channel: true },
+      });
+      if (!m) return { ...none, skipped: "not found" };
+      users = await membersWithDevices(organizationId);
+      push = pushText(event, { channel: m.channel });
+      break;
+    }
+    // @end
   }
 
   const total = { ...none, users: users.length };

@@ -6,10 +6,10 @@
  * in <main>. Add a route to NAV and it appears in the sidebar.
  */
 import {
-  Bot,
-  FileText,
-  Glasses,
-  Inbox,
+  Bot, // @module:agent
+  FileText, // @module:rag
+  Glasses, // @module:glasses
+  Inbox, // @module:inbound
   LayoutDashboard,
   LogOut,
   type LucideIcon,
@@ -49,10 +49,10 @@ import { trpc } from "@/lib/trpc";
 
 const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/app", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/app/inbox", label: "Inbox", icon: Inbox },
-  { href: "/app/docs", label: "Documents", icon: FileText },
-  { href: "/app/agent", label: "Agent", icon: Bot },
-  { href: "/app/glasses", label: "Glasses", icon: Glasses },
+  { href: "/app/inbox", label: "Inbox", icon: Inbox }, // @module:inbound
+  { href: "/app/docs", label: "Documents", icon: FileText }, // @module:rag
+  { href: "/app/agent", label: "Agent", icon: Bot }, // @module:agent
+  { href: "/app/glasses", label: "Glasses", icon: Glasses }, // @module:glasses
 ];
 
 function initials(name: string, email: string): string {

@@ -98,6 +98,7 @@ describe("env", () => {
     expect(googleEnabled()).toBe(false);
   });
 
+  // @module:ai
   it("parses the LLM switch, cap and effort, and rejects a short bridge key", () => {
     setBaseline();
     expect(env()).toMatchObject({
@@ -132,6 +133,7 @@ describe("env", () => {
     process.env.CLAUDE_BRIDGE_KEY = "short";
     expect(() => env()).toThrow(/CLAUDE_BRIDGE_KEY/);
   });
+  // @end
 
   it("reads a blank OUTBOUND_SAFE_MODE= as unset (the default), never as false", () => {
     setBaseline();
@@ -226,22 +228,20 @@ describe("blank optional URLs", () => {
   it("are removed from the environment, so SDKs that read it themselves see them unset", async () => {
     const { dropBlankOptionalUrls } = await import("./index");
     const target: Record<string, string | undefined> = {
-      OPENAI_BASE_URL: "",
-      ANTHROPIC_BASE_URL: "  ",
-      AZURE_OPENAI_ENDPOINT: "",
+      BETTER_AUTH_URL: "",
+      DEV_MAIL_INBOX_URL: "  ",
       S3_ENDPOINT: "https://s3.example.test",
       DATABASE_URL: "", // required: left for env() to report
-      LLM_API_KEY: "", // not a URL: untouched
+      CRON_SECRET: "", // not a URL: untouched
     };
     expect(dropBlankOptionalUrls(target).sort()).toEqual([
-      "ANTHROPIC_BASE_URL",
-      "AZURE_OPENAI_ENDPOINT",
-      "OPENAI_BASE_URL",
+      "BETTER_AUTH_URL",
+      "DEV_MAIL_INBOX_URL",
     ]);
     expect(target).toEqual({
       S3_ENDPOINT: "https://s3.example.test",
       DATABASE_URL: "",
-      LLM_API_KEY: "",
+      CRON_SECRET: "",
     });
   });
 });

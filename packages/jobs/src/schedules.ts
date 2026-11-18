@@ -42,6 +42,7 @@ export const SCHEDULES: Schedule[] = [
     pattern: "*/15 * * * *",
     data: {},
   },
+  // @module:push-mobile
   {
     // A no-op unless mobile push is enabled (packages/push-mobile). Expo
     // keeps receipts about a day; they are ready ~15 minutes after sending.
@@ -50,6 +51,8 @@ export const SCHEDULES: Schedule[] = [
     pattern: "*/15 * * * *",
     data: {},
   },
+  // @end
+  // @module:sms
   {
     // A no-op unless SMS is enabled and configured (packages/sms).
     id: "sms-reconcile",
@@ -57,6 +60,7 @@ export const SCHEDULES: Schedule[] = [
     pattern: "7,37 * * * *",
     data: {},
   },
+  // @end
 ];
 
 export async function registerSchedules(): Promise<void> {

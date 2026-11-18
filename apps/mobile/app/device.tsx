@@ -1,17 +1,20 @@
 /**
- * What this phone can do, for testing on a real device: push registration
- * (and a test push through the server's outbound guard), and whether this
- * build has the glasses SDK (the capture flow itself is app/glasses.tsx). Most of it says "needs a development build" in Expo Go, on purpose.
+ * What this phone can do, for testing on a real device. Most of it says
+ * "needs a development build" in Expo Go, on purpose.
+ *   - push registration, and a test push through the server's outbound guard // @module:push-mobile
+ *   - whether this build has the glasses SDK (capture is app/glasses.tsx) // @module:glasses
  */
 import { ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ScreenHeader } from "../components/screen-header";
-import { availability as glassesAvailability } from "../modules/glasses";
+import { availability as glassesAvailability } from "../modules/glasses"; // @module:glasses
+// @module:push-mobile
 import { Button, ErrorState, LoadingState } from "../components/states";
 import { pushSupport } from "../lib/push";
 import { trpc } from "../lib/trpc";
 import { usePushState } from "../lib/use-push";
+// @end
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -23,12 +26,13 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 export default function Device() {
+  const glasses = glassesAvailability(); // @module:glasses
+  // @module:push-mobile
   const push = usePushState();
   const support = pushSupport();
   const server = trpc.push.status.useQuery();
   const devices = trpc.push.devices.useQuery();
   const test = trpc.push.test.useMutation();
-  const glasses = glassesAvailability();
 
   const registration =
     push.status === "registered"
@@ -42,12 +46,14 @@ export default function Device() {
             : support.ok
               ? "Not yet"
               : support.message;
+  // @end
 
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "bottom"]}>
       <ScreenHeader title="This device" />
 
       <ScrollView contentContainerClassName="px-5 pb-10">
+        {/* @module:push-mobile */}
         <Text className="pt-2 pb-1 text-xs font-semibold uppercase text-muted">
           Push notifications
         </Text>
@@ -102,7 +108,9 @@ export default function Device() {
             <Text className="text-sm text-danger">{test.error.message}</Text>
           ) : null}
         </View>
+        {/* @end */}
 
+        {/* @module:glasses */}
         <Text className="pt-8 pb-1 text-xs font-semibold uppercase text-muted">
           Smart glasses
         </Text>
@@ -116,6 +124,7 @@ export default function Device() {
                 : "Not supported here"
           }
         />
+        {/* @end */}
       </ScrollView>
     </SafeAreaView>
   );

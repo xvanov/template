@@ -3,12 +3,12 @@
  * Names are unique and match TOOL_NAME; the unit tests check both.
  */
 import type { AgentTool, ReadTool, WriteTool } from "./tool";
-import { docsSearch } from "./tools/docs";
+import { docsSearch } from "./tools/docs"; // @module:rag
 import { itemsCreate, itemsDelete, itemsSearch } from "./tools/items";
 
 export const TOOLS: readonly AgentTool[] = [
   itemsSearch,
-  docsSearch,
+  docsSearch, // @module:rag
   itemsCreate,
   itemsDelete,
 ];

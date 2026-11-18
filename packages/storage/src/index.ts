@@ -66,7 +66,7 @@ export function assertUploadAllowed(
 }
 
 /**
- * Audio accepted for transcription (POST /api/media/transcribe). Not stored:
+ * Audio accepted for transcription (the AI module's upload route). Not stored:
  * these never reach the media allow-list above. The aliases phones send for
  * the same format are normalised (normalizeAudioType) before the check.
  */

@@ -19,8 +19,8 @@ const SKIP = new Set([
   ".git",
 ]);
 const MAIL_TRANSPORT = "packages/email/src/transport.ts";
-const SMS_TRANSPORT = "packages/sms/src/transport.ts";
-const MOBILE_PUSH_TRANSPORT = "packages/push-mobile/src/transport.ts";
+const SMS_TRANSPORT = "packages/sms/src/transport.ts"; // @module:sms
+const MOBILE_PUSH_TRANSPORT = "packages/push-mobile/src/transport.ts"; // @module:push-mobile
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
@@ -46,10 +46,14 @@ describe("no way around the outbound guard", () => {
     );
     expect(root).toContain('mail: "packages/email/src/transport.ts"');
     expect(root).toContain('push: "packages/notify/src/ntfy.ts"');
+    // @module:sms
     expect(root).toContain('sms: "packages/sms/src/transport.ts"');
+    // @end
+    // @module:push-mobile
     expect(root).toContain(
       'mobilePush: "packages/push-mobile/src/transport.ts"',
     );
+    // @end
     expect(root).toContain("...outboundBoundary(");
     expect(web).toContain("...outboundBoundary(");
   });
@@ -77,6 +81,7 @@ describe("no way around the outbound guard", () => {
     expect(offenders).toEqual([]);
   });
 
+  // @module:sms
   it("only the sms transport names the Twilio API host", () => {
     const offenders = files
       .filter((f) => /api\.twilio\.com/i.test(readFileSync(f, "utf8")))
@@ -84,7 +89,9 @@ describe("no way around the outbound guard", () => {
       .filter((f) => f !== SMS_TRANSPORT);
     expect(offenders).toEqual([]);
   });
+  // @end
 
+  // @module:push-mobile
   it("only the mobile push transport (and its tests) names the Expo push host", () => {
     const offenders = files
       .filter((f) => /exp\.host/i.test(readFileSync(f, "utf8")))
@@ -96,6 +103,7 @@ describe("no way around the outbound guard", () => {
       );
     expect(offenders).toEqual([]);
   });
+  // @end
 
   it("only each channel's guarded entry point (and its tests) imports its transport", () => {
     const importers = files
@@ -107,18 +115,18 @@ describe("no way around the outbound guard", () => {
     expect(importers.sort()).toEqual([
       "packages/email/src/index.ts",
       "packages/email/src/transport.test.ts",
-      "packages/push-mobile/src/index.test.ts",
-      "packages/push-mobile/src/index.ts",
-      "packages/sms/src/index.test.ts",
-      "packages/sms/src/index.ts",
+      "packages/push-mobile/src/index.test.ts", // @module:push-mobile
+      "packages/push-mobile/src/index.ts", // @module:push-mobile
+      "packages/sms/src/index.test.ts", // @module:sms
+      "packages/sms/src/index.ts", // @module:sms
     ]);
   });
 
   it("the channel packages export nothing but the guarded entry point", () => {
     for (const pkgDir of [
       "packages/email",
-      "packages/sms",
-      "packages/push-mobile",
+      "packages/sms", // @module:sms
+      "packages/push-mobile", // @module:push-mobile
     ]) {
       const pkg = JSON.parse(
         readFileSync(resolve(ROOT, pkgDir, "package.json"), "utf8"),

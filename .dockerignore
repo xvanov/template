@@ -8,8 +8,8 @@
 **/test-results
 **/playwright-report
 packages/db/generated
-apps/mobile/android
-apps/mobile/ios
+apps/mobile/android # @module:mobile
+apps/mobile/ios # @module:mobile
 storage
 # deploy state + database dumps: never in a build context (or an image)
 .deploy
@@ -19,6 +19,7 @@ backups
 .env.*
 !.env.example
 *.log
+# @module:ml
 # ml/: a downloaded dataset or model weights must never ride along in a build
 # context. Copy what an image needs explicitly (ml/README.md, "Docker").
 ml/.venv
@@ -26,3 +27,4 @@ ml/runs
 ml/models
 ml/data
 **/__pycache__
+# @end

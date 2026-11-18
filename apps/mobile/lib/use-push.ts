@@ -1,8 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { Image } from "expo-image";
-
-import { authClient } from "./auth";
-import { forgetPushToken, obtainPushToken, storedPushToken } from "./push";
+import { obtainPushToken } from "./push";
 import { trpc } from "./trpc";
 
 export type PushState =
@@ -61,26 +58,7 @@ export function usePushRegistration(signedIn: boolean): void {
   }, [signedIn, mutateAsync]);
 }
 
-/**
- * Sign out, and first stop this device getting the account's pushes (while
- * the session still exists to authorise that), and drop cached photos. Best effort: an offline
- * sign-out still signs out; the row is dropped when someone else registers
- * the token, or disabled when Expo reports it dead.
- */
-export function useSignOut(): () => Promise<void> {
-  const { mutateAsync } = trpc.push.unregister.useMutation();
-  return async () => {
-    const token = await storedPushToken();
-    if (token) {
-      await mutateAsync({ token }).catch(() => {});
-      await forgetPushToken();
-    }
-    setState({ status: "idle" });
-    // Photos were fetched with this account's cookie: the next person on
-    // this phone must not see them from the cache.
-    await Promise.all([Image.clearDiskCache(), Image.clearMemoryCache()]).catch(
-      () => {},
-    );
-    await authClient.signOut();
-  };
+/** Back to "not registered" (after sign-out), so the next sign-in registers. */
+export function resetPushState(): void {
+  setState({ status: "idle" });
 }
