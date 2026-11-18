@@ -82,8 +82,9 @@ if [ "$SKIP_GATES" = 1 ]; then
   GATE_ROWS="| **all** | **SKIPPED (--skip-gates)** | | |"$'\n'
 else
   bold "gates on $SHORT (uncached)"
-  run_gate typecheck make typecheck
-  run_gate lint make lint
+  # --force everywhere: a replayed turbo cache entry proves nothing about this tree.
+  run_gate typecheck npx turbo run typecheck --force
+  run_gate lint bash -c "npx turbo run lint --force && make lint-sh"
   run_gate test npx turbo run test --force
   run_gate smoke make smoke
   if [ -d ml ] && command -v uv >/dev/null; then

@@ -3,11 +3,18 @@ splits/, runs/ and experiments/ are never touched."""
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from pathlib import Path
 
 import pytest
+
+# Before numpy loads (nothing above imports it): one BLAS thread. The toy
+# matrices are tiny, and on a busy machine a thread per core made the suite 5x
+# slower (measured: 15 s vs 3 s).
+for _var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
 
 REAL_ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,7 +30,7 @@ def ml_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # The same file, minus the real experiments' rows.
     (exp / "REGISTRY.md").write_text(re.sub(r"(?m)^\| EXP-.*\n", "", registry))
     monkeypatch.setenv("ML_ROOT", str(root))
-    for name in list(__import__("os").environ):
+    for name in list(os.environ):
         if name.startswith("ML__"):
             monkeypatch.delenv(name)
     return root
