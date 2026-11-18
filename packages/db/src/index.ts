@@ -23,7 +23,14 @@ function createClient(): PrismaClient {
   const url = env().DATABASE_URL;
   const schema = schemaOf(url);
   const adapter = new PrismaPg(
-    { connectionString: url },
+    {
+      connectionString: url,
+      // Prisma's own queries are schema-qualified, but raw SQL
+      // ($queryRaw, packages/rag) resolves names through search_path. Pin it
+      // to the same schema, then `public`, where extensions such as pgvector
+      // live (their types and operators must resolve too).
+      ...(schema ? { options: `-c search_path=${searchPath(schema)}` } : {}),
+    },
     schema ? { schema } : undefined,
   );
   const client = new PrismaClient({
@@ -47,6 +54,18 @@ export const db: PrismaClient = new Proxy({} as PrismaClient, {
     return prop in instance();
   },
 });
+
+/**
+ * `"<schema>",public` for the connection's startup `options`. Quoted, so a
+ * mixed-case schema keeps its case; names that would need escaping there
+ * (whitespace, quotes, backslashes, commas) are refused.
+ */
+export function searchPath(schema: string): string {
+  if (!/^[^\s"\\,]+$/.test(schema)) {
+    throw new Error(`Unsupported schema name in DATABASE_URL: ${schema}`);
+  }
+  return schema === "public" ? "public" : `"${schema}",public`;
+}
 
 function schemaOf(url: string): string | undefined {
   try {

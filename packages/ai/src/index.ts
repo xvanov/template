@@ -190,6 +190,13 @@ export interface ConverseResult extends CallMeta {
 
 export interface EmbedOptions extends Omit<CallOptions, "tier"> {
   texts: string[];
+  /**
+   * Ask the model for vectors of this length (OpenAI text-embedding-3-* and
+   * compatible servers shorten natively). Unset: the model's native size.
+   * A model that ignores it and returns another length is refused with
+   * LlmConfigError, never stored.
+   */
+  dimensions?: number;
 }
 
 export interface EmbedResult {
@@ -210,6 +217,7 @@ export interface LlmDeps {
   embed: (
     route: Route,
     texts: string[],
+    opts: { dimensions?: number },
   ) => Promise<{ embeddings: number[][]; tokens: number }>;
   ledger: Ledger;
   warn: (message: string, data: Record<string, unknown>) => void;
@@ -309,7 +317,7 @@ const dispatchTurn: ProviderTurn = (req) => {
 const defaultDeps: LlmDeps = {
   call: dispatch,
   converse: dispatchTurn,
-  embed: (route, texts) => embedOpenAiFamily(route, texts),
+  embed: (route, texts, opts) => embedOpenAiFamily(route, texts, opts),
   ledger: dbLedger,
   warn: (message, data) => console.warn(`[ai] ${message}`, data),
   capHit: notifyCapHit,
@@ -711,6 +719,7 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
     if (!routeEnabled(route)) {
       throw new LlmDisabledError(`${route.id} is not configured.`);
     }
+    const dimensions = opts.dimensions;
     const chars = opts.texts.reduce((n, t) => n + t.length, 0);
     const estimate = estimateUsd(route.id, chars, 0);
     const row: LlmCallRow = {
@@ -735,7 +744,17 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
     const started = Date.now();
     let r: { embeddings: number[][]; tokens: number };
     try {
-      r = await deps.embed(route, opts.texts);
+      r = await deps.embed(route, opts.texts, { dimensions });
+      const wrong =
+        dimensions === undefined
+          ? undefined
+          : r.embeddings.find((v) => v.length !== dimensions);
+      if (wrong) {
+        throw new LlmConfigError(
+          `${route.id} returned ${wrong.length}-dimension embeddings, expected ${dimensions} ` +
+            "Use an embedding model that supports that size.",
+        );
+      }
     } catch (err) {
       await deps.ledger.settle(
         id,
@@ -788,6 +807,23 @@ export const askObject = llm.askObject;
 export const embed = llm.embed;
 
 // ── introspection ────────────────────────────────────────────────────────
+
+/**
+ * The configured embedding model as `provider/model` (what embed() records),
+ * or null when embeddings are off or misconfigured.
+ */
+export function embeddingModelId(): string | null {
+  const e = env();
+  if (!e.LLM_ENABLED || !e.LLM_EMBEDDING_MODEL) return null;
+  try {
+    const route = parseConfigured(e.LLM_EMBEDDING_MODEL);
+    return EMBEDDING_PROVIDERS.includes(route.provider) && routeEnabled(route)
+      ? route.id
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 /** True when the tier's model (default tier if omitted) can be called right now. */
 export function llmEnabled(tier: Tier = "default"): boolean {

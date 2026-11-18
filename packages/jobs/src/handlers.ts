@@ -16,6 +16,7 @@ import { z } from "zod";
 import { abandonStaleRuns, executeRun } from "@repo/agent";
 import { db } from "@repo/db";
 import { runOperatorTick } from "@repo/notify";
+import { ingestDocument, markIngestFailed, sweepStaleIngests } from "@repo/rag";
 import {
   ask,
   LlmBudgetExceededError,
@@ -35,6 +36,14 @@ const schemas = {
   "agent.run": z.object({
     organizationId: z.string().min(1),
     runId: z.string().min(1),
+  }),
+
+  /** Chunk + embed one document (packages/rag). Idempotent by content hash. */
+  "docs.ingest": z.object({
+    organizationId: z.string().min(1),
+    documentId: z.string().min(1),
+    /** Rebuild even if the content hash says nothing changed. */
+    force: z.boolean().optional(),
   }),
 
   /** Demo scheduled job: prune soft state and log a heartbeat. */
@@ -72,6 +81,11 @@ export interface JobEntry<S extends z.ZodType> {
   scope: ScopeOf<S>;
   schema: S;
   run: (payload: z.infer<S>) => Promise<unknown>;
+  /**
+   * Optional: called once when a run has failed for good (retries used up),
+   * to leave the job's own records in a final state. Must not throw.
+   */
+  onFinalFailure?: (payload: z.infer<S>, err: Error) => Promise<void>;
 }
 
 export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
@@ -128,6 +142,20 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     run: (payload) => executeRun(payload),
   },
 
+  "docs.ingest": {
+    scope: "org",
+    schema: schemas["docs.ingest"],
+    // AI off / over budget is not a failure: the document is indexed for
+    // keyword search and says why. A bad input (not UTF-8 text, the file is
+    // gone) is the user's to fix: recorded on the document, shown in the app,
+    // and returned — not thrown, which would retry it and page the operator.
+    // Only unexpected errors (database down) throw.
+    run: (payload) => ingestDocument(payload),
+    // An unexpected error (database blip, storage down) that outlived the
+    // retries: the document must not stay "indexing" forever.
+    onFinalFailure: (payload, err) => markIngestFailed(payload, err),
+  },
+
   "maintenance.nightly": {
     scope: "system",
     schema: schemas["maintenance.nightly"],
@@ -155,12 +183,19 @@ export const handlers: { [N in JobName]: JobEntry<(typeof schemas)[N]> } = {
     scope: "system",
     schema: schemas["operator.digest"],
     // Due-ness is decided inside (NOTIFY_DIGEST_TIMES in APP_TIMEZONE): most
-    // ticks retry nothing and find no digest due. The same tick fails agent
+    // ticks retry nothing and find no digest due. The same tick fails documents
+    // stuck in indexing for over an hour, and agent
     // runs a dead worker left "running" (past runCutoffMs()), so a stuck run
     // shows as failed within ~15 minutes of its cutoff, not the next night.
     run: async () => {
       const abandonedAgentRuns = await abandonStaleRuns(db);
-      return { ...(await runOperatorTick()), abandonedAgentRuns };
+      // Same idea for documents a lost docs.ingest job left "indexing".
+      const abandonedIngests = await sweepStaleIngests();
+      return {
+        ...(await runOperatorTick()),
+        abandonedAgentRuns,
+        abandonedIngests,
+      };
     },
   },
   "notify.digest": {

@@ -20,6 +20,8 @@ packages/ai    LLM calls routed by `provider/model` (Anthropic, OpenAI, Azure, l
 packages/jobs  job registry + queue + schedules
 packages/agent  agent runs: read tools run, write tools become proposals a person approves
 packages/domain  domain functions (input rules + writes) shared by tRPC routers and agent tools
+packages/rag   documents: chunk → embed → pgvector + Postgres FTS → hybrid search (RRF) → cited answers
+packages/evals  eval harness: golden sets, graders, retrieval metrics, baselines (`npm run eval`)
 packages/storage  file storage: local disk or any S3-compatible bucket
 packages/email  outbound SMTP (nodemailer), ONLY via the outbound guard. Mailpit locally
 packages/outbound  the outbound guard: every outbound message passes it and is logged
@@ -332,6 +334,129 @@ has write access. Rate limited per key (`MCP_RATE_LIMIT_PER_MINUTE`) and per IP 
 failed auth. Connect Claude Code:
 `claude mcp add --transport http app <APP_URL>/api/mcp --header "Authorization: Bearer tk_..."`.
 
+## Documents and search (packages/rag)
+
+Org-scoped `document` + `document_chunk` tables; `/app/docs` in the UI; the
+`docs` tRPC router; `docs_search` as an agent read tool and an MCP tool.
+
+- **Ingest** is the `docs.ingest` job (org scope), enqueued after the create
+  commits. Text arrives as a string (`docs.create`, ≤ 500,000 chars; the
+  browser reads the .md/.txt file) or from a text file already in storage
+  (`docs.fromMedia`: text/plain, text/markdown, text/csv; the worker reads the
+  bytes). Chunker (`src/chunk.ts`): markdown headings split sections, every
+  chunk carries its heading path with the doc title as root
+  ("Guide › Setup › Ports"), paragraphs are packed to 1200 chars with 150
+  overlap. The heading path is embedded with the chunk and indexed at FTS
+  weight A.
+- **Idempotent.** `document.contentHash` = sha256(chunker version, title,
+  text). Same hash as the last index + all chunks embedded = no-op. Otherwise
+  the chunks are replaced in one transaction; a chunk whose own hash did not
+  change keeps its embedding (never across embedding models). Changing the
+  chunker? Bump `CHUNKER_VERSION` so everything re-indexes.
+- **Embeddings are best-effort.** AI off, over the cap, provider down: chunks
+  are stored without vectors, the document is `ready` and its `note` says
+  "keyword-only" and why. A later re-index (or ingest with embeddings on)
+  fills them in. Bad input (not UTF-8, a stored file over 500,000 chars)
+  marks the document `failed` and is returned, not thrown (no retries, no
+  operator page).
+- **A document never stays "indexing".** Could not queue (Redis down; the
+  enqueue gives up after 5s) → `failed`; the job failed for good →
+  `failed` (the registry's `onFinalFailure` hook); lost job (worker killed) →
+  the 15-minute operator tick fails rows in flight for over an hour. Each
+  note says "Re-index to retry". The UI polls with backoff and stops after
+  3 minutes (Refresh resumes). Two ingests of one document serialise on an
+  advisory lock, and a run that read the text before an edit writes nothing
+  (`superseded`).
+- **Search** (`searchDocs`): keyword leg (`to_tsquery` of the query's words
+  OR-ed, ranked by `ts_rank_cd` + 1 for chunks matching the whole query via
+  `websearch_to_tsquery`) and meaning leg (cosine kNN, HNSW with
+  `hnsw.iterative_scan = relaxed_order`, needed because the org filter would
+  otherwise starve plain HNSW), fused with Reciprocal Rank Fusion, k = 60.
+  Snippets are `ts_headline` with private-use markers, returned as
+  `snippetParts` for highlighting. The query is embedded BEFORE the
+  transaction opens. With embeddings unavailable the result is
+  `mode: "keyword"` with `keywordOnly: <reason>` — CI and smoke run this way.
+- **Answer** (`docs.answer`): askObject over the top 6 chunks; the model
+  must cite `[n]` with a verbatim quote. Out-of-range citation, a quote not in
+  its source, `known: false`, or a number/email/link absent from the sources
+  (`assertGrounded`) → `status: "unknown"` with the sources, for a person.
+  No sources → "unknown" without calling the model. To avoid false
+  rejects: list numbering and `[n]` markers are not checked as facts,
+  "02:00" equals "2:00", quotes are matched against link TEXT
+  (`[text](url)` → text), and an elided quote ("a … b") must have its pieces
+  in order.
+- **Raw SQL lives only in `packages/rag/src/store.ts`.** Prisma cannot read
+  `vector`/`tsvector` columns. Tagged templates only (bind parameters),
+  `organizationId` in every WHERE and join. Unqualified table names work in
+  tests because `packages/db` pins the connection's `search_path` to the
+  `?schema=` schema, then `public` (where pgvector lives). It is set as a
+  connection startup option (`-c search_path=...`), which PgBouncer in
+  transaction mode and some managed Postgres poolers reject or drop. Behind
+  one, use `?schema=public` (nothing is set then) or set the role's
+  search_path server-side (`ALTER ROLE ... SET search_path`).
+- **Embedding size is fixed by the column**: `vector(1536)`, and
+  `EMBEDDING_DIMENSIONS` in `src/store.ts`. Not a setting: it cannot differ
+  from the column. Every embed() asks for that size (text-embedding-3-*
+  shortens natively) and refuses any other length; a wrong-size vector
+  degrades ingest and search to keyword-only, never a SQL error. A different
+  size = a migration altering the column and rebuilding the HNSW index, the
+  constant, and a re-index of every document.
+- **The agent's `docs_search` embeds the query inside its read-only
+  transaction** (a read tool has no pre-transaction step). ~100–300 ms of an
+  open transaction per call; see the comment in
+  `packages/agent/src/tools/docs.ts` for the fix if that ever matters.
+- **Prisma and the hand-written SQL.** The `tsv` generated column and the
+  HNSW index are hand-edited in migration `rag_documents`. The schema mirrors
+  them (`@default(dbgenerated(...))` with the exact expression Postgres
+  reports, `@@index([embedding], map: ...)`) so `migrate dev` sees no drift.
+  If you change either, check `npx prisma migrate diff
+--from-config-datasource --to-schema prisma/schema.prisma --script` prints an
+  empty migration.
+
+## Evals (packages/evals)
+
+Lives in a workspace package so turbo runs its tests in `make test`, it gets
+typecheck/lint like everything else, and it imports rag/ai as TypeScript
+source.
+
+```bash
+npm run eval                                           # offline: ~1s, free, deterministic
+npm run eval -- --live --model anthropic/claude-opus-5-5   # real providers, keys from .env
+npm run eval -- --live --judge                         # + LLM-as-judge graders
+npm run eval -- --suite retrieval --failures           # one suite, failing rows only
+npm run eval -- --save-baseline                        # accept this run's scores
+```
+
+Each run makes a throwaway migrated schema (like the int tests), ingests
+`fixtures/corpus/*.md` into a fresh tenant, prints a table (score, cost,
+latency per case), writes the full JSON to `packages/evals/reports/`
+(gitignored) and compares with `baselines/<offline | live-<model>>.json`:
+exit 1 if a suite drops more than `--threshold` (offline 0 — plus any case
+that passed in the baseline and fails now; live 0.05). Offline = retrieval
+FTS-only, and the answer model replaced by a replay of each case's `offline`
+output, so the code AROUND the model (retrieval, citation and grounding
+checks, routing to "unknown") is what is tested. `test/offline.int.test.ts`
+runs exactly that inside `make test` as the regression gate.
+
+**Adding a golden case** — one JSON object per line:
+
+- Retrieval (`golden/retrieval.jsonl`):
+  `{"id":"r-x","input":"the query","expected":["backups"],"tags":["keyword"]}`
+  — `expected` names corpus files (without `.md`), any of which counts as
+  relevant; scored by reciprocal rank in the top 5 (suite score = MRR).
+  Add the text it should find to `fixtures/corpus/` if it is not there.
+- Answer (`golden/answer.jsonl`): `input` is the question, `graders` a list of
+  `exact` / `contains` / `regex` (each with an optional dot `path` into the
+  result: `status`, `reason`, `answer`, `citations`), `schema` (a JSON Schema)
+  and `judge` (a `rubric`; runs only with `--judge`). `offline` is the canned
+  model output `{"known", "answer", "quotes": [...]}`; `"offlineOnly": true`
+  marks guard tests (a fabricated number, a fake quote) that a live model
+  will not reproduce.
+
+Then `npm run eval`; if the new numbers are right, `--save-baseline` and
+commit the baseline with the case. Live baselines are per model; save one
+with the first live run of a model.
+
 ## UI (apps/web)
 
 **Use the kit; do not hand-roll.** Every button, input, modal, menu, table and
@@ -401,12 +526,20 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
   from `make up` and `setup.sh`. New volumes use the builtin `C.UTF-8`
   collation (`POSTGRES_INITDB_ARGS`), immune to libc. `deploy.sh` re-execs
   itself after pulling so a release is always deployed by its own script.
-  Details and the by-hand fallback: `docs/deploy.md`.
+  The db image is now `pgvector/pgvector` (Debian, glibc) instead of
+  `postgres:17-alpine` (musl) — exactly this change for every existing
+  volume. Details and the by-hand fallback: `docs/deploy.md`.
 - **Blank `*_URL=` lines are deleted from `process.env`** by `@repo/env`
   when it loads. `@ai-sdk/openai` builds a default provider from
   `OPENAI_BASE_URL` at import and crashes the server on a blank value (a
   copied `.env.example`). Import `@repo/env` before any SDK that reads the
   environment itself.
+- **Extensions live in `public`, tests run in `vt_*` schemas.** The test
+  harness installs every `CREATE EXTENSION IF NOT EXISTS x` it finds in a
+  migration into `public` first; otherwise it would land in the throwaway
+  schema and its `DROP ... CASCADE` would take the vector columns of a
+  concurrent run with it. Write extension migrations as
+  `CREATE EXTENSION IF NOT EXISTS name` so the harness sees them.
 - **`output: standalone` does not copy static assets.** Boot it without copying
   `.next/static` next to `server.js` and the app serves HTML, every JS chunk
   404s, nothing hydrates. `scripts/smoke.sh` and the Dockerfile both do it.

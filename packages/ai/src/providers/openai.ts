@@ -353,10 +353,19 @@ export type EmbedManyFn = typeof embedMany;
 export async function embedOpenAiFamily(
   route: Route,
   texts: string[],
+  opts: { dimensions?: number } = {},
   embed: EmbedManyFn = embedMany,
 ): Promise<{ embeddings: number[][]; tokens: number }> {
   try {
-    const result = await embed({ model: embeddingModel(route), values: texts });
+    // Each AI SDK provider reads its own key; `local` is the compatible one.
+    const dims = opts.dimensions ? { dimensions: opts.dimensions } : undefined;
+    const result = await embed({
+      model: embeddingModel(route),
+      values: texts,
+      ...(dims
+        ? { providerOptions: { openai: dims, azure: dims, local: dims } }
+        : {}),
+    });
     return { embeddings: result.embeddings, tokens: result.usage.tokens };
   } catch (err) {
     throw toProviderError(err, route.provider);

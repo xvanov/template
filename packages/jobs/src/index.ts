@@ -8,6 +8,7 @@ export {
 } from "./handlers";
 export {
   createWorker,
+  finalFailureHook,
   isFinalFailure,
   processJob,
   reportFinalFailure,

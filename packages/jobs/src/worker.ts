@@ -52,7 +52,10 @@ export function createWorker(opts: WorkerOptions = {}): Worker {
 
   worker.on("failed", (job, err) => {
     console.error(`[worker] ${job?.name} ${job?.id} failed:`, err.message);
-    if (job && isFinalFailure(job, err)) void reportFinalFailure(job, err);
+    if (job && isFinalFailure(job, err)) {
+      void reportFinalFailure(job, err);
+      void finalFailureHook(job, err);
+    }
   });
   worker.on("completed", (job) => {
     console.log(`[worker] ${job.name} ${job.id} completed`);
@@ -87,6 +90,23 @@ export function reportFinalFailure(job: JobLike, err: Error) {
     organizationId: typeof org === "string" ? org : null,
     tags: ["rotating_light"],
   });
+}
+
+/** The job's own onFinalFailure, if it has one. Never throws. */
+export async function finalFailureHook(job: JobLike, err: Error) {
+  if (!isJobName(job.name)) return;
+  const entry = handlers[job.name] as {
+    schema: { safeParse: (x: unknown) => { success: boolean; data?: unknown } };
+    onFinalFailure?: (p: unknown, e: Error) => Promise<void>;
+  };
+  if (!entry.onFinalFailure) return;
+  const parsed = entry.schema.safeParse(job.data);
+  if (!parsed.success) return;
+  try {
+    await entry.onFinalFailure(parsed.data, err);
+  } catch (e) {
+    console.error(`[worker] ${job.name} ${job.id} onFinalFailure failed:`, e);
+  }
 }
 
 /** Validate, record, run, record. Exported so tests can drive it without Redis. */

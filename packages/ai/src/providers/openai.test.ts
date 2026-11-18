@@ -171,6 +171,21 @@ describe("embeddings", () => {
     expect(sent[0]!.url).toBe("https://api.openai.com/v1/embeddings");
     expect(r).toEqual({ embeddings: [[0.1, 0.2]], tokens: 3 });
   });
+
+  it("asks for the configured vector length", async () => {
+    const sent = stubFetch({
+      object: "list",
+      data: [{ object: "embedding", index: 0, embedding: [0.1, 0.2] }],
+      model: "text-embedding-3-small",
+      usage: { prompt_tokens: 3, total_tokens: 3 },
+    });
+    await embedOpenAiFamily(
+      parseModel("openai/text-embedding-3-small"),
+      ["hello"],
+      { dimensions: 2 },
+    );
+    expect(sent[0]!.body).toMatchObject({ dimensions: 2 });
+  });
 });
 
 describe("tool use", () => {

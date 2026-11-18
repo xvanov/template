@@ -378,13 +378,18 @@ describe("embed", () => {
       LLM_PRICES: "openai/text-embedding-3-small=0.02:0",
     });
     const mem = memoryLedger();
+    const asked: { dimensions?: number }[] = [];
     const llm = createLlm({
-      embed: async () => ({ embeddings: [[1, 2]], tokens: 1_000_000 }),
+      embed: async (_route, _texts, opts) => {
+        asked.push(opts);
+        return { embeddings: [[1, 2]], tokens: 1_000_000 };
+      },
       ledger: mem.ledger,
       capHit: () => undefined,
     });
     const r = await llm.embed({
       texts: ["a"],
+      dimensions: 2,
       purpose: "test.embed",
       priority: "essential",
       organizationId: "o",
@@ -394,11 +399,35 @@ describe("embed", () => {
       costUsd: 0.02,
       model: "openai/text-embedding-3-small",
     });
+    expect(asked).toEqual([{ dimensions: 2 }]);
     expect(mem.rows()[0]).toMatchObject({
       kind: "embed",
       ok: true,
       status: "done",
     });
+  });
+
+  it("refuses vectors of the wrong length (they would not fit the column) and records the failure", async () => {
+    setLlmEnv({
+      OPENAI_API_KEY: "k",
+      LLM_EMBEDDING_MODEL: "openai/text-embedding-3-small",
+      LLM_PRICES: "openai/text-embedding-3-small=0.02:0",
+    });
+    const mem = memoryLedger();
+    const llm = createLlm({
+      embed: async () => ({ embeddings: [[1, 2, 3]], tokens: 10 }),
+      ledger: mem.ledger,
+      capHit: () => undefined,
+    });
+    await expect(
+      llm.embed({
+        texts: ["a"],
+        dimensions: 1536,
+        purpose: "p",
+        priority: "essential",
+      }),
+    ).rejects.toThrow(/3-dimension embeddings, expected 1536/);
+    expect(mem.rows()[0]).toMatchObject({ kind: "embed", ok: false });
   });
 
   it("is disabled until LLM_EMBEDDING_MODEL is set, and refuses non-embedding providers", async () => {

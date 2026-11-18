@@ -41,6 +41,7 @@ model User {
   apiKeys     ApiKey[]
   reviewed    AgentProposal[] @relation("ProposalReviewer")
   proposed    AgentProposal[] @relation("ProposalProposer")
+  documents   Document[]
 
   @@map("user")
 }
@@ -120,6 +121,8 @@ model Organization {
   agentSteps  AgentStep[]
   proposals   AgentProposal[]
   apiKeys     ApiKey[]
+  documents   Document[]
+  docChunks   DocumentChunk[]
 
   @@map("organization")
 }
@@ -189,9 +192,84 @@ model MediaAsset {
   uploadedById   String
   uploadedBy     User         @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
   createdAt      DateTime     @default(now())
+  documents      Document[]
 
   @@index([organizationId, createdAt])
   @@map("media_asset")
+}
+
+/// A searchable document (packages/rag): text the tenant uploaded, or a
+/// text-like file in storage. Indexed into document_chunk by the
+/// `docs.ingest` job; re-ingesting unchanged content is a no-op (contentHash).
+model Document {
+  id             String          @id @default(cuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  title          String
+  /// upload | media
+  source         String
+  /// The storage file this came from (source = media). Deleting the file keeps the document.
+  mediaAssetId   String?
+  mediaAsset     MediaAsset?     @relation(fields: [mediaAssetId], references: [id], onDelete: SetNull)
+  contentType    String          @default("text/markdown")
+  /// The full text. Chunks are derived from it and can always be rebuilt.
+  content        String
+  /// sha256 of the content AND the chunker version: what an ingest compares.
+  contentHash    String
+  /// pending | indexing | ready | failed
+  status         String          @default("pending")
+  /// The hash the current chunks were built from (null = never indexed).
+  indexedHash    String?
+  chunkCount     Int             @default(0)
+  /// Chunks with an embedding; < chunkCount means search is keyword-only for the rest.
+  embeddedCount  Int             @default(0)
+  /// `provider/model` the embeddings came from, or null.
+  embeddingModel String?
+  /// Why the last ingest failed, or why it is keyword-only (embeddings off).
+  note           String?
+  createdById    String?
+  createdBy      User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  indexedAt      DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  chunks         DocumentChunk[]
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, mediaAssetId])
+  @@map("document")
+}
+
+/// One retrievable piece of a Document. `embedding` and `tsv` are not
+/// readable through Prisma (pgvector / tsvector): every query on them is raw
+/// SQL in packages/rag/src/store.ts, tenant-scoped like everything else.
+model DocumentChunk {
+  id             String                       @id @default(cuid())
+  organizationId String
+  organization   Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  documentId     String
+  document       Document                     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  /// Position in the document, from 0.
+  ord            Int
+  /// The heading path this chunk sits under ("Setup > Ports"), or "".
+  heading        String                       @default("")
+  content        String
+  /// sha256 of heading + content: an unchanged chunk keeps its embedding on re-ingest.
+  contentHash    String
+  /// vector(1536): LLM_EMBEDDING_DIMENSIONS must match. Null = not embedded.
+  embedding      Unsupported("vector(1536)")?
+  /// GENERATED ALWAYS from heading (weight A) + content (weight B), english.
+  /// The dbgenerated() text is what Postgres reports back for the generation
+  /// expression; it keeps `migrate dev` from seeing drift. Never written.
+  tsv            Unsupported("tsvector")?     @default(dbgenerated("(setweight(to_tsvector('english'::regconfig, heading), 'A'::\"char\") || setweight(to_tsvector('english'::regconfig, content), 'B'::\"char\"))"))
+  createdAt      DateTime                     @default(now())
+
+  @@unique([documentId, ord])
+  @@index([organizationId, documentId])
+  @@index([tsv], type: Gin)
+  /// HNSW (vector_cosine_ops) in the migration; Prisma cannot say "hnsw" but
+  /// declaring the index by name stops `migrate dev` from dropping it.
+  @@index([embedding], map: "document_chunk_embedding_hnsw_idx")
+  @@map("document_chunk")
 }
 
 /// Every LLM call, priced. This is the seam that makes spend auditable per
