@@ -53,9 +53,18 @@ fi
 COMMIT="$(git rev-parse HEAD)"
 SHORT="$(git rev-parse --short HEAD)"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-REMOTE="$(git remote get-url origin 2>/dev/null || echo "(no origin remote)")"
+# Never write credentials into a committed file: https://user:TOKEN@host/repo
+# is how a token-authenticated clone stores its remote.
+REMOTE="$(git remote get-url origin 2>/dev/null | sed -E 's#^([a-zA-Z][a-zA-Z0-9+.-]*://)[^@/]*@#\1#' || true)"
+REMOTE="${REMOTE:-(no origin remote)}"
+# APP_URL is the demo URL only when someone else could open it: not
+# localhost, a LAN/loopback address, or a tailnet-only name.
 if [ -z "$URL" ] && [ -f .env ]; then
-  URL="$(sed -n 's/^APP_URL=//p' .env | tr -d '"' | head -1)"
+  app_url="$(sed -n 's/^APP_URL=//p' .env | tr -d "\"'" | head -1)"
+  host="$(printf '%s' "$app_url" | sed -E 's#^[a-z]+://([^/:]+).*#\1#')"
+  if [ -n "$app_url" ] && ! [[ "$host" =~ ^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.)|\.ts\.net$|\.local$ ]]; then
+    URL="$app_url"
+  fi
 fi
 
 mkdir -p logs
@@ -88,8 +97,9 @@ else
   run_gate test npx turbo run test --force
   run_gate smoke make smoke
   if [ -d ml ] && command -v uv >/dev/null; then
-    run_gate "ml lint" bash -c "cd ml && uv run --frozen ruff check && uv run --frozen ruff format --check"
-    run_gate "ml test" bash -c "cd ml && uv run --frozen pytest"
+    # --locked: fails if uv.lock is out of date with pyproject.toml (--frozen would not notice).
+    run_gate "ml lint" bash -c "cd ml && uv sync --locked -q && uv run --locked ruff check && uv run --locked ruff format --check"
+    run_gate "ml test" bash -c "cd ml && uv run --locked pytest"
   elif [ -d ml ]; then
     GATE_ROWS+="| ml | not run (uv not installed) | | |"$'\n'
   fi
@@ -119,7 +129,7 @@ done
   echo "| Branch | \`$BRANCH\` |"
   echo "| Tag | \`$TAG\` (on the commit that adds this file) |"
   echo "| Repository | $REMOTE |"
-  echo "| Demo URL | ${URL:-(none given: --url)} |"
+  echo "| Demo URL | ${URL:-not set (--url; a localhost/LAN/tailnet APP_URL is not used)} |"
   echo
   echo "## How to run it"
   echo

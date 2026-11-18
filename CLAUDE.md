@@ -52,7 +52,10 @@ Ports are non-default so this coexists with other projects:
 **web 3200 · postgres 5442 · redis 6389 · expo 8091**.
 
 `make doctor` checks the machine (read-only, ~1 s); `make demo` brings up
-infra, migrates, seeds a demo workspace (login printed) and runs web + worker.
+infra, migrates, seeds a demo workspace (login printed) and runs web + worker
+on 127.0.0.1 (`DEMO_HOST` to expose). The seed resets only a workspace and
+account it created (marked in the org's `metadata`) and refuses a database
+that is not on this machine (`DEMO_ALLOW_REMOTE_DB=1`).
 docs/hackathon.md is the clone-to-demo path and the judging-day checklist.
 
 ## The gates — run these before claiming anything works
@@ -125,8 +128,9 @@ versions; add dependencies with `uv add` and commit `uv.lock`. Gates for it:
   load; a changed dataset refuses rather than re-splitting. `--resplit` only on
   purpose.
 - **Bridge**: the worker spawns `uv run --project ml --frozen --no-dev predict`
-  per job (JSON stdin/stdout, timeout, child env = PATH/HOME only), off unless
-  `ML_ENABLED`. Example job `ml.predict`; contract in
+  per job in its own process group (JSON stdin/stdout; a timeout kills the
+  whole group; child env = PATH/HOME + uv's settings, `CHILD_ENV_ALLOWLIST`),
+  off unless `ML_ENABLED`. Example job `ml.predict`; contract in
   `ml/contract/predict.example.json`, tested from both languages. Big models
   are not run this way: serve them with `ml/serve/vllm.sh` and call them as
   `local/<model>` through packages/ai.

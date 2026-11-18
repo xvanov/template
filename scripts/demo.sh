@@ -14,7 +14,12 @@
 # Overrides (distinct names on purpose: .env is sourced with set -a):
 #   DEMO_EMAIL     [demo@example.com]
 #   DEMO_PASSWORD  [demo-password]
+#   DEMO_HOST      address the web app listens on [127.0.0.1]; 0.0.0.0 shows
+#                  it to your network (with a known password: a warning is printed)
+#   DEMO_ALLOW_REMOTE_DB=1  seed even though DATABASE_URL is not on this machine
 # The web port is WEB_PORT from .env; APP_URL must use the same port.
+# Every run RESETS the demo workspace's items, documents and inbox. The seed
+# only ever touches a workspace and an account it created itself.
 # Logs: logs/demo-web.log, logs/demo-worker.log.
 #
 # Development servers, for a laptop demo. Never seed this on a public
@@ -33,10 +38,11 @@ SEED_ONLY=0
 case "${1:-}" in
   --seed-only) SEED_ONLY=1 ;;
   "") ;;
-  *) sed -n '2,22p' "$0"; exit 2 ;;
+  *) sed -n '2,27p' "$0"; exit 2 ;;
 esac
 EMAIL="${DEMO_EMAIL:-demo@example.com}"
 PASSWORD="${DEMO_PASSWORD:-demo-password}"
+HOST="${DEMO_HOST:-127.0.0.1}"
 
 if [ ! -f .env ] || [ ! -x node_modules/.bin/turbo ]; then
   bold "first run: scripts/setup.sh"
@@ -50,6 +56,19 @@ PORT="${WEB_PORT:-3200}"
 URL="${APP_URL:-http://localhost:$PORT}"
 if [[ "$URL" =~ ^https?://(localhost|127\.0\.0\.1)(:([0-9]+))? ]] && [ "${BASH_REMATCH[3]:-80}" != "$PORT" ]; then
   die "APP_URL ($URL) and WEB_PORT ($PORT) disagree: sign-in would fail with \"Invalid origin\". Make them match in .env."
+fi
+# The seed writes a known password: only into a database on this machine,
+# unless asked. (The seed checks it too; this fails before anything starts.)
+SEED_FLAGS=()
+if [[ ! "${DATABASE_URL:-}" =~ ^[a-z+]+://([^@/]*@)?(localhost|127\.[0-9.]+|\[::1\])(:|/|$) ]]; then
+  if [ "${DEMO_ALLOW_REMOTE_DB:-}" != 1 ]; then
+    die "DATABASE_URL is not on this machine; the demo seed writes a known password. If that database is a throwaway: DEMO_ALLOW_REMOTE_DB=1 make demo"
+  fi
+  SEED_FLAGS+=(--allow-remote-db)
+fi
+# Before anything is migrated or seeded: a busy port would fail at the end.
+if [ "$SEED_ONLY" = 0 ] && (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+  die "port $PORT is in use (make dev already running?). Stop it, or change WEB_PORT and APP_URL."
 fi
 
 bold "1/4  postgres + redis + mail"
@@ -70,12 +89,12 @@ quiet npm run --silent db:deploy
 ok "applied"
 
 bold "3/4  demo data"
-npm run --silent demo:seed -w worker -- --email "$EMAIL" --password "$PASSWORD"
+npm run --silent demo:seed -w worker -- --email "$EMAIL" --password "$PASSWORD" ${SEED_FLAGS[@]+"${SEED_FLAGS[@]}"}
 if [ "$SEED_ONLY" = 1 ]; then exit 0; fi
 
 bold "4/4  web + worker"
-if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
-  die "port $PORT is in use (make dev already running?). Stop it, or change WEB_PORT and APP_URL."
+if [ "$HOST" != 127.0.0.1 ] && [ "$HOST" != localhost ]; then
+  printf '\033[33m! the web app listens on %s: anyone who can reach this machine on port %s can sign in as %s with the demo password printed below.\033[0m\n' "$HOST" "$PORT" "$EMAIL"
 fi
 mkdir -p logs
 WEB_LOG="$ROOT/logs/demo-web.log"
@@ -99,7 +118,7 @@ trap 'exit 143' TERM
 
 (cd apps/worker && exec "$ROOT/node_modules/.bin/tsx" src/index.ts) >"$WORKER_LOG" 2>&1 &
 WORKER_PID=$!
-(cd apps/web && PATH="$ROOT/node_modules/.bin:$PATH" exec node scripts/with-root-env.mjs next dev --port "$PORT") >"$WEB_LOG" 2>&1 &
+(cd apps/web && PATH="$ROOT/node_modules/.bin:$PATH" exec node scripts/with-root-env.mjs next dev --hostname "$HOST" --port "$PORT") >"$WEB_LOG" 2>&1 &
 WEB_PID=$!
 
 for _ in $(seq 1 180); do

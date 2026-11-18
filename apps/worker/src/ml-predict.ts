@@ -19,7 +19,9 @@ async function main() {
   if (!slug)
     throw new Error("usage: npm run ml:predict -w worker -- <org-slug>");
   if (!env().ML_ENABLED) {
-    console.warn("[ml] ML_ENABLED is off: the job will be recorded as skipped");
+    console.warn(
+      '[ml] ML_ENABLED is off: the job will complete without running, returning { skipped: "ML_ENABLED is off" }',
+    );
   }
   const org = await db.organization.findUnique({
     where: { slug },

@@ -65,6 +65,12 @@ ensure_env_file() {
     echo "wrote $ENV_FILE with a generated VLLM_API_KEY (put the same value in the app's LLM_API_KEY)"
   fi
   grep -q '^VLLM_API_KEY=.' "$ENV_FILE" || die "$ENV_FILE has no VLLM_API_KEY=..."
+  local mode
+  mode="$(stat -c %a "$ENV_FILE" 2>/dev/null || stat -f %Lp "$ENV_FILE")"
+  if [ "$mode" != 600 ]; then
+    chmod 600 "$ENV_FILE"
+    echo "warning: $ENV_FILE was mode $mode (other users could read the key); set it to 600" >&2
+  fi
 }
 
 start() {

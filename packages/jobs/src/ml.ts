@@ -50,20 +50,27 @@ export interface RunJsonOptions {
 
 /**
  * The child's environment: PATH and HOME (uv needs them to find Python and its
- * cache) and nothing else of the worker's. The app's secrets (database URL,
- * auth secret, API keys) are none of the model's business.
+ * cache), uv's own settings that a deployment relies on (UV_NO_SYNC in the
+ * Docker recipe, ml/README.md), and nothing else of the worker's. The app's
+ * secrets (database URL, auth secret, API keys) are none of the model's
+ * business.
  */
+export const CHILD_ENV_ALLOWLIST = [
+  "PATH",
+  "HOME",
+  "LANG",
+  "TMPDIR",
+  "UV_CACHE_DIR",
+  "UV_PYTHON_INSTALL_DIR",
+  "UV_NO_SYNC",
+  "UV_OFFLINE",
+  "UV_PROJECT_ENVIRONMENT",
+  "ML_ROOT",
+] as const;
+
 function childEnv(extra: Record<string, string> = {}): Record<string, string> {
-  const keep = [
-    "PATH",
-    "HOME",
-    "LANG",
-    "TMPDIR",
-    "UV_CACHE_DIR",
-    "UV_PYTHON_INSTALL_DIR",
-  ];
   const base: Record<string, string> = {};
-  for (const k of keep) {
+  for (const k of CHILD_ENV_ALLOWLIST) {
     const v = process.env[k];
     if (v !== undefined) base[k] = v;
   }
@@ -82,8 +89,13 @@ export function runJsonProcess(
   opts: RunJsonOptions,
 ): Promise<unknown> {
   return new Promise((resolvePromise, reject) => {
+    // detached = its own process group, so a timeout can signal uv, the Python
+    // it started, and anything THAT started, together. Killing only uv would
+    // leave a Python that ignores SIGTERM running forever.
+    const group = process.platform !== "win32";
     const child = spawn(command, args, {
       cwd: opts.cwd,
+      detached: group,
       // A cast, not a widening: some workspaces' ProcessEnv (Expo's) requires NODE_ENV.
       env: childEnv(opts.env) as NodeJS.ProcessEnv,
       stdio: ["pipe", "pipe", "pipe"],
@@ -92,7 +104,15 @@ export function runJsonProcess(
     let outBytes = 0;
     let errTail = "";
     let settled = false;
-    let killTimer: NodeJS.Timeout | undefined;
+
+    const signalAll = (sig: NodeJS.Signals) => {
+      try {
+        if (group && child.pid) process.kill(-child.pid, sig);
+        else child.kill(sig);
+      } catch {
+        // ESRCH: the group is already gone.
+      }
+    };
 
     const finish = (err: Error | null, value?: unknown) => {
       if (settled) return;
@@ -102,12 +122,10 @@ export function runJsonProcess(
       else resolvePromise(value);
     };
     const kill = (why: string) => {
-      child.kill("SIGTERM");
-      killTimer = setTimeout(
-        () => child.kill("SIGKILL"),
-        opts.killGraceMs ?? 2000,
-      );
-      killTimer.unref();
+      signalAll("SIGTERM");
+      // Unconditional: whoever survived the grace period (a trapped SIGTERM,
+      // a grandchild) gets SIGKILL.
+      setTimeout(() => signalAll("SIGKILL"), opts.killGraceMs ?? 2000).unref();
       finish(new MlProcessError(why, errTail));
     };
 
@@ -131,7 +149,8 @@ export function runJsonProcess(
       finish(new MlProcessError(`could not start ${command}: ${err.message}`)),
     );
     child.on("close", (code, signal) => {
-      if (killTimer) clearTimeout(killTimer);
+      // The answer is in; nothing the script started may outlive it.
+      signalAll("SIGKILL");
       if (settled) return;
       if (code !== 0) {
         finish(
@@ -205,5 +224,21 @@ export async function predictItems(
       `predict answered in an unexpected shape: ${parsed.error.message.slice(0, 500)}`,
     );
   }
+  checkPredictionIds(items, parsed.data);
   return parsed.data;
+}
+
+/** Every prediction must be about an item we sent: a model's output is never trusted to name rows. */
+export function checkPredictionIds(
+  items: PredictItem[],
+  res: PredictResponse,
+): void {
+  if (!res.ok) return;
+  const sent = new Set(items.map((i) => i.id));
+  const unknown = res.predictions.filter((p) => !sent.has(p.id));
+  if (unknown.length > 0) {
+    throw new MlProcessError(
+      `predict returned ${unknown.length} prediction(s) for ids it was not given (e.g. ${JSON.stringify(unknown[0]!.id.slice(0, 64))})`,
+    );
+  }
 }

@@ -31,12 +31,19 @@ ENV_FILE="${ENV_FILE:-$HOME/.config/vllm/vllm.env}"
 if [ -z "$KEY" ] && [ -r "$ENV_FILE" ]; then
   KEY="$(sed -n 's/^VLLM_API_KEY=//p' "$ENV_FILE" | head -1)"
 fi
-AUTH=()
-if [ -n "$KEY" ]; then AUTH=(-H "Authorization: Bearer $KEY"); fi
+# The key goes to curl as a config file on stdin, never on its command line
+# (where `ps` shows it to every user on the box).
+curl_auth() {
+  if [ -n "$KEY" ]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$KEY" | curl -K - "$@"
+  else
+    curl "$@"
+  fi
+}
 
 check() {
   local models model code
-  models="$(curl -s -m 10 -w '\n%{http_code}' ${AUTH[@]+"${AUTH[@]}"} "$BASE/models" 2>/dev/null)" || {
+  models="$(curl_auth -s -m 10 -w '\n%{http_code}' "$BASE/models" 2>/dev/null)" || {
     echo "DOWN  $BASE/models: no answer"
     return 1
   }
@@ -51,7 +58,7 @@ check() {
     echo "DOWN  $BASE/models: HTTP $code without a model: $(printf '%s' "$models" | head -c 200)"
     return 1
   fi
-  code="$(curl -s -o /dev/null -w '%{http_code}' -m 60 ${AUTH[@]+"${AUTH[@]}"} \
+  code="$(curl_auth -s -o /dev/null -w '%{http_code}' -m 60 \
     -H 'Content-Type: application/json' "$BASE/chat/completions" \
     -d "{\"model\":\"$model\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}")"
   if [ "$code" != 200 ]; then

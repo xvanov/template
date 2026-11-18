@@ -25,13 +25,24 @@ warn() { printf '  %sWARN%s  %s\n' "$Y" "$N" "$1"; WARNS=$((WARNS + 1)); }
 fail() { printf '  %sFAIL%s  %s\n' "$R" "$N" "$1"; FAILS=$((FAILS + 1)); }
 section() { printf '%s%s%s\n' "$B" "$1" "$N"; }
 
-# `timeout` is GNU coreutils: macOS has it only as gtimeout (brew coreutils), or not at all.
+# `timeout` is GNU coreutils: macOS has it only as gtimeout (brew coreutils),
+# or not at all. Without either, a background watchdog kills the command, so
+# a hung `docker info` or an unreachable remote host never hangs the doctor.
 if command -v timeout >/dev/null; then TIMEOUT=(timeout)
 elif command -v gtimeout >/dev/null; then TIMEOUT=(gtimeout)
 else TIMEOUT=(); fi
 with_timeout() { # seconds cmd...
-  local s=$1; shift
-  if [ ${#TIMEOUT[@]} -gt 0 ]; then "${TIMEOUT[@]}" "$s" "$@"; else "$@"; fi
+  local s=$1 pid watchdog rc
+  shift
+  if [ ${#TIMEOUT[@]} -gt 0 ]; then "${TIMEOUT[@]}" "$s" "$@"; return; fi
+  "$@" &
+  pid=$!
+  (sleep "$s"; kill "$pid" 2>/dev/null) &
+  watchdog=$!
+  wait "$pid"
+  rc=$?
+  kill "$watchdog" 2>/dev/null
+  return "$rc"
 }
 # true if something accepts TCP connections on host:port (1s timeout).
 listening() { with_timeout 1 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; }
@@ -53,11 +64,11 @@ fi
 if [ -x node_modules/.bin/turbo ]; then pass "dependencies installed"
 else fail "node_modules missing: make setup (or npm install)"; fi
 if command -v docker >/dev/null; then
-  if docker info >/dev/null 2>&1; then
-    if docker compose version >/dev/null 2>&1; then
+  if with_timeout 10 docker info >/dev/null 2>&1; then
+    if with_timeout 10 docker compose version >/dev/null 2>&1; then
       pass "docker $(docker --version | awk '{print $3}' | tr -d ,) + compose"
     else fail "docker compose (v2) is missing"; fi
-  else fail "docker is installed but the daemon is not reachable (start Docker / add yourself to the docker group)"; fi
+  else fail "docker is installed but the daemon did not answer within 10s (start Docker / add yourself to the docker group)"; fi
 else
   fail "docker is not installed (Postgres and Redis run in it)"
 fi

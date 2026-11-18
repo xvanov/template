@@ -81,3 +81,16 @@ def test_finished_runs_are_never_stale(tmp_path: Path) -> None:
     p = tmp_path / "s.json"
     _write(p, status="completed", updated_at="2020-01-01T00:00:00Z")
     assert read_status(p)["stale"] is False
+
+
+def test_write_text_atomic_replaces_or_leaves_the_old_file(tmp_path: Path) -> None:
+    from mlkit.fsutil import write_text_atomic
+
+    p = tmp_path / "REGISTRY.md"
+    write_text_atomic(p, "old\n")
+    write_text_atomic(p, "new\n")
+    assert p.read_text() == "new\n"
+    with pytest.raises(TypeError):
+        write_text_atomic(p, 123)  # type: ignore[arg-type]  # fails mid-write
+    assert p.read_text() == "new\n"  # the old content survives a failed write
+    assert [x.name for x in tmp_path.iterdir()] == ["REGISTRY.md"]  # no temp files

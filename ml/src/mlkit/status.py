@@ -24,7 +24,6 @@ import os
 import signal
 import socket
 import sys
-import tempfile
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -32,6 +31,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType, TracebackType
 from typing import Any
+
+from mlkit.fsutil import write_text_atomic
 
 SCHEMA = 1
 STATES = ("starting", "running", "completed", "failed", "interrupted")
@@ -69,17 +70,8 @@ class StatusData:
 
 
 def write_atomic(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-            f.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
+    """JSON, atomically and durably (mlkit.fsutil)."""
+    write_text_atomic(path, json.dumps(data, indent=2) + "\n")
 
 
 class RunStatus:

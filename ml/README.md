@@ -124,8 +124,11 @@ example; delete it with the toy problem.
 ## The bridge to the app
 
 The worker runs `uv run --project ml --frozen --no-dev predict` as a child process: JSON
-on stdin, JSON on stdout, a timeout (`ML_TIMEOUT_SECONDS`), the child sees only
-PATH/HOME (none of the app's secrets). Example job: `ml.predict` scores a
+on stdin, JSON on stdout, a timeout (`ML_TIMEOUT_SECONDS`) that kills the
+whole process group (uv, Python and anything Python started, SIGTERM then
+SIGKILL), and an environment of PATH/HOME plus uv's own settings
+(`CHILD_ENV_ALLOWLIST` in ml.ts: `UV_NO_SYNC`, `UV_CACHE_DIR`, ...), none of
+the app's secrets. Predictions for ids it was not sent are refused. Example job: `ml.predict` scores a
 tenant's open items. Code: `packages/jobs/src/ml.ts`.
 
 ```bash
@@ -161,10 +164,11 @@ COPY --from=ghcr.io/astral-sh/uv:0.10.7 /uv /usr/local/bin/uv
 COPY ml/pyproject.toml ml/uv.lock ml/.python-version ml/README.md /app/ml/
 COPY ml/src /app/ml/src
 COPY ml/config /app/ml/config
-RUN cd /app/ml && UV_PYTHON_INSTALL_DIR=/opt/python uv sync --frozen --no-dev \
+RUN cd /app/ml && UV_PYTHON_INSTALL_DIR=/opt/python uv sync --locked --no-dev \
   && chown -R node:node /app/ml
 # Use the environment built above as-is: at runtime `uv run` must not try to
 # re-sync (as the node user, with no cache and maybe no network, it fails).
+# The bridge passes UV_NO_SYNC through to the child (its env allowlist).
 ENV UV_NO_SYNC=1
 ```
 

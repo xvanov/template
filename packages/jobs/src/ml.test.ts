@@ -8,7 +8,13 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { MlProcessError, predictResponse, runJsonProcess } from "./ml";
+import {
+  checkPredictionIds,
+  CHILD_ENV_ALLOWLIST,
+  MlProcessError,
+  predictResponse,
+  runJsonProcess,
+} from "./ml";
 
 const node = process.execPath;
 const run = (script: string, input: unknown = {}, timeoutMs = 10_000) =>
@@ -46,6 +52,65 @@ describe("runJsonProcess", () => {
     expect(Date.now() - t0).toBeLessThan(3000);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "a timeout kills the whole process group: a child that traps SIGTERM, and its grandchild",
+    async () => {
+      // What `uv run` -> python -> a worker process looks like when python
+      // ignores SIGTERM.
+      const stubborn = `
+        const { spawn } = require("node:child_process");
+        process.on("SIGTERM", () => {});
+        const g = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+        console.error("PIDS " + process.pid + " " + g.pid);
+        setInterval(() => {}, 1000);`;
+      const err = (await runJsonProcess(
+        node,
+        ["-e", stubborn],
+        {},
+        {
+          timeoutMs: 800,
+          killGraceMs: 300,
+        },
+      ).catch((e: unknown) => e)) as Error;
+      expect(err.message).toMatch(/timed out after 800 ms/);
+      const [, leader, grandchild] = /PIDS (\d+) (\d+)/.exec(err.message)!;
+      const alive = (pid: string) => {
+        try {
+          process.kill(Number(pid), 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const deadline = Date.now() + 5000;
+      while ((alive(leader!) || alive(grandchild!)) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(alive(leader!)).toBe(false);
+      expect(alive(grandchild!)).toBe(false);
+    },
+  );
+
+  it("does not leave a grandchild running after a normal answer", async () => {
+    const leaky = `
+      const { spawn } = require("node:child_process");
+      const g = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+      process.stdout.write(JSON.stringify({ grandchild: g.pid }));
+      process.exit(0);`;
+    const out = (await run(leaky)) as { grandchild: number };
+    const deadline = Date.now() + 5000;
+    let alive = true;
+    while (alive && Date.now() < deadline) {
+      try {
+        process.kill(out.grandchild, 0);
+        await new Promise((r) => setTimeout(r, 50));
+      } catch {
+        alive = false;
+      }
+    }
+    expect(alive).toBe(false);
+  });
+
   it("stdout that is not one JSON document is an error, not a guess", async () => {
     await expect(
       run(`console.log("epoch 1"); console.log(JSON.stringify({ ok: true }))`),
@@ -67,6 +132,20 @@ describe("runJsonProcess", () => {
       expect(out).toEqual({ leaked: null, path: true });
     } finally {
       delete process.env.DATABASE_URL_PROBE;
+    }
+  });
+
+  it("passes uv's deployment settings through (the Docker recipe sets UV_NO_SYNC)", async () => {
+    expect(CHILD_ENV_ALLOWLIST).toContain("UV_NO_SYNC");
+    process.env.UV_NO_SYNC = "1";
+    try {
+      await expect(
+        run(
+          `process.stdout.write(JSON.stringify(process.env.UV_NO_SYNC ?? null))`,
+        ),
+      ).resolves.toBe("1");
+    } finally {
+      delete process.env.UV_NO_SYNC;
     }
   });
 
@@ -104,5 +183,25 @@ describe("the predict contract (ml/contract/predict.example.json)", () => {
         "title",
       ]);
     }
+  });
+});
+
+describe("checkPredictionIds", () => {
+  const items = [{ id: "a", title: "x", notes: null }];
+  const answer = (ids: string[]) => ({
+    ok: true as const,
+    model: { run_id: "r", kind: "k" },
+    predictions: ids.map((id) => ({ id, score: 0.5, urgent: false })),
+  });
+
+  it("accepts predictions about the items that were sent", () => {
+    expect(() => checkPredictionIds(items, answer(["a"]))).not.toThrow();
+    expect(() => checkPredictionIds(items, answer([]))).not.toThrow();
+  });
+
+  it("refuses a prediction about an id it was not given", () => {
+    expect(() =>
+      checkPredictionIds(items, answer(["a", "other-tenant-row"])),
+    ).toThrow(/ids it was not given/);
   });
 });

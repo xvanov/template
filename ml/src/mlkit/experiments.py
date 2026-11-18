@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from mlkit.fsutil import write_text_atomic
 from mlkit.paths import ml_root
 from mlkit.status import write_atomic
 
@@ -105,7 +106,7 @@ def _write_registry(root: Path, lines: list[str], entries: list[Entry], header_a
     while end < len(lines) and lines[end].strip() != "":
         end += 1
     new_lines = lines[: header_at + 2] + [e.row() for e in entries] + lines[end:]
-    registry_path(root).write_text("\n".join(new_lines) + "\n")
+    write_text_atomic(registry_path(root), "\n".join(new_lines) + "\n")
 
 
 def next_id(root: Path, entries: list[Entry]) -> str:
@@ -184,14 +185,15 @@ def set_status(
             _write_registry(root, lines, entries, header_at)
             readme = root / e.folder.rstrip("/") / "README.md"
             if readme.exists():
-                readme.write_text(
+                write_text_atomic(
+                    readme,
                     re.sub(
                         r"^\*\*Status:\*\* .*$",
                         f"**Status:** {status}",
                         readme.read_text(),
                         count=1,
                         flags=re.M,
-                    )
+                    ),
                 )
             return e
     raise ExperimentError(f"{exp_id} is not in the registry")

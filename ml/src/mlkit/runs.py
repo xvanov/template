@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from mlkit.config import Config
+from mlkit.fsutil import write_text_atomic
 
 _SAFE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 
@@ -31,11 +32,7 @@ def run_dir(cfg: Config, run_id: str) -> Path:
 
 
 def mark_latest(cfg: Config, run_id: str) -> None:
-    d = runs_dir(cfg)
-    d.mkdir(parents=True, exist_ok=True)
-    tmp = d / ".LATEST.tmp"
-    tmp.write_text(run_id + "\n")
-    tmp.replace(d / "LATEST")
+    write_text_atomic(runs_dir(cfg) / "LATEST", run_id + "\n")
 
 
 def latest_run_dir(cfg: Config) -> Path | None:

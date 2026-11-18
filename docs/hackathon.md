@@ -18,8 +18,11 @@ make demo            # setup if needed, infra, migrations, demo data, web + work
 `make demo` prints the URL and a login (`demo@example.com` / `demo-password`)
 that works at once: no sign-up, no email round trip. The workspace has items,
 a handbook indexed for search ("warranty", "reschedule"), and a customer email
-in the inbox. It all works with the AI off. Ctrl-C stops it; run it again to
-reset the demo data (the seed is idempotent).
+in the inbox. It all works with the AI off. Ctrl-C stops it; running it again
+RESETS the demo workspace (its items, documents and inbox go back to the
+seeded content). The seed only touches a workspace and an account it created
+itself, and only in a database on this machine: it refuses an existing real
+account with the demo email.
 
 **Then make it yours** (CLAUDE.md, "Starting a real app from this template"):
 
@@ -78,7 +81,7 @@ plus `DB_PORT`/`DATABASE_URL` etc. in `.env`; `make doctor` flags a mismatch.
 
 - [ ] Laptop charged, notifications off, browser zoom up, logged in, tabs open.
 - [ ] Phone hotspot as backup network; the screen capture on the desktop.
-- [ ] `make demo` again to reset the data if the last run left a mess.
+- [ ] `make demo` again to reset the demo workspace if the last run left a mess.
 
 ## Kaggle and other competitions
 
