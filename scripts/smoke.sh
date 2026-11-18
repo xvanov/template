@@ -93,12 +93,43 @@ dir_port() { # dir_port <base> <span> → a stable port for this directory
   echo $((base + h % span))
 }
 
-PORT="${SMOKE_PORT:-$(dir_port 3300 60)}"
-export COMPOSE_PROJECT_NAME="${SMOKE_PROJECT:-smoke-$(basename "$ROOT")}"
-export DB_PORT="${SMOKE_DB_PORT:-$(dir_port 5500 60)}"
-export REDIS_PORT="${SMOKE_REDIS_PORT:-$(dir_port 6500 60)}"
-export TEST_MAIL_SMTP_PORT="${SMOKE_MAIL_SMTP_PORT:-$(dir_port 1500 60)}"
-export TEST_MAIL_UI_PORT="${SMOKE_MAIL_UI_PORT:-$(dir_port 8500 60)}"
+# Something listens on 127.0.0.1:<port>?
+port_busy() {
+  (command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ":$1 ") ||
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+}
+
+# The directory's stable port, or — if something else holds it (another
+# checkout whose hash collides, a leftover process) — the next free one in
+# the same range. Fails clearly when the whole range is taken.
+pick_port() { # pick_port <base> <span>
+  local base=$1 span=$2 first i p
+  first=$(($(dir_port "$base" "$span") - base))
+  for ((i = 0; i < span; i++)); do
+    p=$((base + (first + i) % span))
+    port_busy "$p" || {
+      echo "$p"
+      return 0
+    }
+  done
+  echo "✗ no free port in ${base}-$((base + span - 1)) for the smoke gate; set the SMOKE_*_PORT variables" >&2
+  return 1
+}
+
+# Compose project names must be lowercase [a-z0-9_-] starting with a letter
+# or digit; a folder called "My App" would otherwise make compose refuse.
+project_name() {
+  local n
+  n="$(printf 'smoke-%s' "$(basename "$ROOT")" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '-')"
+  printf '%s' "${n%-}"
+}
+
+PORT="${SMOKE_PORT:-$(pick_port 3300 60)}"
+export COMPOSE_PROJECT_NAME="${SMOKE_PROJECT:-$(project_name)}"
+export DB_PORT="${SMOKE_DB_PORT:-$(pick_port 5500 60)}"
+export REDIS_PORT="${SMOKE_REDIS_PORT:-$(pick_port 6500 60)}"
+export TEST_MAIL_SMTP_PORT="${SMOKE_MAIL_SMTP_PORT:-$(pick_port 1500 60)}"
+export TEST_MAIL_UI_PORT="${SMOKE_MAIL_UI_PORT:-$(pick_port 8500 60)}"
 
 BASE_URL="http://127.0.0.1:${PORT}"
 

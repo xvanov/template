@@ -99,8 +99,9 @@ re-inline its steps in the workflow.
 One Docker host, documented in `docs/deploy.md`: `docker-compose.prod.yml`
 plus `scripts/deploy.sh` (`deploy`/`rollback`/`status`), `scripts/backup.sh`,
 `scripts/restore.sh`, and the systemd templates in `ops/systemd/`.
-`make test-ops` runs the migration-guard unit test and a backup/restore round
-trip (about 20s). `make lint` shellchecks every script.
+`make test-ops` runs the migration-guard unit test, the deploy self-exec
+test, a real reproduction of collation corruption and its repair, and a
+backup/restore round trip (about 30s). `make lint` shellchecks every script.
 
 ## Architecture rules (a reviewer should reject violations)
 
@@ -389,6 +390,23 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
 
 ## Things that will bite you (all learned here, the hard way)
 
+- **A database image with another C library silently corrupts text
+  indexes.** Existing volumes sort text with the image's libc; reopened under
+  a different one (Alpine/musl ↔ Debian/glibc), lookups miss rows and unique
+  indexes admit duplicates — after which the fixing REINDEX itself fails.
+  `scripts/lib/collation.sh` + `packages/db/prisma/ops/collation-guard.sql`
+  detect it (stored vs actual collation version) and rebuild. They run from
+  `deploy.sh` (app stopped first when the db image changes, and on every
+  deploy and rollback), from the `migrate` image before every migration,
+  from `make up` and `setup.sh`. New volumes use the builtin `C.UTF-8`
+  collation (`POSTGRES_INITDB_ARGS`), immune to libc. `deploy.sh` re-execs
+  itself after pulling so a release is always deployed by its own script.
+  Details and the by-hand fallback: `docs/deploy.md`.
+- **Blank `*_URL=` lines are deleted from `process.env`** by `@repo/env`
+  when it loads. `@ai-sdk/openai` builds a default provider from
+  `OPENAI_BASE_URL` at import and crashes the server on a blank value (a
+  copied `.env.example`). Import `@repo/env` before any SDK that reads the
+  environment itself.
 - **`output: standalone` does not copy static assets.** Boot it without copying
   `.next/static` next to `server.js` and the app serves HTML, every JS chunk
   404s, nothing hydrates. `scripts/smoke.sh` and the Dockerfile both do it.

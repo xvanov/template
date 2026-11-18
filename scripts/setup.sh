@@ -80,6 +80,10 @@ bold "4/5  postgres + redis + mail"
 # does, which replaces polling `docker inspect` by container name — names this
 # stack deliberately no longer hardcodes.
 docker compose up -d --wait db redis mailpit
+# A db volume first created by another image (one with a different C library,
+# e.g. Alpine vs Debian) sorts text differently: rebuild its indexes before anything
+# reads them. A no-op otherwise. (scripts/lib/collation.sh)
+bash scripts/lib/collation.sh
 ok "postgres :${DB_PORT:-5442}, redis :${REDIS_PORT:-6389}, mail inbox http://localhost:${MAIL_UI_PORT:-8035}"
 
 bold "5/5  database schema"

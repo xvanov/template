@@ -255,3 +255,21 @@ describe("tool use", () => {
     });
   });
 });
+
+describe("blank OPENAI_BASE_URL (copied from .env.example)", () => {
+  it("would crash @ai-sdk/openai's import-time provider; @repo/env removes it first", async () => {
+    const { createOpenAI } = await import("@ai-sdk/openai");
+    const { dropBlankOptionalUrls } = await import("@repo/env");
+    process.env.OPENAI_BASE_URL = "";
+    try {
+      expect(() => createOpenAI()).toThrow(
+        /baseURL must be a non-empty string/,
+      );
+      dropBlankOptionalUrls();
+      expect(process.env.OPENAI_BASE_URL).toBeUndefined();
+      expect(() => createOpenAI()).not.toThrow();
+    } finally {
+      delete process.env.OPENAI_BASE_URL;
+    }
+  });
+});

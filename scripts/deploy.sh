@@ -8,7 +8,8 @@
 #
 # deploy: fast-forward the checkout (never merges, never forces) → build images
 # tagged with the commit (the old containers keep serving meanwhile) → back up
-# the database → run migrations → PREFLIGHT: boot the new web image beside the
+# the database → rebuild its indexes if its collation changed (a new db image;
+# the app is stopped across that) → run migrations → PREFLIGHT: boot the new web image beside the
 # live one, with no port and no traffic, until /api/health passes → replace
 # web + worker → wait for health and the worker's "up" line → on failure, put
 # the previous tags back and wait for THEM to be healthy. Two deploys never
@@ -36,6 +37,8 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib/prod.sh"
 # shellcheck source=scripts/lib/migration-guard.sh
 . "$ROOT/scripts/lib/migration-guard.sh"
+# shellcheck source=scripts/lib/collation.sh
+. "$ROOT/scripts/lib/collation.sh"
 
 BRANCH="${DEPLOY_BRANCH:-main}"
 HEALTH_TIMEOUT="${DEPLOY_HEALTH_TIMEOUT:-120}" # seconds for web to report healthy
@@ -145,6 +148,57 @@ prune_images() {
   docker image prune -f >/dev/null 2>&1 || true
 }
 
+# ── database image changes ───────────────────────────────────────────────
+db_psql() { compose exec -T db psql -U postgres "$@"; }
+
+# True when `up` would recreate db on a different image than the one running
+# (a Postgres image bump, or the switch to the pgvector image). The app must
+# not run while that happens: the new image may sort text differently, and
+# until collation_repair has rebuilt the indexes every text lookup and unique
+# check is wrong (scripts/lib/collation.sh).
+db_image_changes() {
+  local id running wanted
+  id="$(container_of db)"
+  [ -n "$id" ] || return 1 # no db yet: nothing is running on it either
+  running="$(docker inspect -f '{{.Config.Image}}' "$id")"
+  wanted="$(compose config --images db)"
+  [ "$running" != "$wanted" ]
+}
+
+# Loud, and non-zero so the deploy unit's OnFailure= hook pages the operator
+# (ops/systemd/app-failure@.service).
+app_down() {
+  show_failure_logs
+  die "THE APP IS DOWN: $*"
+}
+
+# The cheap check every path runs while the app may be up: one query. On a
+# mismatch (db recreated on another C library behind this script's back — an
+# older deploy.sh, a manual `compose up`), stop the app, rebuild, and start
+# $1 again. A rebuild that fails leaves the app DOWN on purpose.
+heal_collation() { # heal_collation <tag to start afterwards>
+  local mismatched
+  [ -n "$(container_of db)" ] || return 0
+  if ! mismatched="$(collation_mismatched db_psql)"; then
+    log "⚠ collation check could not query the database — skipped"
+    return 0
+  fi
+  [ -n "$mismatched" ] || return 0
+  # Only the maintenance databases (no app tables): nothing the app reads is
+  # stale, so rebuild them with the app running.
+  if ! grep -qvxE 'postgres|template1' <<<"$mismatched"; then
+    collation_repair db_psql ||
+      log "⚠ could not rebuild the indexes of postgres/template1 (the app's database is fine) — see above"
+    return 0
+  fi
+  log "the database's collation changed under the running app — stopping web + worker to rebuild indexes"
+  compose stop "${APP_SERVICES[@]}" || true
+  collation_repair db_psql ||
+    app_down "the indexes could not be rebuilt; web + worker stay stopped until a person fixes it (see above)"
+  log "starting $1 on the rebuilt database"
+  run_tag "$1" || app_down "$1 did not come back healthy after the rebuild"
+}
+
 # ── git: fast-forward only ───────────────────────────────────────────────
 # The image is built from the working directory, so anything there that git
 # does not track (and .dockerignore does not exclude) would ship in the build
@@ -158,15 +212,26 @@ require_clean() {
 $dirty"
 }
 
+# After a pull that moved HEAD, the rest of the deploy must be the NEW
+# commit's deploy.sh, not this already-running copy: a release can change
+# what deploying means (the collation check was exactly such a change, and an
+# old script deploying it recreated the database under the live app). bash
+# reads a script as it runs, so the running copy is not safe to continue
+# with either. Re-exec with --no-pull; the deploy lock (fd 9) is inherited.
 update_checkout() {
   require_clean
-  local on
+  local on before
   on="$(git rev-parse --abbrev-ref HEAD)"
   [ "$on" = "$BRANCH" ] || die "checkout is on '$on', not '$BRANCH' (set DEPLOY_BRANCH to change)"
   git fetch --quiet origin "$BRANCH" || die "git fetch failed"
   git merge-base --is-ancestor HEAD "origin/$BRANCH" ||
     die "local $BRANCH has commits origin does not — reconcile by hand, never force"
+  before="$(git rev-parse HEAD)"
   git merge --ff-only --quiet "origin/$BRANCH"
+  if [ "$(git rev-parse HEAD)" != "$before" ]; then
+    log "checkout moved to $(git rev-parse --short=12 HEAD) — continuing with its deploy.sh"
+    DEPLOY_LOCK_HELD=1 exec "$ROOT/scripts/deploy.sh" deploy --no-pull "$@"
+  fi
 }
 
 # ── commands ─────────────────────────────────────────────────────────────
@@ -181,11 +246,21 @@ cmd_deploy() {
     esac
   done
 
-  [ "$pull" = 1 ] && update_checkout
+  if [ "$pull" = 1 ]; then
+    local passthrough=()
+    for arg in "$@"; do [ "$arg" = --no-pull ] || passthrough+=("$arg"); done
+    update_checkout "${passthrough[@]}"
+  fi
   require_clean
   local tag cur
   tag="$(git rev-parse --short=12 HEAD)"
   cur="$(state_get CURRENT)"
+
+  # Heal the LIVE app first, before anything below can refuse or stop early
+  # (a commit marked FAILED, nothing to do): those must not block a repair.
+  if [ -n "$cur" ] && [ -n "$(container_of web)" ]; then
+    heal_collation "$cur"
+  fi
 
   if [ "$force" = 0 ] && [ "$tag" = "$cur" ] && [ -n "$(container_of web)" ]; then
     log "already running $tag — nothing to do (--force to redeploy)"
@@ -216,26 +291,56 @@ Split it (expand/contract, docs/deploy.md), or --allow-destructive if you accept
   log "building images (the live version keeps serving)"
   APP_TAG="$tag" compose build web worker migrate
 
+  # A new db image: stop the app BEFORE the swap, and bring it back only on a
+  # database whose indexes match the new image (the collation check below).
+  local app_stopped=0
+  if db_image_changes; then
+    log "the database image changes — stopping web + worker until the database is checked"
+    compose stop "${APP_SERVICES[@]}"
+    app_stopped=1
+  fi
+  # A step failed. Say truthfully what is live: if the app was stopped for
+  # this deploy, start $cur again (on a checked database) or report it DOWN.
+  fail_step() { # fail_step <what failed>
+    state_set FAILED "$tag"
+    [ "$app_stopped" = 1 ] || die "$1 — nothing replaced; ${cur:-nothing} is still live"
+    [ -n "$cur" ] || app_down "$1 (first deploy: nothing to restart)"
+    log "restarting $cur (it was stopped for the database image change)"
+    run_tag "$cur" || app_down "$1, and $cur did not come back healthy"
+    die "$1 — nothing replaced; $cur restarted and healthy"
+  }
+
   log "database + redis"
-  compose up -d --wait db redis
+  compose up -d --wait db redis || fail_step "database/redis did not come up healthy"
 
   if [ -n "$cur" ]; then
     log "pre-deploy backup"
-    "$ROOT/scripts/backup.sh" --kind pre-deploy ||
-      die "pre-deploy backup failed — not deploying (live version untouched)"
+    if ! "$ROOT/scripts/backup.sh" --kind pre-deploy; then
+      # The old app may only come back on a database it can trust.
+      collation_repair db_psql ||
+        app_down "pre-deploy backup failed, and the indexes could not be rebuilt (see above)"
+      fail_step "pre-deploy backup failed"
+    fi
+  fi
+
+  log "collation check"
+  if [ -n "$(collation_mismatched db_psql)" ] && [ "$app_stopped" = 0 ]; then
+    log "the database's collation changed — stopping web + worker to rebuild indexes"
+    compose stop "${APP_SERVICES[@]}" || true
+    app_stopped=1
+  fi
+  if ! collation_repair db_psql; then
+    state_set FAILED "$tag"
+    # The app stays DOWN: running it on these indexes corrupts data further.
+    app_down "the indexes could not be rebuilt for this database image; web + worker stay stopped until a person fixes it (see above)"
   fi
 
   log "migrations"
-  if ! APP_TAG="$tag" compose run --rm --no-deps migrate; then
-    state_set FAILED "$tag"
-    die "migration failed — web and worker NOT replaced; $cur is still live"
-  fi
+  APP_TAG="$tag" compose run --rm --no-deps migrate ||
+    fail_step "migration failed"
 
   log "preflight: booting $tag beside the live version"
-  if ! preflight "$tag"; then
-    state_set FAILED "$tag"
-    die "$tag never got healthy in preflight — nothing replaced; ${cur:-nothing} is still live"
-  fi
+  preflight "$tag" || fail_step "$tag never got healthy in preflight"
 
   log "replacing web + worker"
   if run_tag "$tag"; then
@@ -268,6 +373,14 @@ cmd_rollback() {
   prev="$(state_get PREVIOUS)"
   [ -n "$prev" ] || die "no previous tag recorded — nothing to roll back to"
   log "rolling back $cur → $prev (code only; the schema stays as migrated)"
+  compose up -d --wait db redis
+  # Never start code on a database whose text indexes are stale.
+  if [ -n "$(collation_mismatched db_psql)" ]; then
+    log "the database's collation changed — stopping web + worker to rebuild indexes first"
+    compose stop "${APP_SERVICES[@]}" || true
+    collation_repair db_psql ||
+      app_down "the indexes could not be rebuilt; web + worker stay stopped until a person fixes it (see above)"
+  fi
   if run_tag "$prev"; then
     state_set CURRENT "$prev"
     state_set PREVIOUS "$cur"
@@ -328,11 +441,16 @@ case "$cmd" in
   deploy | rollback)
     # One at a time. A second deploy WAITS rather than failing, so a burst of
     # merges deploys in order instead of dropping all but the first.
-    exec 9>"$STATE_DIR/lock"
-    if ! flock -n 9; then
-      log "another deploy is running — waiting for it"
-      flock 9
+    # DEPLOY_LOCK_HELD: re-exec'd by update_checkout, which already holds
+    # the lock on the inherited fd 9; reopening it would drop the lock.
+    if [ "${DEPLOY_LOCK_HELD:-}" != 1 ]; then
+      exec 9>"$STATE_DIR/lock"
+      if ! flock -n 9; then
+        log "another deploy is running — waiting for it"
+        flock 9
+      fi
     fi
+    unset DEPLOY_LOCK_HELD
     "cmd_$cmd" "$@"
     ;;
   status) cmd_status ;;

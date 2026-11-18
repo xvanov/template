@@ -193,11 +193,12 @@ describe("env", () => {
     process.env.BETTER_AUTH_URL = "";
     process.env.DEV_MAIL_INBOX_URL = "";
     process.env.S3_ENDPOINT = "";
-    expect(env()).toMatchObject({
-      BETTER_AUTH_URL: undefined,
-      DEV_MAIL_INBOX_URL: undefined,
-      S3_ENDPOINT: undefined,
-    });
+    const e = env();
+    expect(e.BETTER_AUTH_URL).toBeUndefined();
+    expect(e.DEV_MAIL_INBOX_URL).toBeUndefined();
+    expect(e.S3_ENDPOINT).toBeUndefined();
+    // Gone from process.env too: SDKs that read it themselves see "unset".
+    expect("S3_ENDPOINT" in process.env).toBe(false);
     resetEnvCache();
     process.env.S3_ENDPOINT = "not a url";
     expect(() => env()).toThrow(/S3_ENDPOINT/);
@@ -218,5 +219,29 @@ describe("env", () => {
     ) as { globalEnv: string[] };
     const missing = serverEnvKeys.filter((k) => !turbo.globalEnv.includes(k));
     expect(missing).toEqual([]);
+  });
+});
+
+describe("blank optional URLs", () => {
+  it("are removed from the environment, so SDKs that read it themselves see them unset", async () => {
+    const { dropBlankOptionalUrls } = await import("./index");
+    const target: Record<string, string | undefined> = {
+      OPENAI_BASE_URL: "",
+      ANTHROPIC_BASE_URL: "  ",
+      AZURE_OPENAI_ENDPOINT: "",
+      S3_ENDPOINT: "https://s3.example.test",
+      DATABASE_URL: "", // required: left for env() to report
+      LLM_API_KEY: "", // not a URL: untouched
+    };
+    expect(dropBlankOptionalUrls(target).sort()).toEqual([
+      "ANTHROPIC_BASE_URL",
+      "AZURE_OPENAI_ENDPOINT",
+      "OPENAI_BASE_URL",
+    ]);
+    expect(target).toEqual({
+      S3_ENDPOINT: "https://s3.example.test",
+      DATABASE_URL: "",
+      LLM_API_KEY: "",
+    });
   });
 });

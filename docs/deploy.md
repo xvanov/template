@@ -19,9 +19,12 @@ inbound ports, no cloud account required.
 
 ```
 git fetch + fast-forward (refuses a dirty or untracked checkout)
+  ──► HEAD moved? re-exec the NEW commit's deploy.sh (--no-pull)
   ──► migration guard (new migrations vs the live commit)
   ──► build images tagged <commit>   (the live version keeps serving)
-  ──► pre-deploy pg_dump ──► migrate
+  ──► db image changing? stop web + worker first
+  ──► db up ──► pre-deploy pg_dump ──► collation check (rebuild indexes if needed)
+  ──► migrate (runs the same collation guard first)
   ──► PREFLIGHT: new web boots beside the live one, no traffic
   ──► swap web + worker ──► /api/health healthy + worker logged "[worker] up"?
         yes ──► done; old tags kept for `rollback`; build cache trimmed
@@ -196,6 +199,81 @@ APP_TAG=$(git rev-parse --short=12 HEAD) COMPOSE_PROJECT_NAME=my-app-prod \
   run --rm --no-deps migrate npx --no-install prisma migrate resolve --rolled-back <migration_dir_name>
 scripts/deploy.sh
 ```
+
+## Database image changes and collation
+
+Text indexes are ordered by the database's collation. With the libc
+provider (every volume created before this check, by `postgres:17-alpine`)
+that order comes from the C library of the **image**. Reopen the data
+directory on an image with a different C library (Alpine's musl → Debian's
+glibc, which the pgvector image is) and every index on a text column (emails,
+slugs, session tokens) is silently wrong: lookups miss rows that exist, and a
+unique index admits duplicates — reproduced at 360 of 2000 emails findable
+and 2646 of 3000 duplicates accepted. Once a duplicate is in, the rebuild
+that would have fixed it fails.
+
+What protects you, in order:
+
+1. **`deploy.sh` re-execs itself after pulling.** The rest of a deploy is
+   always the new commit's script, so a release that changes how to deploy
+   is deployed its own way (`scripts/test-deploy-selfexec.sh`).
+2. **Before a db image change, web + worker are stopped**, then db is
+   recreated, the pre-deploy dump taken, and `scripts/lib/collation.sh` run:
+   every database whose stored collation version differs from what the C
+   library reports is reindexed and the new version recorded (one
+   transaction per database). Then migrate, preflight, swap. A later failure
+   starts the previous tag again, on the checked database, and waits for it
+   to be healthy; if even that fails, the script says **THE APP IS DOWN**
+   and exits non-zero (the deploy unit's `OnFailure=` hook pages you).
+3. **The check runs on every deploy, first thing after the pull** — before a
+   commit marked FAILED is refused and before "already running — nothing to
+   do" — and on `rollback`: one query; on a mismatch it stops the app,
+   rebuilds and starts the live tag again. If only `postgres`/`template1`
+   differ (no app tables), they are rebuilt with the app running.
+4. **The `migrate` image runs the same guard**
+   (`packages/db/prisma/ops/collation-guard.sql`) before `prisma migrate
+deploy`, so even a deploy script that predates all this cannot start the
+   new release on stale indexes. It connects as `postgres` (superuser), which
+   the rebuild needs.
+5. **New volumes use Postgres's builtin `C.UTF-8` collation**
+   (`POSTGRES_INITDB_ARGS` in both compose files and CI), which does not
+   depend on the C library at all. Existing volumes keep theirs.
+
+If a rebuild fails, the app stays stopped and the output names the index and
+the duplicated key, with the query to find every duplicate. Merge or delete
+the extra rows and deploy again, or restore the last dump taken before the
+image change. `scripts/test-collation.sh` reproduces the whole failure and
+the repair in CI.
+
+**Order of releases.** The image switch to pgvector ships in a LATER release
+than these checks. **Every server must deploy the release with the checks
+first** (while still on `postgres:17-alpine`), then the image switch. A
+server that skips straight to the image switch with an older `deploy.sh` is
+only partly protected by step 4: its old script recreates the database under
+the running app, which then serves on stale indexes until migrate repairs
+them. And if that repair FAILS (duplicates already written), migrate fails,
+the old script reports "migration failed" and leaves the old app serving on
+the stale indexes — writing more bad rows — until a person intervenes.
+
+**By hand** — only if you cannot deploy the release with the checks first.
+Disable the auto-deploy timer before anything else
+(`systemctl --user disable --now <app>-deploy.timer`): otherwise it pulls and
+deploys on its own within 5 minutes.
+
+```bash
+c="docker compose -p my-app-prod -f docker-compose.prod.yml --env-file .env.deploy"
+scripts/backup.sh --kind pre-deploy          # a dump first, always
+$c stop web worker
+$c pull db && $c up -d --wait db             # recreated on the new image
+for db in app postgres template1; do
+  $c exec -T db psql -U postgres -d "$db" -v ON_ERROR_STOP=1 < packages/db/prisma/ops/collation-guard.sql
+done
+scripts/deploy.sh --force                    # migrates and starts the app
+systemctl --user enable --now <app>-deploy.timer   # if you use it
+```
+
+A fresh host (empty volume) needs none of this. Restoring a dump onto any
+image needs none of it either: `pg_restore` builds every index anew.
 
 ## Rollback
 
