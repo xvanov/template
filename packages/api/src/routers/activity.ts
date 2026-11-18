@@ -5,8 +5,14 @@
  *
  * Rows with a null organizationId (system/auth mail, global actions) are never
  * returned to any tenant: the `where` always pins the tenant.
+ *
+ * Recipients that are SECRETS are masked (maskRecipient in @repo/outbound): a
+ * mobile push token lets whoever holds it push to that phone directly via
+ * Expo, or register the device under their own account in another org; an
+ * ntfy topic is the same. Addresses and numbers are shown as they are.
  */
 import { z } from "zod";
+import { maskRecipient } from "@repo/outbound";
 
 import { adminOnlyProcedure, createTRPCRouter } from "../trpc";
 
@@ -65,8 +71,8 @@ export const activityRouter = createTRPCRouter({
         })
         .default({ limit: 50 }),
     )
-    .query(({ ctx, input }) =>
-      ctx.db.outboundMessage.findMany({
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db.outboundMessage.findMany({
         where: {
           organizationId: ctx.organizationId,
           status: input.status,
@@ -88,6 +94,10 @@ export const activityRouter = createTRPCRouter({
           createdAt: true,
           finishedAt: true,
         },
-      }),
-    ),
+      });
+      return rows.map((r) => ({
+        ...r,
+        recipient: maskRecipient(r.channel, r.recipient),
+      }));
+    }),
 });

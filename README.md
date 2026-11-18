@@ -7,7 +7,7 @@ storage already wired.
 
 ```
 apps/web         Next.js 16 (App Router) — the UI and the API
-apps/mobile      Expo 57 (expo-router + NativeWind) — iOS/Android via Expo Go
+apps/mobile      Expo 57 (expo-router + NativeWind) — Expo Go, or a dev client / store build via EAS
 apps/worker      BullMQ worker + cron schedules
 apps/desktop     Tauri 2 desktop shell (Windows/macOS/Linux) around the web app
 packages/api     tRPC routers — the single API surface, shared by both apps
@@ -43,6 +43,10 @@ make mobile               # Expo dev server, then scan the QR code with Expo Go
 
 The mobile app finds your machine automatically (it derives the LAN address from
 the Expo dev server), so the phone talks to the same backend as the browser.
+
+Expo Go covers sign-in, items, photo upload and dictation. Push notifications
+(and native modules) need a development build from EAS: `cd apps/mobile && npx
+eas init && npx eas build --profile development`. See "Mobile" in CLAUDE.md.
 
 ## Everything else
 
@@ -194,8 +198,9 @@ there is nothing extra to configure for the phone.
 
 ## Making it yours
 
-1. Rename: `expo.scheme` + `APP_SCHEME`, `expo.name`/`slug` and the bundle
-   identifiers in `apps/mobile/app.json`, the `<title>` in
+1. Rename: `APP_SCHEME`, `MOBILE_APP_NAME`, `MOBILE_APP_SLUG`,
+   `MOBILE_BUNDLE_ID` and `EAS_PROJECT_ID` in `.env` (read by
+   `apps/mobile/app.config.ts`; EAS environment variables for cloud builds), the `<title>` in
    `apps/web/src/app/layout.tsx`, `productName`/`mainBinaryName`/`identifier` in
    `apps/desktop/src-tauri/tauri.conf.json`.
 2. Replace the demo `Item` model with your domain. Keep its `organizationId`

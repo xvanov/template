@@ -33,6 +33,7 @@ export {
   isLoopbackHost,
   isOperatorRecipient,
   isSafeRecipient,
+  maskRecipient,
   parsePhone,
   parseRecipient,
   parseSafeList,
@@ -44,5 +45,6 @@ export {
   type Channel,
   type GuardConfig,
   type OutboundAttempt,
+  type RecipientFacts,
   type SafeMode,
 } from "./policy";

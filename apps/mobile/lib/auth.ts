@@ -1,16 +1,26 @@
 import { expoClient } from "@better-auth/expo/client";
 import { organizationClient } from "better-auth/client/plugins";
 import { createAuthClient } from "better-auth/react";
+import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
 
 import { getBaseUrl } from "./api-url";
 
 /**
+ * The deep-link scheme from app.config.ts (APP_SCHEME), so renaming the app
+ * cannot leave a stale copy here. It also prefixes the SecureStore keys.
+ */
+const SCHEME =
+  (Array.isArray(Constants.expoConfig?.scheme)
+    ? Constants.expoConfig.scheme[0]
+    : Constants.expoConfig?.scheme) ?? "apptemplate";
+
+/**
  * The native auth client. Same server, same endpoints as the web app.
  *
  * The session cookie is kept in the OS keychain via SecureStore — never
- * AsyncStorage, which is plain text on a rooted device. `scheme` must match
- * `expo.scheme` in app.json or the OAuth browser hop cannot deep-link back.
+ * AsyncStorage, which is plain text on a rooted device. `scheme` is the
+ * app's own (app.config.ts), or the OAuth browser hop cannot deep-link back.
  */
 export const authClient = createAuthClient({
   baseURL: getBaseUrl(),
@@ -22,8 +32,8 @@ export const authClient = createAuthClient({
     // plugin's own types available for session inference. Remove once upstream
     // types line up.
     expoClient({
-      scheme: "apptemplate",
-      storagePrefix: "apptemplate",
+      scheme: SCHEME,
+      storagePrefix: SCHEME,
       storage: SecureStore,
     }),
     organizationClient(),

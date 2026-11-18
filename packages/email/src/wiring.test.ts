@@ -20,6 +20,7 @@ const SKIP = new Set([
 ]);
 const MAIL_TRANSPORT = "packages/email/src/transport.ts";
 const SMS_TRANSPORT = "packages/sms/src/transport.ts";
+const MOBILE_PUSH_TRANSPORT = "packages/push-mobile/src/transport.ts";
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
@@ -46,6 +47,9 @@ describe("no way around the outbound guard", () => {
     expect(root).toContain('mail: "packages/email/src/transport.ts"');
     expect(root).toContain('push: "packages/notify/src/ntfy.ts"');
     expect(root).toContain('sms: "packages/sms/src/transport.ts"');
+    expect(root).toContain(
+      'mobilePush: "packages/push-mobile/src/transport.ts"',
+    );
     expect(root).toContain("...outboundBoundary(");
     expect(web).toContain("...outboundBoundary(");
   });
@@ -81,6 +85,18 @@ describe("no way around the outbound guard", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("only the mobile push transport (and its tests) names the Expo push host", () => {
+    const offenders = files
+      .filter((f) => /exp\.host/i.test(readFileSync(f, "utf8")))
+      .map((f) => relative(ROOT, f))
+      .filter(
+        (f) =>
+          f !== MOBILE_PUSH_TRANSPORT &&
+          f !== "packages/push-mobile/src/index.test.ts",
+      );
+    expect(offenders).toEqual([]);
+  });
+
   it("only each channel's guarded entry point (and its tests) imports its transport", () => {
     const importers = files
       .filter((f) =>
@@ -91,13 +107,19 @@ describe("no way around the outbound guard", () => {
     expect(importers.sort()).toEqual([
       "packages/email/src/index.ts",
       "packages/email/src/transport.test.ts",
+      "packages/push-mobile/src/index.test.ts",
+      "packages/push-mobile/src/index.ts",
       "packages/sms/src/index.test.ts",
       "packages/sms/src/index.ts",
     ]);
   });
 
   it("the channel packages export nothing but the guarded entry point", () => {
-    for (const pkgDir of ["packages/email", "packages/sms"]) {
+    for (const pkgDir of [
+      "packages/email",
+      "packages/sms",
+      "packages/push-mobile",
+    ]) {
       const pkg = JSON.parse(
         readFileSync(resolve(ROOT, pkgDir, "package.json"), "utf8"),
       );
@@ -118,7 +140,12 @@ describe("no way around the outbound guard", () => {
         if (m.endsWith("packages/email/package.json")) return "twilio" in deps;
         if (m.endsWith("packages/sms/package.json"))
           return "nodemailer" in deps || "resend" in deps || "twilio" in deps;
-        return "nodemailer" in deps || "resend" in deps || "twilio" in deps;
+        return (
+          "nodemailer" in deps ||
+          "resend" in deps ||
+          "twilio" in deps ||
+          "expo-server-sdk" in deps
+        );
       } catch {
         return false;
       }

@@ -11,6 +11,8 @@
  *         (and TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN; that file is a small
  *         fetch client, and SMS SDKs such as `twilio` are refused everywhere)
  *   push  the ntfy URL and token         packages/notify/src/ntfy.ts
+ *   mobile_push  the Expo push host       packages/push-mobile/src/transport.ts
+ *         (and EXPO_ACCESS_TOKEN; a fetch client, no SDK)
  * Used by the root eslint.config.mjs (all packages + the worker) and by
  * apps/web's own config.
  */
@@ -50,6 +52,13 @@ const TWILIO_HOST_MESSAGE =
   "Only packages/sms/src/transport.ts may call the Twilio API (CLAUDE.md rule 8): use sendSms from @repo/sms.";
 const TWILIO_HOST_RE = "/api\\.twilio\\.com/i";
 
+const EXPO_PUSH_MESSAGE =
+  "Mobile pushes go through the guard: use sendMobilePush from @repo/push-mobile (CLAUDE.md rule 8). Only packages/push-mobile/src/transport.ts may call the Expo push service or read EXPO_ACCESS_TOKEN.";
+const EXPO_KEY_RE = "/^EXPO_ACCESS_TOKEN$/";
+const EXPO_HOST_RE = "/exp\\.host/i";
+// The server SDK is refused everywhere (the transport is a fetch client).
+const EXPO_SDK_RE = "/^expo-server-sdk$/";
+
 const dynamicImport = (re, message) => [
   {
     selector: `CallExpression[callee.name='require'][arguments.0.value=${re}]`,
@@ -81,40 +90,60 @@ const smsSyntax = [
   },
 ];
 const pushSyntax = reads(NTFY_RE, NTFY_MESSAGE);
+const expoSdkSyntax = dynamicImport(EXPO_SDK_RE, EXPO_PUSH_MESSAGE);
+const mobilePushSyntax = [
+  ...expoSdkSyntax,
+  ...reads(EXPO_KEY_RE, EXPO_PUSH_MESSAGE),
+  { selector: `Literal[value=${EXPO_HOST_RE}]`, message: EXPO_PUSH_MESSAGE },
+  {
+    selector: `TemplateElement[value.raw=${EXPO_HOST_RE}]`,
+    message: EXPO_PUSH_MESSAGE,
+  },
+];
 
 const mailImports = { group: MAIL_SDKS, message: MAIL_MESSAGE };
 const smsImports = { regex: SMS_SDKS_REGEX, message: SMS_MESSAGE };
+const expoImports = { group: ["expo-server-sdk"], message: EXPO_PUSH_MESSAGE };
 
 /** A transport and its own tests (which point it at a fake). */
 const withTests = (file) => [file, file.replace(/\.ts$/, ".test.ts")];
 
 /**
- * @param {{ mail: string, push: string, sms: string }} transports the one file
- *   allowed to reach each provider, relative to the config's directory
- *   ("__none__" = none)
+ * @param {{ mail: string, push: string, sms: string, mobilePush: string }} transports
+ *   the one file allowed to reach each provider, relative to the config's
+ *   directory ("__none__" = none)
  */
-export function outboundBoundary({ mail, push, sms }) {
+export function outboundBoundary({ mail, push, sms, mobilePush }) {
   return [
     {
       files: ["**/*.{ts,tsx,js,mjs,cjs,jsx}"],
       rules: {
         "no-restricted-imports": [
           "error",
-          { patterns: [mailImports, smsImports] },
+          { patterns: [mailImports, smsImports, expoImports] },
         ],
         "no-restricted-syntax": [
           "error",
           ...mailSyntax,
           ...smsSyntax,
           ...pushSyntax,
+          ...mobilePushSyntax,
         ],
       },
     },
     {
       files: withTests(mail),
       rules: {
-        "no-restricted-imports": ["error", { patterns: [smsImports] }],
-        "no-restricted-syntax": ["error", ...smsSyntax, ...pushSyntax],
+        "no-restricted-imports": [
+          "error",
+          { patterns: [smsImports, expoImports] },
+        ],
+        "no-restricted-syntax": [
+          "error",
+          ...smsSyntax,
+          ...pushSyntax,
+          ...mobilePushSyntax,
+        ],
       },
     },
     {
@@ -131,13 +160,36 @@ export function outboundBoundary({ mail, push, sms }) {
           ...mailSyntax,
           ...smsSdkSyntax,
           ...pushSyntax,
+          ...mobilePushSyntax,
         ],
       },
     },
     {
       files: withTests(push),
       rules: {
-        "no-restricted-syntax": ["error", ...mailSyntax, ...smsSyntax],
+        "no-restricted-syntax": [
+          "error",
+          ...mailSyntax,
+          ...smsSyntax,
+          ...mobilePushSyntax,
+        ],
+      },
+    },
+    {
+      // The Expo push transport (the SDK stays refused); its tests live next
+      // to the package entry point.
+      files: [
+        mobilePush,
+        mobilePush.replace(/transport\.ts$/, "index.test.ts"),
+      ],
+      rules: {
+        "no-restricted-syntax": [
+          "error",
+          ...mailSyntax,
+          ...smsSyntax,
+          ...pushSyntax,
+          ...expoSdkSyntax,
+        ],
       },
     },
   ];

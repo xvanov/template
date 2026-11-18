@@ -72,6 +72,13 @@ import {
   EMBEDDING_PROVIDERS,
   embedOpenAiFamily,
 } from "./providers/openai";
+import {
+  TRANSCRIBE_PROVIDERS,
+  transcribeEndpoint,
+  transcribeOpenAiCompatible,
+  type TranscribeRequest,
+  type TranscribeResponse,
+} from "./providers/transcribe";
 import type {
   ChatEntry,
   ProviderCall,
@@ -199,6 +206,51 @@ export interface EmbedOptions extends Omit<CallOptions, "tier"> {
   dimensions?: number;
 }
 
+export interface TranscribeOptions extends Omit<CallOptions, "tier"> {
+  audio: Uint8Array;
+  /** With its extension: servers use it to tell the format (`note.m4a`). */
+  filename: string;
+  contentType: string;
+  /** ISO-639-1 hint ("en"). */
+  language?: string;
+  /** Vocabulary hint: product names, jargon. */
+  prompt?: string;
+  timeoutMs?: number;
+}
+
+export interface TranscribeResult {
+  text: string;
+  model: string;
+  /** Audio length the server reported; null if it did not. */
+  seconds: number | null;
+  costUsd: number;
+  costKnown: boolean;
+  latencyMs: number;
+}
+
+/**
+ * The LOWEST bitrate (bytes per second) a recording of each type plausibly
+ * has, so size / rate is the LONGEST it can be: the pre-send estimate errs
+ * long, i.e. high on cost, as a spending control should. Opus (webm/ogg)
+ * speech can be ~6 kbit/s, HE-AAC and MP3 ~8; PCM WAV is at least 8 kHz
+ * 8-bit mono (64 kbit/s), FLAC about half that. Unknown types use the lowest.
+ */
+const MIN_BYTES_PER_SECOND: Record<string, number> = {
+  "audio/webm": 750,
+  "audio/ogg": 750,
+  "audio/mp4": 1000,
+  "audio/aac": 1000,
+  "audio/mpeg": 1000,
+  "audio/flac": 4000,
+  "audio/wav": 8000,
+};
+
+/** The longest a recording of this size and type can be, in seconds. */
+export function maxAudioSeconds(bytes: number, contentType: string): number {
+  const type = contentType.split(";")[0]!.trim().toLowerCase();
+  return Math.ceil(bytes / (MIN_BYTES_PER_SECOND[type] ?? 750));
+}
+
 export interface EmbedResult {
   embeddings: number[][];
   model: string;
@@ -219,6 +271,10 @@ export interface LlmDeps {
     texts: string[],
     opts: { dimensions?: number },
   ) => Promise<{ embeddings: number[][]; tokens: number }>;
+  transcribe: (
+    route: Route,
+    req: TranscribeRequest,
+  ) => Promise<TranscribeResponse>;
   ledger: Ledger;
   warn: (message: string, data: Record<string, unknown>) => void;
   /** A tenant reached its daily cap. Default: tell the operator, once per org per day. */
@@ -318,6 +374,7 @@ const defaultDeps: LlmDeps = {
   call: dispatch,
   converse: dispatchTurn,
   embed: (route, texts, opts) => embedOpenAiFamily(route, texts, opts),
+  transcribe: (route, req) => transcribeOpenAiCompatible(route, req),
   ledger: dbLedger,
   warn: (message, data) => console.warn(`[ai] ${message}`, data),
   capHit: notifyCapHit,
@@ -785,7 +842,116 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
     };
   }
 
-  return { ask, askObject, embed, converse };
+  /**
+   * Speech to text through LLM_TRANSCRIBE_MODEL (or `opts.model`), capped and
+   * priced like any call.
+   *
+   * Before sending, the cap reserves a PER-MINUTE estimate
+   * (LLM_TRANSCRIBE_COST_PER_MINUTE x the longest the file can be, see
+   * maxAudioSeconds). Without a per-minute rate the call is unpriced, and a
+   * capped discretionary call is refused, as for any model.
+   *
+   * After, the row settles with the best price the answer allows, in order:
+   *   1. tokens reported (gpt-4o-*-transcribe) AND a token price for the
+   *      model in LLM_PRICES → token price, costKnown
+   *   2. duration reported (whisper, local servers) → per-minute, costKnown
+   *   3. otherwise → the estimate stays, costKnown=false
+   */
+  async function transcribe(
+    opts: TranscribeOptions,
+  ): Promise<TranscribeResult> {
+    const modelString = opts.model ?? env().LLM_TRANSCRIBE_MODEL;
+    if (!modelString) {
+      throw new LlmDisabledError(
+        "Transcription is off — set LLM_TRANSCRIBE_MODEL (e.g. openai/gpt-4o-mini-transcribe, or local/<model> on a whisper server).",
+      );
+    }
+    const route = parseModel(modelString);
+    if (!TRANSCRIBE_PROVIDERS.includes(route.provider)) {
+      throw new LlmConfigError(
+        `transcription is not wired for ${route.provider}/ — use ${TRANSCRIBE_PROVIDERS.join(", ")}`,
+      );
+    }
+    if (!env().LLM_ENABLED || !transcribeEndpoint(route).baseUrl) {
+      throw new LlmDisabledError(`${route.id} is not configured.`);
+    }
+    const perMinute = env().LLM_TRANSCRIBE_COST_PER_MINUTE;
+    const priceSeconds = (seconds: number) =>
+      perMinute === undefined
+        ? null
+        : Math.round((seconds / 60) * perMinute * 1e6) / 1e6;
+    const estimate = priceSeconds(
+      maxAudioSeconds(opts.audio.byteLength, opts.contentType),
+    );
+    const row: LlmCallRow = {
+      organizationId: opts.organizationId ?? null,
+      userId: opts.userId ?? null,
+      purpose: opts.purpose,
+      model: route.id,
+      provider: route.provider,
+      tier: null,
+      priority: opts.priority,
+      kind: "transcribe",
+      usage: ZERO_USAGE,
+      costUsd: estimate ?? 0,
+      costKnown: false,
+      latencyMs: 0,
+      ok: false,
+      error: null,
+      status: "pending",
+    };
+    const id = await reserve(opts, route, row, estimate);
+
+    const started = Date.now();
+    let r: TranscribeResponse;
+    try {
+      r = await deps.transcribe(route, {
+        audio: opts.audio,
+        filename: opts.filename,
+        contentType: opts.contentType,
+        language: opts.language,
+        prompt: opts.prompt,
+        timeoutMs: opts.timeoutMs,
+      });
+    } catch (err) {
+      await deps.ledger.settle(
+        id,
+        failedRow(row, err, estimate, Date.now() - started),
+      );
+      throw err;
+    }
+    const latencyMs = Date.now() - started;
+    const usage = r.tokens
+      ? {
+          ...ZERO_USAGE,
+          inputTokens: r.tokens.input,
+          outputTokens: r.tokens.output,
+        }
+      : ZERO_USAGE;
+    const cost =
+      (r.tokens ? priceUsage(route.id, usage) : null) ??
+      (r.seconds !== null ? priceSeconds(r.seconds) : null);
+    await deps.ledger.settle(id, {
+      ...row,
+      usage,
+      costUsd: cost ?? estimate ?? 0,
+      costKnown: cost !== null,
+      latencyMs,
+      ok: true,
+      error: null,
+      status: "done",
+    });
+    return {
+      text: r.text,
+      model: route.id,
+      seconds: r.seconds,
+      costUsd: cost ?? estimate ?? 0,
+      costKnown: cost !== null,
+      latencyMs,
+    };
+  }
+
+  return { ask, askObject, embed, converse, transcribe };
 }
 
 /** Rough size of a transcript for the pre-send estimate (errs high). */
@@ -805,6 +971,22 @@ export const ask = llm.ask;
 export const converse = llm.converse;
 export const askObject = llm.askObject;
 export const embed = llm.embed;
+export const transcribe = llm.transcribe;
+
+/** Can transcribe() run right now (model set, provider configured, LLM on)? */
+export function transcribeEnabled(): boolean {
+  const e = env();
+  if (!e.LLM_ENABLED || !e.LLM_TRANSCRIBE_MODEL) return false;
+  try {
+    const route = parseModel(e.LLM_TRANSCRIBE_MODEL);
+    return (
+      TRANSCRIBE_PROVIDERS.includes(route.provider) &&
+      Boolean(transcribeEndpoint(route).baseUrl)
+    );
+  } catch {
+    return false;
+  }
+}
 
 // ── introspection ────────────────────────────────────────────────────────
 

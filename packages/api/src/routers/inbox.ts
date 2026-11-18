@@ -10,6 +10,7 @@
 import { z } from "zod";
 import { ensureEmailAddress } from "@repo/inbound";
 import { env } from "@repo/env";
+import { maskRecipient } from "@repo/outbound";
 import { storage } from "@repo/storage";
 
 import { DomainRuleError, NotFoundError } from "../errors";
@@ -116,9 +117,17 @@ export const inboxRouter = createTRPCRouter({
           assets.map(async (a) => [a.id, await driver.url(a.key)] as const),
         ),
       );
-      const { html, attachments: _raw, ...rest } = row;
+      const { html, attachments: _raw, replyToOutbound, ...rest } = row;
       return {
         ...rest,
+        // A reply's original recipient, as anyone may see it (push secrets masked).
+        replyToOutbound: replyToOutbound && {
+          ...replyToOutbound,
+          recipient: maskRecipient(
+            replyToOutbound.channel,
+            replyToOutbound.recipient,
+          ),
+        },
         hasHtml: Boolean(html),
         attachments: list.map((a) => ({
           filename: a.filename,

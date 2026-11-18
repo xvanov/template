@@ -77,7 +77,7 @@ async function sentEmail(organizationId: string) {
       config: {
         safeMode: "off",
         safeRecipients: [],
-        enabled: { email: true, push: true, sms: true },
+        enabled: { email: true, push: true, sms: true, mobile_push: true },
         operatorRecipients: {},
         frozen: false,
         caps: {
@@ -385,7 +385,7 @@ describe("sms", () => {
           config: {
             safeMode: "off",
             safeRecipients: [],
-            enabled: { email: true, push: true, sms: true },
+            enabled: { email: true, push: true, sms: true, mobile_push: true },
             operatorRecipients: {},
             frozen: false,
             caps: {
@@ -455,7 +455,7 @@ describe("sms", () => {
         config: {
           safeMode: "off",
           safeRecipients: [],
-          enabled: { email: true, push: true, sms: true },
+          enabled: { email: true, push: true, sms: true, mobile_push: true },
           operatorRecipients: {},
           frozen: false,
           caps: {
@@ -529,7 +529,7 @@ describe("sms", () => {
         config: {
           safeMode: "off",
           safeRecipients: [],
-          enabled: { email: true, push: true, sms: true },
+          enabled: { email: true, push: true, sms: true, mobile_push: true },
           operatorRecipients: {},
           frozen: false,
           caps: {

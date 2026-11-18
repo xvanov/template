@@ -10,18 +10,22 @@
 export type LimitedBody =
   { ok: true; text: string } | { ok: false; status: 413; error: string };
 
-export async function readBodyLimited(
+export type LimitedBytes =
+  { ok: true; bytes: Uint8Array } | { ok: false; status: 413; error: string };
+
+/** The body as bytes (file uploads), with the same cap and streaming rules. */
+export async function readBytesLimited(
   req: Request,
   maxBytes: number,
-): Promise<LimitedBody> {
-  const tooLarge: LimitedBody = {
-    ok: false,
-    status: 413,
+): Promise<LimitedBytes> {
+  const tooLarge = {
+    ok: false as const,
+    status: 413 as const,
     error: `Body larger than ${maxBytes} bytes`,
   };
   const declared = Number(req.headers.get("content-length") ?? 0);
   if (Number.isFinite(declared) && declared > maxBytes) return tooLarge;
-  if (!req.body) return { ok: true, text: "" };
+  if (!req.body) return { ok: true, bytes: new Uint8Array() };
 
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -36,5 +40,14 @@ export async function readBodyLimited(
     }
     chunks.push(value);
   }
-  return { ok: true, text: Buffer.concat(chunks).toString("utf8") };
+  return { ok: true, bytes: Buffer.concat(chunks) };
+}
+
+/** The body as UTF-8 text (webhooks). */
+export async function readBodyLimited(
+  req: Request,
+  maxBytes: number,
+): Promise<LimitedBody> {
+  const r = await readBytesLimited(req, maxBytes);
+  return r.ok ? { ok: true, text: Buffer.from(r.bytes).toString("utf8") } : r;
 }

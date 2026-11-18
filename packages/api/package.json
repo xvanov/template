@@ -24,6 +24,8 @@
     "@repo/env": "*",
     "@repo/inbound": "*",
     "@repo/jobs": "*",
+    "@repo/outbound": "*",
+    "@repo/push-mobile": "*",
     "@repo/rag": "*",
     "@repo/security": "*",
     "@repo/storage": "*",

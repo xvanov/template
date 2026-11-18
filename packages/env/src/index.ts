@@ -253,6 +253,23 @@ const serverSchema = z.object({
   LLM_MODEL_SMART: z.preprocess(blankIsUnset, z.string().optional()),
   /** Model for embed(). Unset = embeddings disabled. e.g. openai/text-embedding-3-small */
   LLM_EMBEDDING_MODEL: z.preprocess(blankIsUnset, z.string().optional()),
+  /**
+   * Speech-to-text for transcribe() (`provider/model`): openai/ or local/
+   * (any OpenAI-compatible /audio/transcriptions, e.g. a local whisper
+   * server). Unset = transcription off (the dictate button says so).
+   */
+  LLM_TRANSCRIBE_MODEL: z.preprocess(blankIsUnset, z.string().optional()),
+  /** Where local/ transcription goes, when not LLM_BASE_URL (a whisper box). */
+  LLM_TRANSCRIBE_BASE_URL: optionalUrl,
+  /**
+   * USD per minute of audio for LLM_TRANSCRIBE_MODEL (0 for a free local
+   * server). Unset = unpriced: the spend cap then refuses dictation, as it
+   * does any discretionary call it cannot price.
+   */
+  LLM_TRANSCRIBE_COST_PER_MINUTE: z.preprocess(
+    blankIsUnset,
+    z.coerce.number().min(0).optional(),
+  ),
   /** Default reasoning effort (Anthropic output_config.effort; `--effort` for cli/). */
   LLM_EFFORT: z.preprocess(
     blankIsUnset,
@@ -374,6 +391,16 @@ const serverSchema = z.object({
   OUTBOUND_PUSH_ENABLED: bool(true),
   /** Channel switch for SMS (Twilio). OFF by default: texts cost money and reach phones. */
   OUTBOUND_SMS_ENABLED: bool(false),
+  /**
+   * Channel switch for mobile push (Expo push, packages/push-mobile). OFF by
+   * default: it reaches real phones, through Expo's and Apple's/Google's servers.
+   */
+  OUTBOUND_MOBILE_PUSH_ENABLED: bool(false),
+  /**
+   * Expo access token, only if "enhanced push security" is on for the Expo
+   * project. Read only by packages/push-mobile/src/transport.ts.
+   */
+  EXPO_ACCESS_TOKEN: z.preprocess(blankIsUnset, z.string().optional()),
   /** Global kill switch. A runtime switch also exists (`npm run outbound:freeze`). */
   OUTBOUND_FROZEN: bool(false),
   /** Volume caps (fixed windows in Redis). Over the cap = blocked, not queued. */

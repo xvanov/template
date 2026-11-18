@@ -9,6 +9,7 @@ import {
   openSecretDetailed,
   rateLimit,
   readBodyLimited,
+  readBytesLimited,
   sealSecret,
   verifyBearer,
   verifyHmac,
@@ -152,6 +153,19 @@ describe("readBodyLimited", () => {
     });
     expect(await readBodyLimited(req(stream(4, 64)), 300)).toMatchObject({
       ok: true,
+    });
+  });
+
+  it("readBytesLimited keeps binary bytes intact, under the same cap", async () => {
+    const bin = new Uint8Array([0xff, 0x00, 0xd8, 0x80]);
+    const r = await readBytesLimited(
+      new Request("http://x.test/", { method: "POST", body: bin }),
+      10,
+    );
+    expect(r.ok && [...r.bytes]).toEqual([0xff, 0x00, 0xd8, 0x80]);
+    expect(await readBytesLimited(req(stream(10, 64)), 300)).toMatchObject({
+      ok: false,
+      status: 413,
     });
   });
 });

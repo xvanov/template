@@ -6,13 +6,19 @@
 
 /**
  * Channels with a transport: email (packages/email), push (ntfy, in
- * packages/notify) and sms (Twilio, in packages/sms). A new channel is added
- * here, with a recipient parser and an enable flag, in the same change that
- * adds its transport, not before.
+ * packages/notify, operator alerts), sms (Twilio, in packages/sms) and
+ * mobile_push (Expo push to the app, in packages/push-mobile). A new channel
+ * is added here, with a recipient parser and an enable flag, in the same
+ * change that adds its transport, not before.
  */
-export type Channel = "email" | "push" | "sms";
+export type Channel = "email" | "push" | "sms" | "mobile_push";
 
-export const CHANNELS: readonly Channel[] = ["email", "push", "sms"];
+export const CHANNELS: readonly Channel[] = [
+  "email",
+  "push",
+  "sms",
+  "mobile_push",
+];
 
 /** Why a message was not sent. Stored verbatim in outbound_message.blockReason. */
 export type BlockReason =
@@ -41,6 +47,7 @@ export interface OutboundAttempt {
    * push: one ntfy topic name.
    * sms: one phone number in international form (+447700900123; spaces,
    *      dashes, dots and brackets are tolerated; normalised to E.164).
+   * mobile_push: one Expo push token, `ExponentPushToken[...]`.
    */
   recipient: string;
   /** What is sending it, dotted and grep-able: `auth.verify-email`, `items.digest`. */
@@ -80,6 +87,17 @@ export interface OutboundAttempt {
    * skips the per-recipient cap and counts in its own "operator" global pool.
    */
   operator?: boolean;
+}
+
+/**
+ * What the guard learned about a recipient from the database, for the
+ * safe-mode check. mobile_push only: the account the device token is
+ * registered to (push_device → user), looked up by the guard itself from the
+ * token, never taken from the caller.
+ */
+export interface RecipientFacts {
+  /** The device owner's email, ONLY if verified; null otherwise. */
+  deviceOwnerEmail?: string | null;
 }
 
 export interface GuardConfig {
@@ -125,6 +143,12 @@ const PLAIN_EMAIL =
 /** An ntfy topic: what ntfy itself accepts in a topic name. Case-sensitive. */
 const NTFY_TOPIC = /^[A-Za-z0-9_-]{1,64}$/;
 
+/**
+ * An Expo push token. Case-sensitive, so never lowercased anywhere (the
+ * allowlist keeps token entries as written).
+ */
+const EXPO_TOKEN = /^Expo(nent)?PushToken\[[A-Za-z0-9_-]{8,200}\]$/;
+
 /** E.164: a plus, a non-zero country code digit, at most 15 digits in all. */
 const E164 = /^\+[1-9]\d{7,14}$/;
 
@@ -152,19 +176,27 @@ export function parseRecipient(channel: Channel, raw: string): string | null {
     return NTFY_TOPIC.test(t) ? t : null;
   }
   if (channel === "sms") return parsePhone(raw);
+  if (channel === "mobile_push") {
+    const t = raw.trim();
+    return EXPO_TOKEN.test(t) ? t : null;
+  }
   const r = raw.trim().toLowerCase();
   return r.length <= 254 && PLAIN_EMAIL.test(r) ? r : null;
 }
 
 /**
- * `a@x.com, @example.com, +447700900123` → normalised entries: addresses,
- * `@domain`s and E.164 numbers. Invalid entries are dropped.
+ * `a@x.com, @example.com, +447700900123, ExponentPushToken[..]` → normalised
+ * entries: addresses, `@domain`s, E.164 numbers and Expo push tokens (kept
+ * as written: tokens are case-sensitive). Invalid entries are dropped.
  */
 export function parseSafeList(raw: string | undefined): string[] {
   return (raw ?? "")
     .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .flatMap((s) => {
+    .map((s) => s.trim())
+    .flatMap((t) => {
+      const token = parseRecipient("mobile_push", t);
+      if (token) return [token];
+      const s = t.toLowerCase();
       if (s.startsWith("@"))
         return parseRecipient("email", `x${s}`) !== null ? [s] : [];
       if (s.includes("@"))
@@ -178,17 +210,44 @@ export function isSafeRecipient(
   channel: Channel,
   recipient: string,
   safeList: readonly string[],
+  facts: RecipientFacts = {},
 ): boolean {
   // push has no allowlist (only the operator's own topic is ever sent to,
   // via the `operator` exemption).
   if (channel === "push") return false;
   const r = parseRecipient(channel, recipient);
   if (!r) return false;
+  // A device: by its exact token, or by its owner's VERIFIED email (an
+  // address or @domain entry), so "my own phone" is `me@myco.com` in the
+  // list instead of a token that changes on every reinstall.
+  if (channel === "mobile_push") {
+    if (safeList.includes(r)) return true;
+    const owner = facts.deviceOwnerEmail;
+    return Boolean(owner) && isSafeRecipient("email", owner!, safeList);
+  }
   // A number is allowed only by its exact entry: there is no "@domain" for
   // phones, and a prefix rule (+44…) would allowlist a whole country.
   if (channel === "sms") return safeList.includes(r);
   const domain = r.slice(r.indexOf("@"));
   return safeList.some((entry) => entry === r || entry === domain);
+}
+
+/**
+ * What a person may be SHOWN of a recipient (the activity log, a log line).
+ * An ntfy topic and an Expo push token are bearer secrets: whoever holds one
+ * can push to that phone, or (for a token) re-register the device under
+ * themselves. So they are masked everywhere outside the guard and the
+ * transport; addresses and numbers are the org's own contacts and shown as is.
+ */
+export function maskRecipient(channel: string, recipient: string): string {
+  if (channel === "push") return `${recipient.slice(0, 3)}…`;
+  if (channel === "mobile_push") {
+    const open = recipient.indexOf("[");
+    return open >= 0
+      ? `${recipient.slice(0, open + 5)}…]`
+      : `${recipient.slice(0, 4)}…`;
+  }
+  return recipient;
 }
 
 const LOOPBACK = /^(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1|\[::1\])$/i;
@@ -225,6 +284,7 @@ export function staticBlock(
   attempt: OutboundAttempt,
   config: GuardConfig,
   runtimeFrozen: boolean,
+  facts: RecipientFacts = {},
 ): Block | null {
   if (!parseRecipient(attempt.channel, attempt.recipient)) {
     return {
@@ -251,7 +311,12 @@ export function staticBlock(
     effectiveSafeMode(config.safeMode, attempt.channel) === "strict" &&
     !attempt.authMail &&
     !isOperatorRecipient(attempt, config) &&
-    !isSafeRecipient(attempt.channel, attempt.recipient, config.safeRecipients)
+    !isSafeRecipient(
+      attempt.channel,
+      attempt.recipient,
+      config.safeRecipients,
+      facts,
+    )
   ) {
     return {
       reason: "SAFE_MODE",
@@ -260,7 +325,9 @@ export function staticBlock(
           ? "Safe mode is on and push goes only to the operator's NTFY_TOPIC."
           : attempt.channel === "sms"
             ? "Safe mode is on and the number is not in OUTBOUND_SAFE_RECIPIENTS (exact E.164 entries)."
-            : "Safe mode is on and the recipient is not in OUTBOUND_SAFE_RECIPIENTS.",
+            : attempt.channel === "mobile_push"
+              ? "Safe mode is on and neither the device token nor its owner's verified email is in OUTBOUND_SAFE_RECIPIENTS."
+              : "Safe mode is on and the recipient is not in OUTBOUND_SAFE_RECIPIENTS.",
     };
   }
   return null;
@@ -268,8 +335,8 @@ export function staticBlock(
 
 /**
  * `local-catcher` asserts that SMTP is a catcher. It says nothing about any
- * other channel (ntfy and Twilio have no catcher: a push or a text reaches a
- * real phone), so for every channel but email it means strict.
+ * other channel (ntfy, Twilio and Expo push have no catcher: a push or a text
+ * reaches a real phone), so for every channel but email it means strict.
  */
 export function effectiveSafeMode(mode: SafeMode, channel: Channel): SafeMode {
   return mode === "local-catcher" && channel !== "email" ? "strict" : mode;

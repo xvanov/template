@@ -96,7 +96,7 @@ export interface LlmCallRow {
   provider: string;
   tier: string | null;
   priority: Priority;
-  kind: "chat" | "embed";
+  kind: "chat" | "embed" | "transcribe";
   usage: TokenUsage;
   costUsd: number;
   costKnown: boolean;

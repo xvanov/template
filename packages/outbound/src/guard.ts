@@ -24,7 +24,8 @@
  * sent/failed, so a message cannot leave without a record: if the row cannot
  * be written, the provider is never called.
  *
- * Channel packages (packages/email, packages/sms; push lives in packages/notify)
+ * Channel packages (packages/email, packages/sms, packages/push-mobile; ntfy
+ * push lives in packages/notify)
  * call `deliver` with their raw transport as the callback and DO NOT export
  * that transport. The callback receives the PARSED recipient and must send to
  * exactly that, and the row id, which a provider that supports it is given as
@@ -56,6 +57,8 @@ import { rateLimit, type CounterStore } from "@repo/security";
 import { findSuppression, isFrozen } from "./controls";
 import {
   CHANNELS,
+  effectiveSafeMode,
+  maskRecipient,
   parseRecipient,
   parseSafeList,
   resolveSafeMode,
@@ -64,6 +67,7 @@ import {
   type Block,
   type GuardConfig,
   type OutboundAttempt,
+  type RecipientFacts,
 } from "./policy";
 
 export type DeliveryResult =
@@ -119,7 +123,7 @@ export type Transport = (
 export interface GuardDeps {
   db: Pick<
     PrismaClient,
-    "outboundMessage" | "appSetting" | "outboundSuppression"
+    "outboundMessage" | "appSetting" | "outboundSuppression" | "pushDevice"
   >;
   /** Counter store for the volume caps. Default: Redis (memory under test). */
   store?: CounterStore;
@@ -144,6 +148,7 @@ export function configFromEnv(): GuardConfig {
       email: e.OUTBOUND_EMAIL_ENABLED,
       push: e.OUTBOUND_PUSH_ENABLED,
       sms: e.OUTBOUND_SMS_ENABLED,
+      mobile_push: e.OUTBOUND_MOBILE_PUSH_ENABLED,
     },
     operatorRecipients: operatorRecipients(e),
     frozen: e.OUTBOUND_FROZEN,
@@ -165,8 +170,14 @@ function operatorRecipients(e: {
   OPERATOR_EMAIL?: string;
   NTFY_TOPIC?: string;
 }): GuardConfig["operatorRecipients"] {
-  // No operator phone: operator alerts go by push or email (packages/notify).
-  const raw = { email: e.OPERATOR_EMAIL, push: e.NTFY_TOPIC, sms: undefined };
+  // No operator phone or device: operator alerts go by ntfy push or email
+  // (packages/notify).
+  const raw = {
+    email: e.OPERATOR_EMAIL,
+    push: e.NTFY_TOPIC,
+    sms: undefined,
+    mobile_push: undefined,
+  };
   const out: GuardConfig["operatorRecipients"] = {};
   for (const ch of CHANNELS) {
     const r = raw[ch] && parseRecipient(ch, raw[ch]);
@@ -175,11 +186,12 @@ function operatorRecipients(e: {
   return out;
 }
 
-/** What a log line may show of a recipient. A push topic is a secret. */
+/** What a log line may show of a recipient. A push topic or device token is a secret. */
 export function displayRecipient(channel: string, recipient: string): string {
-  return channel === "push"
-    ? `topic ${recipient.slice(0, 3)}…`
-    : JSON.stringify(recipient);
+  if (channel === "push") return `topic ${maskRecipient(channel, recipient)}`;
+  if (channel === "mobile_push")
+    return `device ${maskRecipient(channel, recipient)}`;
+  return JSON.stringify(recipient);
 }
 
 /** One loud line saying what safe mode will do. Printed once per process. */
@@ -191,7 +203,7 @@ export function describeSafeMode(
     case "local-catcher":
       return [
         "",
-        "[outbound] SAFE MODE: LOCAL CATCHER (OUTBOUND_SAFE_MODE=local) — EVERY email recipient allowed (push: operator only; sms: allowlist only).",
+        "[outbound] SAFE MODE: LOCAL CATCHER (OUTBOUND_SAFE_MODE=local) — EVERY email recipient allowed (push: operator only; sms and mobile push: allowlist only).",
         `[outbound]   This trusts that SMTP (${smtpHost ?? "unset: console"}) is a catcher like Mailpit that`,
         "[outbound]   delivers nowhere. If it can relay to the internet, real people get this mail.",
         "",
@@ -466,6 +478,33 @@ function isUniqueViolation(err: unknown): boolean {
   );
 }
 
+/**
+ * What safe mode may need to know from the database. Only looked up when it
+ * can matter (strict mode, mobile push, not already allowlisted by token):
+ * the owner of the device token, and only if their email is verified, since
+ * an unverified address proves nothing about who holds the phone.
+ */
+async function recipientFacts(
+  attempt: OutboundAttempt,
+  config: GuardConfig,
+  db: GuardDeps["db"],
+): Promise<RecipientFacts> {
+  if (
+    attempt.channel !== "mobile_push" ||
+    effectiveSafeMode(config.safeMode, attempt.channel) !== "strict" ||
+    config.safeRecipients.includes(attempt.recipient)
+  ) {
+    return {};
+  }
+  const device = await db.pushDevice.findUnique({
+    where: { token: attempt.recipient },
+    select: { user: { select: { email: true, emailVerified: true } } },
+  });
+  return {
+    deviceOwnerEmail: device?.user.emailVerified ? device.user.email : null,
+  };
+}
+
 /** `attempt.recipient` is already parsed. */
 async function firstBlock(
   attempt: OutboundAttempt,
@@ -477,6 +516,7 @@ async function firstBlock(
     attempt,
     config,
     await isFrozen(attempt.channel, db),
+    await recipientFacts(attempt, config, db),
   );
   if (fixed) return fixed;
 
