@@ -34,6 +34,11 @@ export interface TranscribeResponse {
   text: string;
   /** Audio length the server reported, if it did. */
   seconds: number | null;
+  /**
+   * Token usage, when the model bills by token (gpt-4o-*-transcribe report
+   * `usage: { type: "tokens", input_tokens, output_tokens }`). Null otherwise.
+   */
+  tokens: { input: number; output: number } | null;
 }
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
@@ -129,7 +134,12 @@ export async function transcribeOpenAiCompatible(
   const json = (await res.json().catch(() => null)) as {
     text?: unknown;
     duration?: unknown;
-    usage?: { type?: string; seconds?: unknown };
+    usage?: {
+      type?: string;
+      seconds?: unknown;
+      input_tokens?: unknown;
+      output_tokens?: unknown;
+    };
     error?: { message?: string };
   } | null;
   if (!res.ok || !json || typeof json.text !== "string") {
@@ -151,5 +161,12 @@ export async function transcribeOpenAiCompatible(
           typeof json.usage.seconds === "number"
         ? json.usage.seconds
         : null;
-  return { text: json.text.trim(), seconds };
+  const u = json.usage;
+  const tokens =
+    u?.type === "tokens" &&
+    typeof u.input_tokens === "number" &&
+    typeof u.output_tokens === "number"
+      ? { input: u.input_tokens, output: u.output_tokens }
+      : null;
+  return { text: json.text.trim(), seconds, tokens };
 }

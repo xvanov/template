@@ -9,7 +9,12 @@
  * priced into llm_call against the tenant's daily cap) and is dropped.
  */
 import { transcribe } from "@repo/ai";
-import { clientIp, rateLimit, tooManyRequests } from "@repo/security";
+import {
+  clientIp,
+  rateLimit,
+  readBytesLimited,
+  tooManyRequests,
+} from "@repo/security";
 import {
   MAX_AUDIO_BYTES,
   assertAudioAllowed,
@@ -72,15 +77,18 @@ export async function POST(req: Request) {
     );
   }
 
-  const declared = Number(req.headers.get("content-length") ?? 0);
-  if (declared > MAX_AUDIO_BYTES * 1.1) {
-    return Response.json({ error: "Recording too large." }, { status: 413 });
-  }
+  // Streamed with a hard cap (the multipart framing on top of the largest
+  // allowed file): a chunked body with no Content-Length cannot make us
+  // buffer more than that.
+  const body = await readBytesLimited(req, MAX_AUDIO_BYTES + 64 * 1024);
+  if (!body.ok) return tooLarge();
 
   let file: File | null = null;
   let language: string | undefined;
   try {
-    const form = await req.formData();
+    const form = await new Response(body.bytes as Uint8Array<ArrayBuffer>, {
+      headers: { "content-type": req.headers.get("content-type") ?? "" },
+    }).formData();
     const candidate = form.get("file");
     if (candidate instanceof File) file = candidate;
     const lang = form.get("language");
@@ -96,6 +104,7 @@ export async function POST(req: Request) {
   }
 
   const contentType = normalizeAudioType(file.type || "");
+  if (file.size > MAX_AUDIO_BYTES) return tooLarge();
   try {
     assertAudioAllowed(contentType, file.size);
   } catch (err) {
@@ -130,4 +139,13 @@ export async function POST(req: Request) {
       { status: 502 },
     );
   }
+}
+
+function tooLarge(): Response {
+  return Response.json(
+    {
+      error: `Recording too large (max ${Math.round(MAX_AUDIO_BYTES / 1024 / 1024)} MB).`,
+    },
+    { status: 413 },
+  );
 }

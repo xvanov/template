@@ -102,4 +102,58 @@ describe("push devices", () => {
       code: "BAD_REQUEST",
     });
   });
+
+  it("the activity log never shows an admin a member's full push token", async () => {
+    const a = await createTenant("push-activity");
+    const tok = token();
+    await db.outboundMessage.create({
+      data: {
+        organizationId: a.organizationId,
+        channel: "mobile_push",
+        recipient: tok,
+        purpose: "test.push",
+        status: "sent",
+      },
+    });
+    await db.outboundMessage.create({
+      data: {
+        organizationId: a.organizationId,
+        channel: "email",
+        recipient: "customer@example.test",
+        purpose: "test.mail",
+        status: "sent",
+      },
+    });
+    const rows = await callerFor(a).activity.outbound();
+    const push = rows.find((r) => r.channel === "mobile_push")!;
+    expect(push.recipient).not.toBe(tok);
+    expect(push.recipient).toMatch(/^ExponentPushToken\[.{4}…\]$/);
+    expect(JSON.stringify(rows)).not.toContain(tok.slice(22, -1));
+    expect(rows.find((r) => r.channel === "email")!.recipient).toBe(
+      "customer@example.test",
+    );
+  });
+
+  it("agent.proposal (what a proposal push opens) is org-scoped", async () => {
+    const a = await createTenant("push-open-a");
+    const b = await createTenant("push-open-b");
+    const p = await db.agentProposal.create({
+      data: {
+        organizationId: a.organizationId,
+        proposedById: a.userId,
+        source: "user",
+        tool: "items_create",
+        input: {},
+        summary: "Create item “Desk”",
+      },
+      select: { id: true },
+    });
+    expect(await callerFor(a).agent.proposal({ id: p.id })).toMatchObject({
+      id: p.id,
+      status: "pending",
+    });
+    await expect(
+      callerFor(b).agent.proposal({ id: p.id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
 });

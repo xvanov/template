@@ -240,6 +240,18 @@ export const agentRouter = createTRPCRouter({
       }),
     ),
 
+  /** One proposal (what a push notification about it opens). */
+  proposal: orgProcedure
+    .input(z.object({ id }))
+    .query(async ({ ctx, input }) => {
+      const p = await ctx.db.agentProposal.findFirst({
+        where: { id: input.id, organizationId: ctx.organizationId },
+        select: PROPOSAL_FIELDS,
+      });
+      if (!p) throw new NotFoundError("Proposal not found.");
+      return p;
+    }),
+
   /**
    * Queue a write-tool call for review without a run: what an MCP client
    * without write access does instead of acting.

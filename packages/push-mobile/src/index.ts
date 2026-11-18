@@ -34,6 +34,7 @@ import {
   fetchReceipts,
   transmit,
   useFakeExpoFetch,
+  type ExpoReceipt,
 } from "./transport";
 
 export {
@@ -164,69 +165,153 @@ export async function disableDevice(
   return count;
 }
 
+/** Expo keeps a receipt about a day; asking later gets nothing. */
+export const RECEIPT_TTL_MS = 24 * 3_600_000;
+/** Receipts are normally ready within 15 minutes of sending. */
+export const RECEIPT_READY_MS = 15 * 60_000;
+const RECEIPT_PAGE = 1000;
+
 /**
- * Step two of Expo delivery: ask for the receipts of pushes sent 15 minutes
- * to 23 hours ago that have none recorded yet (Expo keeps receipts about a
- * day), record each on its outbound_message row, and disable devices Expo
- * reports as DeviceNotRegistered. Run by the worker (push.receipts). A no-op
- * while the channel is off.
+ * Step two of Expo delivery: ask for the receipts of pushes sent between 15
+ * minutes and 24 hours ago that have none recorded yet, record each on its
+ * outbound_message row, and disable devices Expo reports as
+ * DeviceNotRegistered. Run by the worker (push.receipts, every 15 min). A
+ * no-op while the channel is off.
+ *
+ * Nothing waits forever and nothing is starved:
+ *   - a push still without a receipt after 24 hours is marked
+ *     `unconfirmed` (Expo no longer has one), so it leaves the queue;
+ *   - each run walks the whole window oldest first, a page (1000 ids, Expo's
+ *     per-request limit) at a time, up to `maxPages`; ids Expo has no
+ *     receipt for yet stay null and are asked again next run, without
+ *     holding back newer ones on later pages.
  */
 export async function checkMobilePushReceipts(
-  opts: { limit?: number; now?: Date } = {},
-): Promise<{ checked: number; ok: number; errors: number; disabled: number }> {
-  const result = { checked: 0, ok: 0, errors: 0, disabled: 0 };
+  opts: { now?: Date; maxPages?: number; pageSize?: number } = {},
+): Promise<{
+  checked: number;
+  ok: number;
+  errors: number;
+  disabled: number;
+  expired: number;
+  pending: number;
+}> {
+  const result = {
+    checked: 0,
+    ok: 0,
+    errors: 0,
+    disabled: 0,
+    expired: 0,
+    pending: 0,
+  };
   if (!mobilePushEnabled()) return result;
   const now = opts.now ?? new Date();
-  const rows = await db.outboundMessage.findMany({
+  const base = {
+    channel: "mobile_push",
+    status: "sent",
+    providerMessageId: { not: null },
+    deliveryStatus: null,
+  };
+
+  const expired = await db.outboundMessage.updateMany({
     where: {
-      channel: "mobile_push",
-      status: "sent",
-      providerMessageId: { not: null },
-      deliveryStatus: null,
-      createdAt: {
-        gte: new Date(now.getTime() - 23 * 3_600_000),
-        lte: new Date(now.getTime() - 15 * 60_000),
-      },
+      ...base,
+      createdAt: { lt: new Date(now.getTime() - RECEIPT_TTL_MS) },
     },
-    orderBy: { createdAt: "asc" },
-    take: opts.limit ?? 1000,
-    select: { providerMessageId: true, recipient: true },
+    data: {
+      deliveryStatus: "unconfirmed",
+      deliveryDetail: "no Expo receipt within 24 hours",
+      deliveryUpdatedAt: now,
+    },
   });
-  if (!rows.length) return result;
-  const receipts = await fetchReceipts(rows.map((r) => r.providerMessageId!));
-  for (const row of rows) {
-    const id = row.providerMessageId!;
-    const receipt = receipts[id];
-    if (!receipt) continue; // not ready yet: next run
-    result.checked++;
-    if (receipt.status === "ok") {
-      result.ok++;
-      // "sent", not "delivered": Expo only knows APNs/FCM accepted it.
-      await recordDeliveryStatus({
-        channel: "mobile_push",
-        providerMessageId: id,
-        status: "sent",
-        detail: "accepted by APNs/FCM",
-      });
-      continue;
+  result.expired = expired.count;
+
+  const pageSize = opts.pageSize ?? RECEIPT_PAGE;
+  // Keyset paging on (createdAt, id). Not Prisma's `cursor`: recording a
+  // receipt takes the row out of the `where`, and a cursor row that no
+  // longer matches makes the next page come back empty.
+  let after: { createdAt: Date; id: string } | undefined;
+  for (let page = 0; page < (opts.maxPages ?? 10); page++) {
+    const rows = await db.outboundMessage.findMany({
+      where: {
+        ...base,
+        createdAt: {
+          gte: new Date(now.getTime() - RECEIPT_TTL_MS),
+          lte: new Date(now.getTime() - RECEIPT_READY_MS),
+        },
+        ...(after
+          ? {
+              OR: [
+                { createdAt: { gt: after.createdAt } },
+                { createdAt: after.createdAt, id: { gt: after.id } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: pageSize,
+      select: {
+        id: true,
+        createdAt: true,
+        providerMessageId: true,
+        recipient: true,
+      },
+    });
+    if (!rows.length) break;
+    const last = rows[rows.length - 1]!;
+    after = { createdAt: last.createdAt, id: last.id };
+    const receipts = await fetchReceipts(rows.map((r) => r.providerMessageId!));
+    for (const row of rows) {
+      await recordReceipt(row, receipts[row.providerMessageId!], result);
     }
-    result.errors++;
-    const code = receipt.details?.error;
+    if (rows.length < pageSize) break;
+  }
+  return result;
+}
+
+async function recordReceipt(
+  row: { providerMessageId: string | null; recipient: string },
+  receipt: ExpoReceipt | undefined,
+  result: {
+    checked: number;
+    ok: number;
+    errors: number;
+    disabled: number;
+    pending: number;
+  },
+): Promise<void> {
+  const id = row.providerMessageId!;
+  if (!receipt) {
+    result.pending++; // not ready yet: next run (until it expires)
+    return;
+  }
+  result.checked++;
+  if (receipt.status === "ok") {
+    result.ok++;
+    // "sent", not "delivered": Expo only knows APNs/FCM accepted it.
     await recordDeliveryStatus({
       channel: "mobile_push",
       providerMessageId: id,
-      status: code === "DeviceNotRegistered" ? "undelivered" : "failed",
-      detail: `${code ?? "error"}: ${receipt.message}`,
+      status: "sent",
+      detail: "accepted by APNs/FCM",
     });
-    if (code === "DeviceNotRegistered") {
-      result.disabled += await disableDevice(row.recipient, code);
-    } else if (code === "InvalidCredentials") {
-      console.error(
-        "[push-mobile] Expo reports InvalidCredentials: the app's APNs key or FCM credentials are missing or wrong in EAS (eas credentials).",
-      );
-    }
+    return;
   }
-  return result;
+  result.errors++;
+  const code = receipt.details?.error;
+  await recordDeliveryStatus({
+    channel: "mobile_push",
+    providerMessageId: id,
+    status: code === "DeviceNotRegistered" ? "undelivered" : "failed",
+    detail: `${code ?? "error"}: ${receipt.message}`,
+  });
+  if (code === "DeviceNotRegistered") {
+    result.disabled += await disableDevice(row.recipient, code);
+  } else if (code === "InvalidCredentials") {
+    console.error(
+      "[push-mobile] Expo reports InvalidCredentials: the app's APNs key or FCM credentials are missing or wrong in EAS (eas credentials).",
+    );
+  }
 }
 
 // ── what the app pushes about ─────────────────────────────────────────────

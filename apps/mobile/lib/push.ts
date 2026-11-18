@@ -118,3 +118,31 @@ export async function storedPushToken(): Promise<string | null> {
 export async function forgetPushToken(): Promise<void> {
   await SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => {});
 }
+
+let lastHandled: string | null = null;
+
+/**
+ * Call `open` with the data of each notification the user taps, including
+ * the one that launched the app from cold. Each tap once. Returns the
+ * unsubscribe. A no-op where push is unsupported (Expo Go, web, simulator).
+ */
+export async function onPushTapped(
+  open: (data: Record<string, unknown>) => void,
+): Promise<() => void> {
+  if (!pushSupport().ok) return () => {};
+  const Notifications = await import("expo-notifications");
+  const handle = (r: {
+    notification: {
+      request: { identifier: string; content: { data?: unknown } };
+    };
+  }) => {
+    const { identifier, content } = r.notification.request;
+    if (identifier === lastHandled) return;
+    lastHandled = identifier;
+    open((content.data ?? {}) as Record<string, unknown>);
+  };
+  const sub = Notifications.addNotificationResponseReceivedListener(handle);
+  const launched = await Notifications.getLastNotificationResponseAsync();
+  if (launched) handle(launched);
+  return () => sub.remove();
+}

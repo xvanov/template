@@ -9,8 +9,9 @@
  * Native: expo-file-system's upload task. It streams the file from disk in
  * native code (no copy of a 10 MB photo in JS memory), reports progress, and
  * never builds a JS FormData, so the expo/fetch FormData bug described in
- * ./upload-body.ts cannot happen. Web: fetch with a FormData whose part is
- * built by formDataPart (a Blob there).
+ * ./upload-body.ts cannot happen. The server sees the file's own name (the
+ * task sends it); only the content type is ours. Web: the browser's fetch
+ * with a FormData; the part comes from formDataPart, appended as a Blob.
  */
 import { File, UploadType } from "expo-file-system";
 import { Platform } from "react-native";
@@ -20,6 +21,7 @@ import { getSessionCookie } from "./auth";
 import {
   formDataPart,
   parseUploadResponse,
+  uploadType,
   type LocalFile,
 } from "./upload-body";
 
@@ -56,17 +58,23 @@ async function postFile<T>(
   opts: UploadOptions,
 ): Promise<T> {
   const url = `${getBaseUrl()}${path}`;
-  const part = formDataPart(
-    file,
-    async () => new Uint8Array(await new File(file.uri).arrayBuffer()),
-    opts.fallbackType,
-  );
 
   if (Platform.OS === "web") {
     opts.onProgress?.(0);
-    const blob = await (await fetch(file.uri)).blob();
+    // The picker/recorder gives a blob: URL; read it, then append as a Blob.
+    const part = formDataPart(
+      file,
+      async () => new Uint8Array(await (await fetch(file.uri)).arrayBuffer()),
+      opts.fallbackType,
+    );
     const body = new FormData();
-    body.append("file", new Blob([blob], { type: part.type }), part.name);
+    body.append(
+      "file",
+      new Blob([(await part.bytes()) as Uint8Array<ArrayBuffer>], {
+        type: part.type,
+      }),
+      part.name,
+    );
     for (const [k, v] of Object.entries(opts.fields ?? {})) body.append(k, v);
     const res = await fetch(url, {
       method: "POST",
@@ -82,7 +90,7 @@ async function postFile<T>(
     httpMethod: "POST",
     uploadType: UploadType.MULTIPART,
     fieldName: "file",
-    mimeType: part.type,
+    mimeType: uploadType(file, opts.fallbackType),
     parameters: opts.fields,
     headers: { ...cookieHeader(), Accept: "application/json" },
     // In the foreground: the JS side waits for the answer anyway, and a

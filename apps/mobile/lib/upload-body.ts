@@ -9,9 +9,14 @@
  * `bytes()` method. React Native's classic file part,
  *   body.append("file", { uri, name, type })
  * which every RN upload example uses, throws "Unsupported FormDataPart
- * implementation" there, so the upload never leaves the phone. The part
- * below carries `bytes()` instead of `uri`. (The native path in upload.ts
- * avoids JS FormData entirely; this is the fetch path's body.)
+ * implementation" there, so the upload never leaves the phone.
+ *
+ * What the app does about it: on iOS/Android, upload.ts does not use fetch
+ * for files at all (expo-file-system's native upload task: streaming,
+ * progress). On web it uses formDataPart below, wrapped in a Blob. If native
+ * code ever has to send a file through fetch + FormData, append
+ * formDataPart's `{ name, type, bytes }` object as is: upload-body.test.ts
+ * proves that shape encodes under expo/fetch and the `{ uri }` one throws.
  */
 
 export interface LocalFile {

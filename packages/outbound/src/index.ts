@@ -33,6 +33,7 @@ export {
   isLoopbackHost,
   isOperatorRecipient,
   isSafeRecipient,
+  maskRecipient,
   parsePhone,
   parseRecipient,
   parseSafeList,

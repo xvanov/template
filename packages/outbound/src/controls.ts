@@ -144,6 +144,9 @@ const DELIVERY_RANK: Record<string, number> = {
   sending: 1,
   sent: 1,
   delayed: 2,
+  // We stopped asking: the provider gave no final word in the time it keeps
+  // one (Expo push receipts, about a day). A later real answer still wins.
+  unconfirmed: 2,
   delivered: 3,
   undelivered: 3,
   failed: 3,

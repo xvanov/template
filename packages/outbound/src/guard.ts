@@ -58,6 +58,7 @@ import { findSuppression, isFrozen } from "./controls";
 import {
   CHANNELS,
   effectiveSafeMode,
+  maskRecipient,
   parseRecipient,
   parseSafeList,
   resolveSafeMode,
@@ -187,11 +188,9 @@ function operatorRecipients(e: {
 
 /** What a log line may show of a recipient. A push topic or device token is a secret. */
 export function displayRecipient(channel: string, recipient: string): string {
-  if (channel === "push") return `topic ${recipient.slice(0, 3)}…`;
-  if (channel === "mobile_push") {
-    const open = recipient.indexOf("[");
-    return `device ${recipient.slice(0, open + 5)}…]`;
-  }
+  if (channel === "push") return `topic ${maskRecipient(channel, recipient)}`;
+  if (channel === "mobile_push")
+    return `device ${maskRecipient(channel, recipient)}`;
   return JSON.stringify(recipient);
 }
 

@@ -235,6 +235,55 @@ describe("checkMobilePushReceipts", () => {
   });
 });
 
+describe("checkMobilePushReceipts: nothing waits forever, nothing is starved", () => {
+  it("expires receipts past Expo's TTL, and pages past ids with no receipt yet", async () => {
+    process.env.OUTBOUND_SAFE_MODE = "false";
+    resetEnvCache();
+    const t = await createTenant("mp-pages");
+    const tok = await device(t);
+    // A clock of its own, a year ahead, so these rows sort on their own.
+    const now = new Date(Date.now() + 365 * 86_400_000);
+    const at = (minutesAgo: number) =>
+      new Date(now.getTime() - minutesAgo * 60_000);
+    const row = (ticket: string, minutesAgo: number) =>
+      db.outboundMessage.create({
+        data: {
+          organizationId: t.organizationId,
+          channel: "mobile_push",
+          recipient: tok,
+          purpose: "test.push",
+          status: "sent",
+          providerMessageId: ticket,
+          createdAt: at(minutesAgo),
+        },
+        select: { id: true },
+      });
+    const tag = randomBytes(4).toString("hex");
+    const old = await row(`old-${tag}`, 25 * 60); // past the 24 h TTL
+    const slow = await Promise.all(
+      [600, 500, 400].map((m, i) => row(`slow${i}-${tag}`, m)),
+    ); // oldest: no receipt yet
+    const ready = await Promise.all(
+      [300, 200].map((m, i) => row(`ready${i}-${tag}`, m)),
+    );
+    const fresh = await row(`fresh-${tag}`, 5); // too new to ask about
+    receiptFor = (id) =>
+      id.startsWith("ready") ? { status: "ok" } : undefined;
+
+    const r = await checkMobilePushReceipts({ now, pageSize: 2 });
+    expect(r.expired).toBeGreaterThanOrEqual(1);
+    expect(r).toMatchObject({ ok: 2, pending: 3 });
+    const status = async (x: { id: string }) =>
+      (await db.outboundMessage.findUniqueOrThrow({ where: { id: x.id } }))
+        .deliveryStatus;
+    expect(await status(old)).toBe("unconfirmed");
+    // The three oldest had no receipt, yet the newer ones on later pages got theirs.
+    for (const x of slow) expect(await status(x)).toBeNull();
+    for (const x of ready) expect(await status(x)).toBe("sent");
+    expect(await status(fresh)).toBeNull();
+  });
+});
+
 describe("notifyAppEvent", () => {
   it("pushes a pending proposal to the user it was made for, generic text only", async () => {
     process.env.OUTBOUND_SAFE_MODE = "false";

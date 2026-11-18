@@ -11,6 +11,7 @@ import {
   LlmDisabledError,
   LlmProviderError,
   LlmUnpricedError,
+  maxAudioSeconds,
   transcribeEnabled,
   type Ledger,
   type LlmCallRow,
@@ -42,6 +43,7 @@ function harness(
   answer: Awaited<ReturnType<LlmDeps["transcribe"]>> | Error = {
     text: "Buy milk",
     seconds: 30,
+    tokens: null,
   },
   spent = 0,
 ) {
@@ -60,8 +62,8 @@ function harness(
   return { llm, rows: mem.rows, asked };
 }
 
-/** ~60 s at the 16 kbit/s the estimate assumes. */
-const audio = new Uint8Array(120_000);
+/** At most 60 s of AAC (audio/mp4) at the 8 kbit/s floor the estimate assumes. */
+const audio = new Uint8Array(60_000);
 const call = {
   purpose: "test.dictate",
   priority: "discretionary" as const,
@@ -82,7 +84,7 @@ beforeEach(() =>
 
 describe("transcribe", () => {
   it("routes to LLM_TRANSCRIBE_MODEL and prices the reported duration per minute", async () => {
-    const h = harness({ text: "Buy milk", seconds: 30 });
+    const h = harness({ text: "Buy milk", seconds: 30, tokens: null });
     const r = await h.llm.transcribe(call);
     expect(r).toMatchObject({
       text: "Buy milk",
@@ -109,10 +111,54 @@ describe("transcribe", () => {
   });
 
   it("no duration in the answer: keeps the size-based estimate, marked unknown", async () => {
-    const h = harness({ text: "x", seconds: null });
+    const h = harness({ text: "x", seconds: null, tokens: null });
     const r = await h.llm.transcribe(call);
-    // 120 000 bytes / 2000 B/s = 60 s = 1 minute.
+    // 60 000 bytes / 1000 B/s (AAC floor) = 60 s = 1 minute.
     expect(r).toMatchObject({ costUsd: 0.003, costKnown: false });
+  });
+
+  it("token usage (gpt-4o-*-transcribe) is priced per token when LLM_PRICES has the model", async () => {
+    setLlmEnv({
+      OPENAI_API_KEY: "k",
+      LLM_TRANSCRIBE_MODEL: "openai/gpt-4o-mini-transcribe",
+      LLM_TRANSCRIBE_COST_PER_MINUTE: "0.003",
+      // $1.25 / MTok audio in, $5 / MTok text out (as configured, not built in).
+      LLM_PRICES: "openai/gpt-4o-mini-transcribe=1.25:5",
+      LLM_DAILY_CAP_USD: "1",
+    });
+    const h = harness({
+      text: "x",
+      seconds: null,
+      tokens: { input: 1000, output: 100 },
+    });
+    const r = await h.llm.transcribe(call);
+    // 1000 x 1.25e-6 + 100 x 5e-6 = 0.00175
+    expect(r).toMatchObject({ costUsd: 0.00175, costKnown: true });
+    expect(h.rows[0]).toMatchObject({
+      usage: expect.objectContaining({ inputTokens: 1000, outputTokens: 100 }),
+      costKnown: true,
+    });
+  });
+
+  it("tokens but no token price: per-minute on the reported duration, else the estimate (unknown)", async () => {
+    const withDuration = harness({
+      text: "x",
+      seconds: 30,
+      tokens: { input: 1000, output: 100 },
+    });
+    expect(await withDuration.llm.transcribe(call)).toMatchObject({
+      costUsd: 0.0015,
+      costKnown: true,
+    });
+    const without = harness({
+      text: "x",
+      seconds: null,
+      tokens: { input: 1000, output: 100 },
+    });
+    expect(await without.llm.transcribe(call)).toMatchObject({
+      costUsd: 0.003,
+      costKnown: false,
+    });
   });
 
   it("is off, cleanly, with no model configured", async () => {
@@ -193,6 +239,17 @@ describe("transcribe", () => {
   });
 });
 
+describe("maxAudioSeconds: the longest a file can be, by type", () => {
+  it("uses each codec's lowest plausible bitrate, so estimates err long", () => {
+    const kb = 60_000;
+    expect(maxAudioSeconds(kb, "audio/webm;codecs=opus")).toBe(80); // 750 B/s
+    expect(maxAudioSeconds(kb, "audio/ogg")).toBe(80);
+    expect(maxAudioSeconds(kb, "audio/mp4")).toBe(60); // 1000 B/s
+    expect(maxAudioSeconds(kb, "audio/wav")).toBe(8); // 8000 B/s
+    expect(maxAudioSeconds(kb, "audio/unknown")).toBe(80); // the lowest
+  });
+});
+
 describe("transcribeOpenAiCompatible (the wire format)", () => {
   type Seen = { url: string; headers: Record<string, string>; form: FormData };
   const fake = (status: number, json: unknown) => {
@@ -225,7 +282,7 @@ describe("transcribeOpenAiCompatible (the wire format)", () => {
       req,
       f.http,
     );
-    expect(r).toEqual({ text: "Buy milk.", seconds: 4 });
+    expect(r).toEqual({ text: "Buy milk.", seconds: 4, tokens: null });
     const s = f.seen[0]!;
     expect(s.url).toBe("https://api.openai.com/v1/audio/transcriptions");
     expect(s.headers.authorization).toBe("Bearer sk-test");
@@ -246,13 +303,28 @@ describe("transcribeOpenAiCompatible (the wire format)", () => {
       req,
       f.http,
     );
-    expect(r).toEqual({ text: "hello", seconds: 2.5 });
+    expect(r).toEqual({ text: "hello", seconds: 2.5, tokens: null });
     expect(f.seen[0]!.url).toBe(
       "http://whisper.lan:8000/v1/audio/transcriptions",
     );
     expect(f.seen[0]!.headers.authorization).toBeUndefined();
     expect(f.seen[0]!.form.get("model")).toBe("Systran/faster-whisper-small");
     expect(f.seen[0]!.form.get("response_format")).toBe("verbose_json");
+  });
+
+  it("reads token usage (gpt-4o-*-transcribe json)", async () => {
+    setLlmEnv({ OPENAI_API_KEY: "k" });
+    const f = fake(200, {
+      text: "hi",
+      usage: { type: "tokens", input_tokens: 120, output_tokens: 8 },
+    });
+    expect(
+      await transcribeOpenAiCompatible(
+        parseModel("openai/gpt-4o-mini-transcribe"),
+        req,
+        f.http,
+      ),
+    ).toEqual({ text: "hi", seconds: null, tokens: { input: 120, output: 8 } });
   });
 
   it("an error status is an LlmProviderError with nothing billed", async () => {

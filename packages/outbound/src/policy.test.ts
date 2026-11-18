@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   effectiveSafeMode,
   isSafeRecipient,
+  maskRecipient,
   parsePhone,
   parseRecipient,
   parseSafeList,
@@ -447,5 +448,18 @@ describe("mobile_push recipients (Expo push tokens)", () => {
     expect(
       staticBlock(device(), config({ safeMode: "off" }), true),
     ).toMatchObject({ reason: "FROZEN" });
+  });
+});
+
+describe("maskRecipient: what a person may be shown", () => {
+  it("masks push secrets (Expo tokens, ntfy topics), shows contacts as they are", () => {
+    const token = "ExponentPushToken[AbCdEfGhIjKlMn]";
+    expect(maskRecipient("mobile_push", token)).toBe(
+      "ExponentPushToken[AbCd…]",
+    );
+    expect(maskRecipient("mobile_push", token)).not.toContain("EfGh");
+    expect(maskRecipient("push", "secret-topic-123")).toBe("sec…");
+    expect(maskRecipient("email", "a@b.test")).toBe("a@b.test");
+    expect(maskRecipient("sms", "+447700900123")).toBe("+447700900123");
   });
 });

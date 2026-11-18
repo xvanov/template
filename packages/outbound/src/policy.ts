@@ -232,6 +232,24 @@ export function isSafeRecipient(
   return safeList.some((entry) => entry === r || entry === domain);
 }
 
+/**
+ * What a person may be SHOWN of a recipient (the activity log, a log line).
+ * An ntfy topic and an Expo push token are bearer secrets: whoever holds one
+ * can push to that phone, or (for a token) re-register the device under
+ * themselves. So they are masked everywhere outside the guard and the
+ * transport; addresses and numbers are the org's own contacts and shown as is.
+ */
+export function maskRecipient(channel: string, recipient: string): string {
+  if (channel === "push") return `${recipient.slice(0, 3)}…`;
+  if (channel === "mobile_push") {
+    const open = recipient.indexOf("[");
+    return open >= 0
+      ? `${recipient.slice(0, open + 5)}…]`
+      : `${recipient.slice(0, 4)}…`;
+  }
+  return recipient;
+}
+
 const LOOPBACK = /^(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1|\[::1\])$/i;
 
 export function isLoopbackHost(host: string | undefined): boolean {

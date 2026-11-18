@@ -229,11 +229,27 @@ export interface TranscribeResult {
 }
 
 /**
- * Bytes per second assumed when estimating a recording's length before it is
- * sent: 16 kbit/s, below any speech codec setting the app records with
- * (AAC at 32-128 kbit/s), so the estimate errs LONG, i.e. high on cost.
+ * The LOWEST bitrate (bytes per second) a recording of each type plausibly
+ * has, so size / rate is the LONGEST it can be: the pre-send estimate errs
+ * long, i.e. high on cost, as a spending control should. Opus (webm/ogg)
+ * speech can be ~6 kbit/s, HE-AAC and MP3 ~8; PCM WAV is at least 8 kHz
+ * 8-bit mono (64 kbit/s), FLAC about half that. Unknown types use the lowest.
  */
-const ESTIMATE_BYTES_PER_SECOND = 2000;
+const MIN_BYTES_PER_SECOND: Record<string, number> = {
+  "audio/webm": 750,
+  "audio/ogg": 750,
+  "audio/mp4": 1000,
+  "audio/aac": 1000,
+  "audio/mpeg": 1000,
+  "audio/flac": 4000,
+  "audio/wav": 8000,
+};
+
+/** The longest a recording of this size and type can be, in seconds. */
+export function maxAudioSeconds(bytes: number, contentType: string): number {
+  const type = contentType.split(";")[0]!.trim().toLowerCase();
+  return Math.ceil(bytes / (MIN_BYTES_PER_SECOND[type] ?? 750));
+}
 
 export interface EmbedResult {
   embeddings: number[][];
@@ -828,10 +844,18 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
 
   /**
    * Speech to text through LLM_TRANSCRIBE_MODEL (or `opts.model`), capped and
-   * priced like any call: per minute of audio (LLM_TRANSCRIBE_COST_PER_MINUTE).
-   * The cap reserves an estimate from the file size (errs long); the row
-   * settles with the duration the server reports, or keeps the estimate
-   * (costKnown=false) when it reports none.
+   * priced like any call.
+   *
+   * Before sending, the cap reserves a PER-MINUTE estimate
+   * (LLM_TRANSCRIBE_COST_PER_MINUTE x the longest the file can be, see
+   * maxAudioSeconds). Without a per-minute rate the call is unpriced, and a
+   * capped discretionary call is refused, as for any model.
+   *
+   * After, the row settles with the best price the answer allows, in order:
+   *   1. tokens reported (gpt-4o-*-transcribe) AND a token price for the
+   *      model in LLM_PRICES → token price, costKnown
+   *   2. duration reported (whisper, local servers) → per-minute, costKnown
+   *   3. otherwise → the estimate stays, costKnown=false
    */
   async function transcribe(
     opts: TranscribeOptions,
@@ -857,7 +881,7 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
         ? null
         : Math.round((seconds / 60) * perMinute * 1e6) / 1e6;
     const estimate = priceSeconds(
-      Math.ceil(opts.audio.byteLength / ESTIMATE_BYTES_PER_SECOND),
+      maxAudioSeconds(opts.audio.byteLength, opts.contentType),
     );
     const row: LlmCallRow = {
       organizationId: opts.organizationId ?? null,
@@ -897,9 +921,19 @@ export function createLlm(overrides: Partial<LlmDeps> = {}) {
       throw err;
     }
     const latencyMs = Date.now() - started;
-    const cost = r.seconds !== null ? priceSeconds(r.seconds) : null;
+    const usage = r.tokens
+      ? {
+          ...ZERO_USAGE,
+          inputTokens: r.tokens.input,
+          outputTokens: r.tokens.output,
+        }
+      : ZERO_USAGE;
+    const cost =
+      (r.tokens ? priceUsage(route.id, usage) : null) ??
+      (r.seconds !== null ? priceSeconds(r.seconds) : null);
     await deps.ledger.settle(id, {
       ...row,
+      usage,
       costUsd: cost ?? estimate ?? 0,
       costKnown: cost !== null,
       latencyMs,

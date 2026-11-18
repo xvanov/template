@@ -118,6 +118,10 @@
     "lint": {
       "dependsOn": ["^build"]
     },
+    "mobile#lint": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/.env"]
+    },
     "typecheck": {
       "dependsOn": ["^build", "//#db:generate"]
     },

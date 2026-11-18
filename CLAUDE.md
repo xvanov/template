@@ -625,7 +625,9 @@ in `src/app/design/styleguide.tsx` doubles as usage examples).
 
 Same API as the web app (tRPC with the session cookie attached by hand; file
 bytes to `/api/media/*`). Screens: `items` (with dictation), `photos`,
-`device` (push status, test push, glasses). New screens use
+`device` (push status, test push, glasses), `proposal/[id]` and `inbox/[id]`
+(what tapping a push opens: `lib/push-route.ts` maps its `kind`/`id`).
+Sign-out unregisters the push token and clears expo-image's caches. New screens use
 `components/states.tsx` (Loading / Empty / Error / Button / ProgressBar).
 
 **Expo Go or a development build.** Expo Go runs sign-in, items, photos
@@ -663,11 +665,19 @@ and `EXPO_PUBLIC_API_URL` as EAS environment variables per environment.
   (to the user it was made for) and a new inbound message (to the org's
   members with a device), via the `push.notify` job, one per event, idempotent
   per device. Nothing is queued while `OUTBOUND_MOBILE_PUSH_ENABLED` is off.
+  Receipts are asked for 15 minutes to 24 hours after sending, oldest first,
+  a page at a time; one still missing after 24 hours (Expo has dropped it)
+  is marked `unconfirmed`. The activity log masks tokens (`maskRecipient`):
+  a token lets its holder push to that phone or take the device over. In
+  production enable Expo's "enhanced push security" (`EXPO_ACCESS_TOKEN`).
 - **Dictation**: expo-audio records 16 kHz mono AAC; `POST
 /api/media/transcribe` runs `transcribe()` from `@repo/ai`
   (`LLM_TRANSCRIBE_MODEL`, `openai/` or `local/` OpenAI-compatible
-  `/audio/transcriptions`), priced per minute into `llm_call` under the
-  daily cap; the audio is not stored. The button hides when it is not set up.
+  `/audio/transcriptions`) into `llm_call` under the daily cap: reserved
+  per minute (`LLM_TRANSCRIBE_COST_PER_MINUTE` x the longest the file can be
+  for its format), settled per token when the server reports tokens and
+  `LLM_PRICES` has the model, else per reported minute. The audio is not
+  stored. The button hides when it is not set up.
 - **Glasses**: `modules/glasses` is a typed JS API that reports
   "unavailable" until a native module is added (its README says how).
 
@@ -877,7 +887,11 @@ and `EXPO_PUBLIC_API_URL` as EAS environment variables per environment.
    `MOBILE_APP_SLUG`, `MOBILE_BUNDLE_ID` (iOS bundle id and Android package),
    and after `cd apps/mobile && npx eas init`, `EAS_PROJECT_ID` (+ `EXPO_OWNER`).
    `apps/mobile/app.config.ts` reads them (defaults there); set the same as EAS
-   environment variables for cloud builds. Then the `<title>` in `apps/web/src/app/layout.tsx`,
+   environment variables for cloud builds. Rename BEFORE the first release:
+   `APP_SCHEME` is also the prefix of the SecureStore key holding the session
+   cookie (`storagePrefix` in `apps/mobile/lib/auth.ts`), so changing it in
+   an update signs every mobile user out; `MOBILE_BUNDLE_ID` is the store
+   identity (a new one is a new app). Then the `<title>` in `apps/web/src/app/layout.tsx`,
    `apps/web/src/app/manifest.ts` and `icon.svg`. Desktop: `productName`,
    `mainBinaryName` and `identifier` in `apps/desktop/src-tauri/tauri.conf.json` (the identifier
    names users' settings dir: never change it after a release), then

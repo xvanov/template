@@ -11,11 +11,11 @@
  */
 import { useState } from "react";
 import * as ImagePicker from "expo-image-picker";
-import { router } from "expo-router";
 import { Image } from "expo-image";
-import { FlatList, Pressable, Text, View } from "react-native";
+import { FlatList, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { ScreenHeader } from "../components/screen-header";
 import {
   Button,
   EmptyState,
@@ -82,17 +82,7 @@ export default function Photos() {
 
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "bottom"]}>
-      <View className="flex-row items-center justify-between px-5 pt-2 pb-4">
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => router.back()}
-          className="py-2 pr-3"
-        >
-          <Text className="text-sm text-accent">‹ Back</Text>
-        </Pressable>
-        <Text className="text-xl font-semibold text-fg">Photos</Text>
-        <View className="w-12" />
-      </View>
+      <ScreenHeader title="Photos" />
 
       <View className="gap-3 px-5 pb-4">
         <View className="flex-row gap-2">

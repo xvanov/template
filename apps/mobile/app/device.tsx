@@ -3,10 +3,10 @@
  * (and a test push through the server's outbound guard), and the glasses
  * slot. Most of it says "needs a development build" in Expo Go, on purpose.
  */
-import { router } from "expo-router";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { ScreenHeader } from "../components/screen-header";
 import { availability as glassesAvailability } from "../modules/glasses";
 import { Button, ErrorState, LoadingState } from "../components/states";
 import { pushSupport } from "../lib/push";
@@ -45,17 +45,7 @@ export default function Device() {
 
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "bottom"]}>
-      <View className="flex-row items-center justify-between px-5 pt-2 pb-4">
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => router.back()}
-          className="py-2 pr-3"
-        >
-          <Text className="text-sm text-accent">‹ Back</Text>
-        </Pressable>
-        <Text className="text-xl font-semibold text-fg">This device</Text>
-        <View className="w-12" />
-      </View>
+      <ScreenHeader title="This device" />
 
       <ScrollView contentContainerClassName="px-5 pb-10">
         <Text className="pt-2 pb-1 text-xs font-semibold uppercase text-muted">
